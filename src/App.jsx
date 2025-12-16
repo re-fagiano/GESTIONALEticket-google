@@ -10,25 +10,22 @@ import {
   X, 
   Trash2, 
   RefreshCw,
-  Save,
   Zap,
   Calendar as CalendarIcon,
   ChevronLeft,
   ChevronRight,
   Package, // Icona Magazzino
   AlertTriangle, // Icona Avvisi
-  Search,
   Phone,
-  MapPin,
-  Map // Icona per la posizione
+  MapPin
 } from 'lucide-react';
+
+const DEEPSEEK_API_URL = (import.meta.env.VITE_DEEPSEEK_API_URL || 'https://api.deepseek.com').replace(/\/$/, '');
+const DEEPSEEK_API_KEY = import.meta.env.VITE_DEEPSEEK_API_KEY;
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('inventory'); 
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-  
-  // --- CONFIGURAZIONE DEEPSEEK ---
-  const API_KEY = "sk-b5a31493fdf04b6584bf02aeebceb219"; 
 
   // --- STATO CALENDARIO ---
   const [currentDate, setCurrentDate] = useState(new Date());
@@ -126,10 +123,6 @@ export default function App() {
     if (type === 'tickets') setTickets(tickets.filter(t => t.id !== id));
     if (type === 'inventory') setInventory(inventory.filter(i => i.id !== id));
   };
-  
-  const handleUpdateStatus = (id, newStatus) => {
-      setTickets(tickets.map(t => t.id === id ? { ...t, status: newStatus } : t));
-  };
 
   const handleResetData = () => {
     if(confirm("Reset completo dati?")) {
@@ -156,20 +149,30 @@ export default function App() {
 
   // --- AI DEEPSEEK ---
   const getDeepSeekAnalysis = async (ticketDescription, ticketSubject) => {
-    setLoadingAi(true); setAiSuggestion(null); setAiError(null);
+    if (!DEEPSEEK_API_KEY) {
+      setAiError("Configura la chiave API di DeepSeek (VITE_DEEPSEEK_API_KEY) nell'ambiente di deploy.");
+      return;
+    }
+
+    setLoadingAi(true); 
+    setAiSuggestion(null); 
+    setAiError(null);
     const systemPrompt = "Sei un tecnico esperto di elettrodomestici. Analizza il problema e fornisci: 1) Possibile Causa 2) Diagnosi 3) Ricambi.";
+    const endpoint = `${DEEPSEEK_API_URL}/chat/completions`;
     
     try {
-      const response = await fetch("/api/chat/completions", {
+      const response = await fetch(endpoint, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${API_KEY}` },
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${DEEPSEEK_API_KEY}` },
         body: JSON.stringify({ model: "deepseek-chat", messages: [{ role: "system", content: systemPrompt }, { role: "user", content: `Oggetto: ${ticketSubject}. Descrizione: ${ticketDescription}` }], stream: false })
       });
       if (!response.ok) throw new Error(`Errore API: ${response.status}`);
       const data = await response.json();
-      setAiSuggestion({ text: data.choices[0].message.content, confidence: "DeepSeek AI" });
+      const content = data?.choices?.[0]?.message?.content;
+      if (!content) throw new Error("Risposta AI non valida.");
+      setAiSuggestion({ text: content, confidence: "DeepSeek AI" });
     } catch (error) {
-      setAiError("Errore connessione AI.");
+      setAiError(error.message || "Errore connessione AI.");
     } finally { setLoadingAi(false); }
   };
 
@@ -422,7 +425,14 @@ export default function App() {
                             <div className="space-y-4">
                                 <div className="bg-indigo-50 p-4 rounded border border-indigo-100">
                                     <h4 className="font-bold text-sm text-indigo-800 uppercase mb-2 flex items-center gap-2"><Bot size={16}/> Diagnosi AI</h4>
-                                    {aiSuggestion ? <div className="text-sm whitespace-pre-line text-slate-700">{aiSuggestion.text}</div> : loadingAi ? <div className="flex items-center gap-2 text-indigo-600"><RefreshCw className="animate-spin"/> Analisi in corso...</div> : <button onClick={() => getDeepSeekAnalysis(currentTicketForAi.description, currentTicketForAi.subject)} className="bg-indigo-600 text-white px-4 py-2 rounded text-sm w-full">Avvia Analisi DeepSeek</button>}
+                                    {aiError && <div className="text-sm text-red-700 bg-red-50 border border-red-200 p-2 rounded">{aiError}</div>}
+                                    {aiSuggestion ? (
+                                      <div className="text-sm whitespace-pre-line text-slate-700">{aiSuggestion.text}</div>
+                                    ) : loadingAi ? (
+                                      <div className="flex items-center gap-2 text-indigo-600"><RefreshCw className="animate-spin"/> Analisi in corso...</div>
+                                    ) : (
+                                      <button onClick={() => getDeepSeekAnalysis(currentTicketForAi.description, currentTicketForAi.subject)} className="bg-indigo-600 text-white px-4 py-2 rounded text-sm w-full">Avvia Analisi DeepSeek</button>
+                                    )}
                                 </div>
                             </div>
                         </div>
