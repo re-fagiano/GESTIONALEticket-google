@@ -20,8 +20,8 @@ import {
   MapPin
 } from 'lucide-react';
 
-const DEEPSEEK_API_URL = (import.meta.env.VITE_DEEPSEEK_API_URL || 'https://api.deepseek.com').replace(/\/$/, '');
-const DEEPSEEK_API_KEY = import.meta.env.VITE_DEEPSEEK_API_KEY;
+const DEEPSEEK_API_URL = (import.meta.env.VITE_DEEPSEEK_API_URL || __DEEPSEEK_API_URL__ || 'https://api.deepseek.com').replace(/\/$/, '');
+const DEEPSEEK_API_KEY = (import.meta.env.VITE_DEEPSEEK_API_KEY || __DEEPSEEK_API_KEY__ || '').trim();
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('inventory'); 
@@ -150,7 +150,7 @@ export default function App() {
   // --- AI DEEPSEEK ---
   const getDeepSeekAnalysis = async (ticketDescription, ticketSubject) => {
     if (!DEEPSEEK_API_KEY) {
-      setAiError("Configura la chiave API di DeepSeek (VITE_DEEPSEEK_API_KEY) nell'ambiente di deploy.");
+      setAiError("Configura la chiave API di DeepSeek (VITE_DEEPSEEK_API_KEY o DEEPSEEK_API_KEY) nell'ambiente di deploy.");
       return;
     }
 
