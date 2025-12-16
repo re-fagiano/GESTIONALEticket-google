@@ -22,3 +22,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# File di ambiente con password (IMPORTANTE)
+.env
+.env.production
