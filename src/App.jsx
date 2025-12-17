@@ -569,7 +569,7 @@ export default function App() {
                                           onChange={(e) => setRuntimeApiUrl(e.target.value)}
                                         />
                                       </div>
-                                      <p className="text-[11px] leading-snug text-slate-500">Se hai già impostato le variables su Railway assicurati che il deploy venga ricostruito e che il nome sia <code className="font-mono">VITE_DEEPSEEK_API_KEY</code>. Questo campo permette un override locale per test immediati.</p>
+                                      <p className="text-[11px] leading-snug text-slate-500">Se hai già impostato le variabili su Railway assicurati che il deploy venga ricostruito. Sono accettati sia <code className="font-mono">VITE_DEEPSEEK_API_KEY</code> sia <code className="font-mono">DEEPSEEK_API_KEY</code>. Questo campo permette un override locale per test immediati.</p>
                                     </div>
                                     {aiSuggestion ? (
                                       <div className="text-sm whitespace-pre-line text-slate-700">{aiSuggestion.text}</div>
