@@ -45,6 +45,36 @@ export default function App() {
     return defaultData;
   };
 
+  const sanitizeTicket = (ticket, idx = 0) => {
+    if (!ticket || typeof ticket !== 'object') return null;
+
+    const safeDate =
+      typeof ticket.date === 'string' && !Number.isNaN(new Date(ticket.date).getTime())
+        ? ticket.date
+        : '';
+
+    const safeTime = typeof ticket.time === 'string' && ticket.time.trim() ? ticket.time.trim() : '09:00';
+    const safeSubject =
+      typeof ticket.subject === 'string' && ticket.subject.trim()
+        ? ticket.subject.trim()
+        : `Ticket #${(ticket.id || idx) ?? idx}`;
+
+    return {
+      id: ticket.id || `${Date.now()}-${idx}`,
+      subject: safeSubject,
+      description: typeof ticket.description === 'string' ? ticket.description : '',
+      customerId: typeof ticket.customerId === 'string' ? ticket.customerId : '',
+      status: ticket.status || 'aperto',
+      date: safeDate,
+      time: safeTime
+    };
+  };
+
+  const sanitizeTickets = (list) => {
+    if (!Array.isArray(list)) return initialTickets.map((t, idx) => sanitizeTicket(t, idx)).filter(Boolean);
+    return list.map((t, idx) => sanitizeTicket(t, idx)).filter(Boolean);
+  };
+
   // --- DATI DI PROVA ---
   const initialCustomers = [
     { id: '1', name: 'Maria Bianchi', email: 'maria@test.com', phone: '3339988776', address: 'Via dei Fiori 12' },
@@ -64,12 +94,12 @@ export default function App() {
 
   // --- STATO APP ---
   const [customers, setCustomers] = useState(() => loadData('customers', initialCustomers));
-  const [tickets, setTickets] = useState(() => loadData('tickets', initialTickets));
+  const [tickets, setTickets] = useState(() => sanitizeTickets(loadData('tickets', initialTickets)));
   const [inventory, setInventory] = useState(() => loadData('inventory', initialInventory));
 
   // --- EFFETTO SALVATAGGIO ---
   useEffect(() => { localStorage.setItem('customers', JSON.stringify(customers)); }, [customers]);
-  useEffect(() => { localStorage.setItem('tickets', JSON.stringify(tickets)); }, [tickets]);
+  useEffect(() => { localStorage.setItem('tickets', JSON.stringify(sanitizeTickets(tickets))); }, [tickets]);
   useEffect(() => { localStorage.setItem('inventory', JSON.stringify(inventory)); }, [inventory]);
 
   // Modal & AI State
@@ -124,8 +154,8 @@ export default function App() {
 
   const handleAddTicket = () => {
     if (!newTicket.subject || !newTicket.customerId) return;
-    const ticket = { ...newTicket, id: Date.now().toString() };
-    setTickets([...tickets, ticket]); 
+    const ticket = sanitizeTicket({ ...newTicket, id: Date.now().toString() }, tickets.length);
+    setTickets([...tickets, ticket]);
     setNewTicket({ subject: '', description: '', customerId: '', status: 'aperto', date: new Date().toISOString().split('T')[0], time: '09:00' });
     setShowNewTicket(false);
   };
@@ -134,8 +164,21 @@ export default function App() {
     if (!newPart.name) return;
     const part = { ...newPart, id: Date.now().toString() };
     setInventory([...inventory, part]);
-    setNewPart({ name: '', location: '', qty: 1, price: 0, minQty: 5 }); 
+    setNewPart({ name: '', location: '', qty: 1, price: 0, minQty: 5 });
     setShowNewPart(false);
+  };
+
+  const openTicketModal = (ticket) => {
+    const safeTicket = sanitizeTicket(ticket);
+
+    if (!safeTicket) {
+      setAiError("Impossibile aprire l'intervento: dati mancanti o corrotti.");
+      return;
+    }
+
+    setAiError(null);
+    setAiSuggestion(null);
+    setCurrentTicketForAi(safeTicket);
   };
 
   const updateStock = (id, delta) => {
@@ -233,14 +276,17 @@ export default function App() {
 
   // --- GOOGLE CALENDAR LINK ---
   const addToGoogleCalendar = (ticket) => {
-    const customer = customers.find(c => c.id === ticket.customerId);
-    const title = encodeURIComponent(`Intervento FIXLAB: ${ticket.subject}`);
-    const details = encodeURIComponent(`Problema: ${ticket.description}\nCliente: ${customer?.name}\nTel: ${customer?.phone}`);
+    const safeTicket = sanitizeTicket(ticket);
+    if (!safeTicket) return;
+
+    const customer = customers.find(c => c.id === safeTicket.customerId);
+    const title = encodeURIComponent(`Intervento FIXLAB: ${safeTicket.subject}`);
+    const details = encodeURIComponent(`Problema: ${safeTicket.description}\nCliente: ${customer?.name}\nTel: ${customer?.phone}`);
     const location = encodeURIComponent(customer?.address || "");
-    const dateStr = ticket.date || new Date().toISOString().split('T')[0];
-    const timeStr = ticket.time || '09:00';
+    const dateStr = safeTicket.date || new Date().toISOString().split('T')[0];
+    const timeStr = safeTicket.time || '09:00';
     const startDate = new Date(`${dateStr}T${timeStr}`);
-    const endDate = new Date(startDate.getTime() + 60*60*1000); 
+    const endDate = new Date(startDate.getTime() + 60*60*1000);
     const formatGCalDate = (date) => date.toISOString().replace(/-|:|\.\d\d\d/g, "");
     const url = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&details=${details}&location=${location}&dates=${formatGCalDate(startDate)}/${formatGCalDate(endDate)}`;
     window.open(url, '_blank');
@@ -299,7 +345,7 @@ export default function App() {
       const response = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKeyToUse}` },
-        body: JSON.stringify({ model: "deepseek-chat", messages: [{ role: "system", content: systemPrompt }, { role: "user", content: `Oggetto: ${ticketSubject}. Descrizione: ${ticketDescription}` }], stream: false })
+        body: JSON.stringify({ model: "deepseek-chat", messages: [{ role: "system", content: systemPrompt }, { role: "user", content: `Oggetto: ${safeSubject}. Descrizione: ${safeDescription}` }], stream: false })
       });
       if (!response.ok) throw new Error(`Errore API: ${response.status}`);
       const data = await response.json();
@@ -502,7 +548,7 @@ export default function App() {
                 <div key={idx} className={`h-32 border rounded p-2 flex flex-col gap-1 overflow-y-auto ${isToday ? 'border-blue-500 bg-blue-50' : 'border-slate-200 hover:bg-slate-50'}`}>
                   <div className="text-right text-sm font-semibold text-slate-400">{day.getDate()}</div>
                   {dayTickets.map(t => (
-                    <div key={t.id} onClick={() => setCurrentTicketForAi(t)} className="text-xs bg-white border-l-4 border-yellow-500 p-1 rounded shadow-sm cursor-pointer hover:bg-yellow-50 truncate">
+                    <div key={t.id} onClick={() => openTicketModal(t)} className="text-xs bg-white border-l-4 border-yellow-500 p-1 rounded shadow-sm cursor-pointer hover:bg-yellow-50 truncate">
                       <span className="font-bold">{t.time}</span> {t.subject}
                     </div>
                   ))}
@@ -555,7 +601,7 @@ export default function App() {
                             <thead className="bg-slate-100"><tr><th className="p-4">Data</th><th className="p-4">Problema</th><th className="p-4">Stato</th><th className="p-4 text-right">Azioni</th></tr></thead>
                             <tbody>
                                 {tickets.map(t => (
-                                    <tr key={t.id} className="border-b hover:bg-slate-50 cursor-pointer" onClick={() => setCurrentTicketForAi(t)}>
+                                    <tr key={t.id} className="border-b hover:bg-slate-50 cursor-pointer" onClick={() => openTicketModal(t)}>
                                         <td className="p-4 text-sm"><div className="font-bold">{t.date}</div><div className="text-slate-500">{t.time}</div></td>
                                         <td className="p-4"><div className="font-bold">{t.subject}</div><div className="text-xs text-slate-500">{t.description}</div></td>
                                         <td className="p-4"><span className="bg-yellow-100 text-yellow-800 text-xs px-2 py-1 rounded">{t.status}</span></td>
@@ -577,7 +623,7 @@ export default function App() {
                         <div className="flex justify-between items-start mb-6">
                             <div>
                                 <h3 className="text-2xl font-bold flex items-center gap-2"><Wrench className="text-blue-600"/> {currentTicketForAi.subject}</h3>
-                                <p className="text-slate-500 text-sm">Intervento del {currentTicketForAi.date} alle {currentTicketForAi.time}</p>
+                                <p className="text-slate-500 text-sm">Intervento del {currentTicketForAi.date || 'data non disponibile'} alle {currentTicketForAi.time || '--:--'}</p>
                             </div>
                             <button onClick={() => setCurrentTicketForAi(null)} className="text-slate-400 hover:text-slate-600"><X size={24}/></button>
                         </div>
