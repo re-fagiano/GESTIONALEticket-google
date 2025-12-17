@@ -22,6 +22,7 @@ import {
 
 const DEEPSEEK_API_URL = (import.meta.env.VITE_DEEPSEEK_API_URL || 'https://api.deepseek.com').replace(/\/$/, '');
 const DEEPSEEK_API_KEY = (import.meta.env.VITE_DEEPSEEK_API_KEY || '').trim();
+const ENV_DEEPSEEK_API_URL = DEEPSEEK_API_URL;
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('inventory'); 
@@ -85,6 +86,9 @@ export default function App() {
     const stored = localStorage.getItem('deepseekApiUrl');
     return (stored || ENV_DEEPSEEK_API_URL || '').trim();
   });
+
+  const apiKeyToUse = (runtimeApiKey || DEEPSEEK_API_KEY).trim();
+  const apiUrlToUse = (runtimeApiUrl || DEEPSEEK_API_URL).trim();
 
   useEffect(() => {
     localStorage.setItem('deepseekApiKey', runtimeApiKey);
@@ -167,8 +171,13 @@ export default function App() {
 
   // --- AI DEEPSEEK ---
   const getDeepSeekAnalysis = async (ticketDescription, ticketSubject) => {
-    if (!DEEPSEEK_API_KEY) {
-      setAiError("Configura la chiave API di DeepSeek (VITE_DEEPSEEK_API_KEY) e ricostruisci il deploy.");
+    if (!apiKeyToUse) {
+      setAiError("Configura la chiave API di DeepSeek (VITE_DEEPSEEK_API_KEY o DEEPSEEK_API_KEY) oppure inserisci una chiave locale nel browser.");
+      return;
+    }
+
+    if (!apiUrlToUse) {
+      setAiError("Imposta un endpoint valido per DeepSeek (VITE_DEEPSEEK_API_URL).");
       return;
     }
 
@@ -466,7 +475,7 @@ export default function App() {
                                           onChange={(e) => setRuntimeApiUrl(e.target.value)}
                                         />
                                       </div>
-                                      <p className="text-[11px] leading-snug text-slate-500">Se hai già impostato le variables su Railway assicurati che il deploy venga ricostruito e che il nome sia <code className="font-mono">VITE_DEEPSEEK_API_KEY</code>. Questo campo permette un override locale per test immediati.</p>
+                                      <p className="text-[11px] leading-snug text-slate-500">Se hai già impostato le variabili su Railway assicurati che il deploy venga ricostruito. Sono accettati sia <code className="font-mono">VITE_DEEPSEEK_API_KEY</code> sia <code className="font-mono">DEEPSEEK_API_KEY</code>. Questo campo permette un override locale per test immediati.</p>
                                     </div>
                                     {aiSuggestion ? (
                                       <div className="text-sm whitespace-pre-line text-slate-700">{aiSuggestion.text}</div>
