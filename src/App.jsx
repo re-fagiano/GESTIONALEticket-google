@@ -205,8 +205,8 @@ export default function App() {
   // --- AZIONI ---
   const handleAddCustomer = () => {
     if (!newCustomer.name) return;
-    const customer = { ...newCustomer, id: Date.now().toString() };
-    setCustomers([...customers, customer]);
+    const customer = sanitizeCustomer({ ...newCustomer, id: Date.now().toString() }, customers.length);
+    setCustomers(sanitizeCustomers([...customers, customer]));
     setNewCustomer({ name: '', email: '', phone: '', address: '' });
     setShowNewCustomer(false);
   };
@@ -255,9 +255,9 @@ export default function App() {
 
   const handleResetData = () => {
     if(confirm("Reset completo dati?")) {
-      setCustomers(initialCustomers);
-      setTickets(initialTickets);
-      setInventory(initialInventory);
+      setCustomers(sanitizeCustomers(initialCustomers));
+      setTickets(sanitizeTickets(initialTickets));
+      setInventory(sanitizeInventoryList(initialInventory));
     }
   };
 
