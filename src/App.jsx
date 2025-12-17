@@ -100,36 +100,6 @@ export default function App() {
     return list.map((t, idx) => sanitizeTicket(t, idx)).filter(Boolean);
   };
 
-  const sanitizeTicket = (ticket, idx = 0) => {
-    if (!ticket || typeof ticket !== 'object') return null;
-
-    const safeDate =
-      typeof ticket.date === 'string' && !Number.isNaN(new Date(ticket.date).getTime())
-        ? ticket.date
-        : '';
-
-    const safeTime = typeof ticket.time === 'string' && ticket.time.trim() ? ticket.time.trim() : '09:00';
-    const safeSubject =
-      typeof ticket.subject === 'string' && ticket.subject.trim()
-        ? ticket.subject.trim()
-        : `Ticket #${(ticket.id || idx) ?? idx}`;
-
-    return {
-      id: ticket.id || `${Date.now()}-${idx}`,
-      subject: safeSubject,
-      description: typeof ticket.description === 'string' ? ticket.description : '',
-      customerId: typeof ticket.customerId === 'string' ? ticket.customerId : '',
-      status: ticket.status || 'aperto',
-      date: safeDate,
-      time: safeTime
-    };
-  };
-
-  const sanitizeTickets = (list) => {
-    if (!Array.isArray(list)) return initialTickets.map((t, idx) => sanitizeTicket(t, idx)).filter(Boolean);
-    return list.map((t, idx) => sanitizeTicket(t, idx)).filter(Boolean);
-  };
-
   // --- DATI DI PROVA ---
   const initialCustomers = [
     { id: '1', name: 'Maria Bianchi', email: 'maria@test.com', phone: '3339988776', address: 'Via dei Fiori 12' },
