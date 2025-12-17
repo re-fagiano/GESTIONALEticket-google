@@ -315,6 +315,33 @@ export default function App() {
     }
 
     const customer = customers.find(c => c.id === safeTicket.customerId);
+
+    const ensureDate = (value) => {
+      if (typeof value !== 'string') return null;
+      const parsed = new Date(value);
+      return Number.isNaN(parsed.getTime()) ? null : value;
+    };
+
+    const ensureTime = (value) => {
+      if (typeof value !== 'string') return null;
+      const trimmed = value.trim();
+      return /^\d{2}:\d{2}$/.test(trimmed) ? trimmed : null;
+    };
+
+    const fallbackDate = new Date().toISOString().split('T')[0];
+    const dateStr = ensureDate(safeTicket.date) || fallbackDate;
+    const timeStr = ensureTime(safeTicket.time) || '09:00';
+
+    const startDate = new Date(`${dateStr}T${timeStr}`);
+    if (!isValidDate(startDate)) {
+      console.error('Calendario: data/ora non valida', { dateStr, timeStr, ticket: safeTicket });
+      alert('Impossibile creare il link del calendario: data o ora non valide.');
+      return;
+    }
+
+    const endDate = new Date(startDate.getTime() + 60 * 60 * 1000);
+    const formatGCalDate = (date) => date.toISOString().replace(/-|:|\.\d\d\d/g, "");
+
     const title = encodeURIComponent(`Intervento FIXLAB: ${safeTicket.subject}`);
     const details = encodeURIComponent(`Problema: ${safeTicket.description}\nCliente: ${customer?.name}\nTel: ${customer?.phone}`);
     const location = encodeURIComponent(customer?.address || "");
