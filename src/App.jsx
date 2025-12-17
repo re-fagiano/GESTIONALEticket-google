@@ -247,6 +247,29 @@ export default function App() {
   };
 
   // --- AI DEEPSEEK ---
+  const buildOfflineSuggestion = (subject, description) => {
+    const text = `${subject} ${description}`.toLowerCase();
+    const suggestions = [];
+
+    if (text.includes('lavatrice') || text.includes('wash')) {
+      suggestions.push("Verifica filtro e pompa di scarico; controlla eventuali ostruzioni del tubo e ascolta se la pompa gira.");
+    }
+    if (text.includes('frigo') || text.includes('frigorifero') || text.includes('freddo') || text.includes('caldo')) {
+      suggestions.push("Controlla condensatore pulito e ventola; verifica guarnizioni porta e temperatura corretta sul termostato.");
+    }
+    if (text.includes('scheda') || text.includes('elettronica')) {
+      suggestions.push("Ispeziona la scheda per componenti bruciati o condensatori gonfi; valuta sostituzione modulo." );
+    }
+    if (text.includes('rumore') || text.includes('cuscinetti')) {
+      suggestions.push("Testa i cuscinetti del cestello e verifica eventuale gioco dell'asse; sostituire se rumorosi." );
+    }
+    if (suggestions.length === 0) {
+      suggestions.push("Esegui controllo visivo, prova alimentazione, verifica cablaggi e componenti principali prima di ordinare ricambi.");
+    }
+
+    return `Diagnosi rapida offline:\n- ${suggestions.join('\n- ')}\n- Ricambi: valuta guarnizioni, sensori, cablaggi e scheda se i test falliscono.`;
+  };
+
   const getDeepSeekAnalysis = async (ticketDescription, ticketSubject) => {
     if (!apiKeyToUse) {
       setAiError("Configura la chiave API di DeepSeek (VITE_DEEPSEEK_API_KEY) o inserisci una chiave locale nel browser.");
@@ -258,12 +281,20 @@ export default function App() {
       return;
     }
 
-    setLoadingAi(true); 
-    setAiSuggestion(null); 
+    setLoadingAi(true);
+    setAiSuggestion(null);
     setAiError(null);
+
+    if (!hasKey) {
+      const offline = buildOfflineSuggestion(ticketSubject, ticketDescription);
+      setAiSuggestion({ text: offline, confidence: "Offline" });
+      setLoadingAi(false);
+      return;
+    }
+
     const systemPrompt = "Sei un tecnico esperto di elettrodomestici. Analizza il problema e fornisci: 1) Possibile Causa 2) Diagnosi 3) Ricambi.";
     const endpoint = `${apiUrlToUse || 'https://api.deepseek.com'}/chat/completions`;
-    
+
     try {
       const response = await fetch(endpoint, {
         method: "POST",
@@ -274,12 +305,14 @@ export default function App() {
       const data = await response.json();
       const content = data?.choices?.[0]?.message?.content;
       if (!content) throw new Error("Risposta AI non valida.");
-      setAiSuggestion({ text: content, confidence: "DeepSeek AI" });
+      setAiSuggestion({ text: content, confidence: hasKey ? "DeepSeek AI" : "Offline" });
     } catch (error) {
+      const offline = buildOfflineSuggestion(ticketSubject, ticketDescription);
       let message = error?.message || "Errore connessione AI.";
       if (message.toLowerCase().includes("failed to fetch")) {
         message = "Impossibile contattare DeepSeek. Conferma l'endpoint (VITE_DEEPSEEK_API_URL) HTTPS, abilita il dominio nel CORS dell'API e verifica che la chiave VITE_DEEPSEEK_API_KEY/DEEPSEEK_API_KEY sia presente (o incollata qui sotto).";
       }
+      setAiSuggestion({ text: offline, confidence: "Offline" });
       setAiError(message);
     } finally { setLoadingAi(false); }
   };
