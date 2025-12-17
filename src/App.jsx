@@ -278,7 +278,7 @@ export default function App() {
     } catch (error) {
       let message = error?.message || "Errore connessione AI.";
       if (message.toLowerCase().includes("failed to fetch")) {
-        message = "Impossibile contattare DeepSeek. Verifica che l'endpoint (VITE_DEEPSEEK_API_URL) sia raggiungibile via HTTPS, che il dominio dell'app sia autorizzato dal CORS e che la chiave VITE_DEEPSEEK_API_KEY sia stata impostata al build.";
+        message = "Impossibile contattare DeepSeek. Conferma l'endpoint (VITE_DEEPSEEK_API_URL) HTTPS, abilita il dominio nel CORS dell'API e verifica che la chiave VITE_DEEPSEEK_API_KEY/DEEPSEEK_API_KEY sia presente (o incollata qui sotto).";
       }
       setAiError(message);
     } finally { setLoadingAi(false); }
@@ -552,11 +552,16 @@ export default function App() {
                                     <h4 className="font-bold text-sm text-indigo-800 uppercase mb-2 flex items-center gap-2"><Bot size={16}/> Diagnosi AI</h4>
                                     {aiError && <div className="text-sm text-red-700 bg-red-50 border border-red-200 p-2 rounded">{aiError}</div>}
                                     <div className="bg-white border border-indigo-100 p-3 rounded text-xs text-slate-600 space-y-2 mb-3">
-                                      <p className="font-semibold text-slate-800">Configurazione chiave (salvata nel browser)</p>
+                                      <p className="font-semibold text-slate-800 flex items-center justify-between">
+                                        <span>Chiave DeepSeek (salvata nel browser)</span>
+                                        <span className="text-[11px] px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 font-semibold">
+                                          {runtimeApiKey ? 'Usando chiave locale' : HAS_ENV_DEEPSEEK_KEY ? 'Usando chiave da build' : 'Nessuna chiave'}
+                                        </span>
+                                      </p>
                                       <input
                                         type="password"
                                         className="w-full border rounded p-2 text-sm"
-                                        placeholder="Incolla qui la tua VITE_DEEPSEEK_API_KEY"
+                                        placeholder="Incolla la chiave dal tuo account DeepSeek (VITE_DEEPSEEK_API_KEY/DEEPSEEK_API_KEY)"
                                         value={runtimeApiKey}
                                         onChange={(e) => setRuntimeApiKey(e.target.value)}
                                       />
