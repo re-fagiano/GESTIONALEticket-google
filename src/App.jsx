@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import {
+import { 
   LayoutDashboard,
   Users,
   Ticket,
@@ -24,9 +24,8 @@ import {
 } from 'lucide-react';
 
 const DEEPSEEK_API_URL = (import.meta.env.VITE_DEEPSEEK_API_URL || 'https://api.deepseek.com').replace(/\/$/, '');
-const ENV_DEEPSEEK_API_KEY = (import.meta.env.VITE_DEEPSEEK_API_KEY || '').trim();
-const ENV_DEEPSEEK_API_URL = (import.meta.env.VITE_DEEPSEEK_API_URL || '').trim();
-const BACKUP_FILE_NAME = 'gestionale_backup.json';
+const DEEPSEEK_API_KEY = (import.meta.env.VITE_DEEPSEEK_API_KEY || '').trim();
+const ENV_DEEPSEEK_API_URL = DEEPSEEK_API_URL;
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('inventory'); 
@@ -91,6 +90,9 @@ export default function App() {
     return (stored || ENV_DEEPSEEK_API_URL || '').trim();
   });
 
+  const apiKeyToUse = (runtimeApiKey || DEEPSEEK_API_KEY).trim();
+  const apiUrlToUse = (runtimeApiUrl || DEEPSEEK_API_URL).trim();
+
   useEffect(() => {
     localStorage.setItem('deepseekApiKey', runtimeApiKey);
   }, [runtimeApiKey]);
@@ -109,27 +111,7 @@ export default function App() {
   });
   const [newPart, setNewPart] = useState({ name: '', location: '', qty: 1, price: 0, minQty: 5 });
   const [importError, setImportError] = useState('');
-  const [backupStatus, setBackupStatus] = useState('');
-  const [persistenceStatus, setPersistenceStatus] = useState('checking');
-  const filePickerSupported = typeof window !== 'undefined' && 'showSaveFilePicker' in window;
   const fileInputRef = useRef(null);
-
-  useEffect(() => {
-    const checkPersistence = async () => {
-      if (!navigator.storage?.persisted) {
-        setPersistenceStatus('unsupported');
-        return;
-      }
-      try {
-        const persisted = await navigator.storage.persisted();
-        setPersistenceStatus(persisted ? 'granted' : 'prompt');
-      } catch (error) {
-        console.error('Errore verifica storage persistente', error);
-        setPersistenceStatus('error');
-      }
-    };
-    checkPersistence();
-  }, []);
 
   // --- AZIONI ---
   const handleAddCustomer = () => {
@@ -217,38 +199,8 @@ export default function App() {
     const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
-    link.download = BACKUP_FILE_NAME;
+    link.download = 'gestionale_backup.json';
     link.click();
-  };
-
-  const handleSaveBackupToFile = async () => {
-    setBackupStatus('');
-    if (!filePickerSupported) {
-      setBackupStatus('Il salvataggio diretto su file non è supportato da questo browser. Usa il backup JSON o CSV.');
-      return;
-    }
-
-    try {
-      const backup = {
-        exportedAt: new Date().toISOString(),
-        customers,
-        tickets,
-        inventory
-      };
-
-      const handle = await window.showSaveFilePicker({
-        suggestedName: BACKUP_FILE_NAME,
-        types: [{ description: 'Backup Gestionale', accept: { 'application/json': ['.json'] } }]
-      });
-      const writable = await handle.createWritable();
-      await writable.write(JSON.stringify(backup, null, 2));
-      await writable.close();
-      setBackupStatus('Backup salvato nella cartella scelta. Conserva il file per uno storico stabile o per caricarlo nel cloud.');
-    } catch (error) {
-      if (error?.name === 'AbortError') return;
-      console.error('Errore salvataggio backup', error);
-      setBackupStatus('Impossibile salvare il file. Verifica i permessi del browser o riprova con il download JSON.');
-    }
   };
 
   const handleImportBackup = (event) => {
@@ -279,20 +231,6 @@ export default function App() {
     fileInputRef.current?.click();
   };
 
-  const requestPersistentStorage = async () => {
-    if (!navigator.storage?.persist) {
-      setPersistenceStatus('unsupported');
-      return;
-    }
-    try {
-      const granted = await navigator.storage.persist();
-      setPersistenceStatus(granted ? 'granted' : 'denied');
-    } catch (error) {
-      console.error('Errore richiesta storage persistente', error);
-      setPersistenceStatus('error');
-    }
-  };
-
   // --- GOOGLE CALENDAR LINK ---
   const addToGoogleCalendar = (ticket) => {
     const customer = customers.find(c => c.id === ticket.customerId);
@@ -310,11 +248,13 @@ export default function App() {
 
   // --- AI DEEPSEEK ---
   const getDeepSeekAnalysis = async (ticketDescription, ticketSubject) => {
-    const apiKeyToUse = (runtimeApiKey || ENV_DEEPSEEK_API_KEY).trim();
-    const apiUrlToUse = (runtimeApiUrl || DEEPSEEK_API_URL).replace(/\/$/, '');
-
     if (!apiKeyToUse) {
-      setAiError("Configura la chiave API di DeepSeek (VITE_DEEPSEEK_API_KEY) e ricostruisci il deploy oppure incollala qui sotto.");
+      setAiError("Configura la chiave API di DeepSeek (VITE_DEEPSEEK_API_KEY) o inserisci una chiave locale nel browser.");
+      return;
+    }
+
+    if (!apiUrlToUse) {
+      setAiError("Imposta un endpoint valido per DeepSeek (VITE_DEEPSEEK_API_URL).");
       return;
     }
 
@@ -338,7 +278,7 @@ export default function App() {
     } catch (error) {
       let message = error?.message || "Errore connessione AI.";
       if (message.toLowerCase().includes("failed to fetch")) {
-        message = "Impossibile contattare DeepSeek. Verifica che l'endpoint (VITE_DEEPSEEK_API_URL) sia raggiungibile via HTTPS, che il dominio dell'app sia autorizzato dal CORS e che la chiave VITE_DEEPSEEK_API_KEY sia stata impostata al build.";
+        message = "Impossibile contattare DeepSeek. Conferma l'endpoint (VITE_DEEPSEEK_API_URL) HTTPS, abilita il dominio nel CORS dell'API e verifica che la chiave VITE_DEEPSEEK_API_KEY/DEEPSEEK_API_KEY sia presente (o incollata qui sotto).";
       }
       setAiError(message);
     } finally { setLoadingAi(false); }
@@ -550,20 +490,10 @@ export default function App() {
               <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <div>
                   <p className="text-sm font-semibold text-slate-700 flex items-center gap-2"><FileSpreadsheet size={16}/> Backup e Export</p>
-                  <p className="text-xs text-slate-500">I dati sono salvati nel browser. Richiedi storage persistente per evitare cancellazioni automatiche e crea copie JSON/CSV da tenere in una cartella locale o su cloud.</p>
-                  <div className="text-[11px] text-slate-500 mt-1">
-                    Stato storage: {persistenceStatus === 'granted' && 'persistente attivo'}
-                    {persistenceStatus === 'prompt' && 'puoi richiedere storage persistente per evitare pulizie automatiche.'}
-                    {persistenceStatus === 'denied' && 'permesso negato, usa i backup file.'}
-                    {persistenceStatus === 'unsupported' && 'non supportato dal browser, usa sempre i backup file.'}
-                    {persistenceStatus === 'error' && 'errore durante il controllo, consiglia backup manuale.'}
-                    {persistenceStatus === 'checking' && 'verifica in corso...'}
-                  </div>
+                  <p className="text-xs text-slate-500">Scarica un JSON di backup per conservarlo su Drive/Cloud, oppure esporta CSV apribili in Excel per storico o assenza di connessione.</p>
                 </div>
                 <div className="flex flex-wrap gap-2 justify-end">
                   <button onClick={handleDownloadBackup} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-800 text-white rounded hover:bg-slate-700"><Download size={16}/> Backup JSON</button>
-                  <button onClick={handleSaveBackupToFile} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded hover:bg-slate-200 border" title="Salva direttamente in una cartella locale">📂 Salva in cartella</button>
-                  <button onClick={requestPersistentStorage} className="flex items-center gap-2 px-3 py-2 text-sm bg-amber-50 text-amber-700 rounded hover:bg-amber-100 border border-amber-200">💾 Blocca dati nel browser</button>
                   <button onClick={handleSelectBackupFile} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded hover:bg-slate-200 border"><Upload size={16}/> Importa Backup</button>
                   <button onClick={handleExportTickets} className="flex items-center gap-2 px-3 py-2 text-sm bg-blue-50 text-blue-700 rounded hover:bg-blue-100 border border-blue-200"><FileSpreadsheet size={16}/> Ticket CSV</button>
                   <button onClick={handleExportInventory} className="flex items-center gap-2 px-3 py-2 text-sm bg-purple-50 text-purple-700 rounded hover:bg-purple-100 border border-purple-200"><FileSpreadsheet size={16}/> Magazzino CSV</button>
@@ -571,10 +501,7 @@ export default function App() {
                   <input ref={fileInputRef} type="file" accept="application/json" className="hidden" onChange={handleImportBackup} />
                 </div>
               </div>
-              <div className="space-y-1 mt-2 text-sm">
-                {backupStatus && <p className="text-blue-700 bg-blue-50 border border-blue-200 p-2 rounded">{backupStatus}</p>}
-                {importError && <p className="text-sm text-red-600">{importError}</p>}
-              </div>
+              {importError && <p className="mt-2 text-sm text-red-600">{importError}</p>}
             </div>
             {activeTab === 'dashboard' && <DashboardView />}
             {activeTab === 'calendar' && <CalendarView />}
@@ -625,11 +552,16 @@ export default function App() {
                                     <h4 className="font-bold text-sm text-indigo-800 uppercase mb-2 flex items-center gap-2"><Bot size={16}/> Diagnosi AI</h4>
                                     {aiError && <div className="text-sm text-red-700 bg-red-50 border border-red-200 p-2 rounded">{aiError}</div>}
                                     <div className="bg-white border border-indigo-100 p-3 rounded text-xs text-slate-600 space-y-2 mb-3">
-                                      <p className="font-semibold text-slate-800">Configurazione chiave (salvata nel browser)</p>
+                                      <p className="font-semibold text-slate-800 flex items-center justify-between">
+                                        <span>Chiave DeepSeek (salvata nel browser)</span>
+                                        <span className="text-[11px] px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 font-semibold">
+                                          {runtimeApiKey ? 'Usando chiave locale' : HAS_ENV_DEEPSEEK_KEY ? 'Usando chiave da build' : 'Nessuna chiave'}
+                                        </span>
+                                      </p>
                                       <input
                                         type="password"
                                         className="w-full border rounded p-2 text-sm"
-                                        placeholder="Incolla qui la tua VITE_DEEPSEEK_API_KEY"
+                                        placeholder="Incolla la chiave dal tuo account DeepSeek (VITE_DEEPSEEK_API_KEY/DEEPSEEK_API_KEY)"
                                         value={runtimeApiKey}
                                         onChange={(e) => setRuntimeApiKey(e.target.value)}
                                       />
@@ -642,7 +574,7 @@ export default function App() {
                                           onChange={(e) => setRuntimeApiUrl(e.target.value)}
                                         />
                                       </div>
-                                      <p className="text-[11px] leading-snug text-slate-500">Se hai già impostato le variables su Railway assicurati che il deploy venga ricostruito e che il nome sia <code className="font-mono">VITE_DEEPSEEK_API_KEY</code>. Questo campo permette un override locale per test immediati.</p>
+                                      <p className="text-[11px] leading-snug text-slate-500">Se hai già impostato le variabili su Railway assicurati che il deploy venga ricostruito. Sono accettati sia <code className="font-mono">VITE_DEEPSEEK_API_KEY</code> sia <code className="font-mono">DEEPSEEK_API_KEY</code>. Questo campo permette un override locale per test immediati.</p>
                                     </div>
                                     {aiSuggestion ? (
                                       <div className="text-sm whitespace-pre-line text-slate-700">{aiSuggestion.text}</div>

@@ -8,11 +8,11 @@ Il gestionale salva i dati direttamente nel browser (localStorage/IndexedDB). Pe
 
 ## DeepSeek AI configuration
 
-The AI diagnosis panel calls the DeepSeek API directly from the client. Configure the following environment variables (for example on Railway) before building:
+The AI diagnosis panel calls the DeepSeek API directly from the client. Configure one of the following environment variables (for example on Railway) before building:
 
 - `VITE_DEEPSEEK_API_KEY`: your DeepSeek API key. Only `VITE_` variables are bundled in the client; remember to rebuild after changing it.
 - `VITE_DEEPSEEK_API_URL`: base URL for the API (defaults to `https://api.deepseek.com`). Make sure the endpoint is reachable via HTTPS from your deployment domain and allows CORS requests from the app origin.
 
 Copy `.env.example` to `.env` and set the values locally if you want to test AI calls during development. Only the `VITE_*` variables are read at build time to avoid leaking server-only secrets.
 
-If your hosting (e.g. Railway) does not expose the variable during the build step, the AI panel also lets you paste the key locally: it will be stored in the browser only for quick testing. Prefer configuring `VITE_DEEPSEEK_API_KEY` in the deploy environment and triggering a new build so the value is bundled correctly.
+Copy `.env.example` to `.env` and set the values locally if you want to test AI calls during development. Non-`VITE_` names are injected into the client bundle automatically to support hosting providers that reserve the `VITE_` prefix.
