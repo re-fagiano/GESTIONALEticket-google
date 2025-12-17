@@ -22,6 +22,8 @@ import {
 
 const DEEPSEEK_API_URL = (import.meta.env.VITE_DEEPSEEK_API_URL || 'https://api.deepseek.com').replace(/\/$/, '');
 const DEEPSEEK_API_KEY = (import.meta.env.VITE_DEEPSEEK_API_KEY || '').trim();
+const HAS_ENV_DEEPSEEK_KEY = Boolean(DEEPSEEK_API_KEY);
+const ENV_DEEPSEEK_API_URL = DEEPSEEK_API_URL;
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('inventory'); 
@@ -31,14 +33,69 @@ export default function App() {
   const [currentDate, setCurrentDate] = useState(new Date());
 
   // --- FUNZIONI DI MEMORIA ---
-  const loadData = (key, defaultData) => {
+  const storageAvailable = typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
+
+  const safeGetItem = (key, fallback = null) => {
+    if (!storageAvailable) return fallback;
     try {
       const saved = localStorage.getItem(key);
-      if (saved) return JSON.parse(saved);
+      return saved === null ? fallback : saved;
+    } catch (e) {
+      console.warn('Storage non accessibile, uso fallback', e);
+      return fallback;
+    }
+  };
+
+  const safeSetItem = (key, value) => {
+    if (!storageAvailable) return false;
+    try {
+      localStorage.setItem(key, value);
+      return true;
+    } catch (e) {
+      console.warn('Impossibile scrivere su storage, i dati non saranno salvati', e);
+      return false;
+    }
+  };
+
+  const loadData = (key, defaultData) => {
+    const saved = safeGetItem(key, null);
+    if (!saved) return defaultData;
+    try {
+      return JSON.parse(saved);
     } catch (e) {
       console.error("Errore lettura memoria", e);
+      return defaultData;
     }
-    return defaultData;
+  };
+
+  const sanitizeTicket = (ticket, idx = 0) => {
+    if (!ticket || typeof ticket !== 'object') return null;
+
+    const safeDate =
+      typeof ticket.date === 'string' && !Number.isNaN(new Date(ticket.date).getTime())
+        ? ticket.date
+        : '';
+
+    const safeTime = typeof ticket.time === 'string' && ticket.time.trim() ? ticket.time.trim() : '09:00';
+    const safeSubject =
+      typeof ticket.subject === 'string' && ticket.subject.trim()
+        ? ticket.subject.trim()
+        : `Ticket #${(ticket.id || idx) ?? idx}`;
+
+    return {
+      id: ticket.id || `${Date.now()}-${idx}`,
+      subject: safeSubject,
+      description: typeof ticket.description === 'string' ? ticket.description : '',
+      customerId: typeof ticket.customerId === 'string' ? ticket.customerId : '',
+      status: ticket.status || 'aperto',
+      date: safeDate,
+      time: safeTime
+    };
+  };
+
+  const sanitizeTickets = (list) => {
+    if (!Array.isArray(list)) return initialTickets.map((t, idx) => sanitizeTicket(t, idx)).filter(Boolean);
+    return list.map((t, idx) => sanitizeTicket(t, idx)).filter(Boolean);
   };
 
   // --- DATI DI PROVA ---
@@ -60,13 +117,29 @@ export default function App() {
 
   // --- STATO APP ---
   const [customers, setCustomers] = useState(() => loadData('customers', initialCustomers));
-  const [tickets, setTickets] = useState(() => loadData('tickets', initialTickets));
+  const [tickets, setTickets] = useState(() => sanitizeTickets(loadData('tickets', initialTickets)));
   const [inventory, setInventory] = useState(() => loadData('inventory', initialInventory));
 
+  const [storageWarning, setStorageWarning] = useState(null);
+
   // --- EFFETTO SALVATAGGIO ---
-  useEffect(() => { localStorage.setItem('customers', JSON.stringify(customers)); }, [customers]);
-  useEffect(() => { localStorage.setItem('tickets', JSON.stringify(tickets)); }, [tickets]);
-  useEffect(() => { localStorage.setItem('inventory', JSON.stringify(inventory)); }, [inventory]);
+  useEffect(() => {
+    if (!safeSetItem('customers', JSON.stringify(customers))) {
+      setStorageWarning('Salvataggio locale non disponibile: controlla le impostazioni di privacy o spazio libero.');
+    }
+  }, [customers]);
+
+  useEffect(() => {
+    if (!safeSetItem('tickets', JSON.stringify(sanitizeTickets(tickets)))) {
+      setStorageWarning('Salvataggio locale non disponibile: controlla le impostazioni di privacy o spazio libero.');
+    }
+  }, [tickets]);
+
+  useEffect(() => {
+    if (!safeSetItem('inventory', JSON.stringify(inventory))) {
+      setStorageWarning('Salvataggio locale non disponibile: controlla le impostazioni di privacy o spazio libero.');
+    }
+  }, [inventory]);
 
   // Modal & AI State
   const [showNewTicket, setShowNewTicket] = useState(false);
@@ -78,21 +151,26 @@ export default function App() {
   const [currentTicketForAi, setCurrentTicketForAi] = useState(null);
   const [aiError, setAiError] = useState(null);
   const [runtimeApiKey, setRuntimeApiKey] = useState(() => {
-    const stored = localStorage.getItem('deepseekApiKey');
+    const stored = safeGetItem('deepseekApiKey', '');
     return stored ? stored.trim() : '';
   });
   const [runtimeApiUrl, setRuntimeApiUrl] = useState(() => {
-    const stored = localStorage.getItem('deepseekApiUrl');
+    const stored = safeGetItem('deepseekApiUrl', '');
     return (stored || ENV_DEEPSEEK_API_URL || '').trim();
   });
 
+  const apiKeyToUse = (runtimeApiKey || DEEPSEEK_API_KEY).trim();
+  const apiUrlToUse = (runtimeApiUrl || DEEPSEEK_API_URL).trim();
+
   useEffect(() => {
-    localStorage.setItem('deepseekApiKey', runtimeApiKey);
+    if (!safeSetItem('deepseekApiKey', runtimeApiKey)) {
+      setStorageWarning('Impossibile salvare la chiave DeepSeek nel browser: storage disabilitato.');
+    }
   }, [runtimeApiKey]);
 
   useEffect(() => {
-    if (runtimeApiUrl) {
-      localStorage.setItem('deepseekApiUrl', runtimeApiUrl);
+    if (runtimeApiUrl && !safeSetItem('deepseekApiUrl', runtimeApiUrl)) {
+      setStorageWarning('Impossibile salvare l\'endpoint DeepSeek nel browser: storage disabilitato.');
     }
   }, [runtimeApiUrl]);
 
@@ -115,8 +193,8 @@ export default function App() {
 
   const handleAddTicket = () => {
     if (!newTicket.subject || !newTicket.customerId) return;
-    const ticket = { ...newTicket, id: Date.now().toString() };
-    setTickets([...tickets, ticket]); 
+    const ticket = sanitizeTicket({ ...newTicket, id: Date.now().toString() }, tickets.length);
+    setTickets([...tickets, ticket]);
     setNewTicket({ subject: '', description: '', customerId: '', status: 'aperto', date: new Date().toISOString().split('T')[0], time: '09:00' });
     setShowNewTicket(false);
   };
@@ -125,8 +203,21 @@ export default function App() {
     if (!newPart.name) return;
     const part = { ...newPart, id: Date.now().toString() };
     setInventory([...inventory, part]);
-    setNewPart({ name: '', location: '', qty: 1, price: 0, minQty: 5 }); 
+    setNewPart({ name: '', location: '', qty: 1, price: 0, minQty: 5 });
     setShowNewPart(false);
+  };
+
+  const openTicketModal = (ticket) => {
+    const safeTicket = sanitizeTicket(ticket);
+
+    if (!safeTicket) {
+      setAiError("Impossibile aprire l'intervento: dati mancanti o corrotti.");
+      return;
+    }
+
+    setAiError(null);
+    setAiSuggestion(null);
+    setCurrentTicketForAi(safeTicket);
   };
 
   const updateStock = (id, delta) => {
@@ -152,54 +243,95 @@ export default function App() {
 
   // --- GOOGLE CALENDAR LINK ---
   const addToGoogleCalendar = (ticket) => {
-    const customer = customers.find(c => c.id === ticket.customerId);
-    const title = encodeURIComponent(`Intervento FIXLAB: ${ticket.subject}`);
-    const details = encodeURIComponent(`Problema: ${ticket.description}\nCliente: ${customer?.name}\nTel: ${customer?.phone}`);
+    const safeTicket = sanitizeTicket(ticket);
+    if (!safeTicket) return;
+
+    const customer = customers.find(c => c.id === safeTicket.customerId);
+    const title = encodeURIComponent(`Intervento FIXLAB: ${safeTicket.subject}`);
+    const details = encodeURIComponent(`Problema: ${safeTicket.description}\nCliente: ${customer?.name}\nTel: ${customer?.phone}`);
     const location = encodeURIComponent(customer?.address || "");
-    const dateStr = ticket.date || new Date().toISOString().split('T')[0];
-    const timeStr = ticket.time || '09:00';
+    const dateStr = safeTicket.date || new Date().toISOString().split('T')[0];
+    const timeStr = safeTicket.time || '09:00';
     const startDate = new Date(`${dateStr}T${timeStr}`);
-    const endDate = new Date(startDate.getTime() + 60*60*1000); 
+    const endDate = new Date(startDate.getTime() + 60*60*1000);
     const formatGCalDate = (date) => date.toISOString().replace(/-|:|\.\d\d\d/g, "");
     const url = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&details=${details}&location=${location}&dates=${formatGCalDate(startDate)}/${formatGCalDate(endDate)}`;
     window.open(url, '_blank');
   };
 
   // --- AI DEEPSEEK ---
+  const buildOfflineSuggestion = (subject, description) => {
+    const text = `${subject} ${description}`.toLowerCase();
+    const suggestions = [];
+
+    if (text.includes('lavatrice') || text.includes('wash')) {
+      suggestions.push("Verifica filtro e pompa di scarico; controlla eventuali ostruzioni del tubo e ascolta se la pompa gira.");
+    }
+    if (text.includes('frigo') || text.includes('frigorifero') || text.includes('freddo') || text.includes('caldo')) {
+      suggestions.push("Controlla condensatore pulito e ventola; verifica guarnizioni porta e temperatura corretta sul termostato.");
+    }
+    if (text.includes('scheda') || text.includes('elettronica')) {
+      suggestions.push("Ispeziona la scheda per componenti bruciati o condensatori gonfi; valuta sostituzione modulo." );
+    }
+    if (text.includes('rumore') || text.includes('cuscinetti')) {
+      suggestions.push("Testa i cuscinetti del cestello e verifica eventuale gioco dell'asse; sostituire se rumorosi." );
+    }
+    if (suggestions.length === 0) {
+      suggestions.push("Esegui controllo visivo, prova alimentazione, verifica cablaggi e componenti principali prima di ordinare ricambi.");
+    }
+
+    return `Diagnosi rapida offline:\n- ${suggestions.join('\n- ')}\n- Ricambi: valuta guarnizioni, sensori, cablaggi e scheda se i test falliscono.`;
+  };
+
   const getDeepSeekAnalysis = async (ticketDescription, ticketSubject) => {
-    if (!DEEPSEEK_API_KEY) {
-      setAiError("Configura la chiave API di DeepSeek (VITE_DEEPSEEK_API_KEY) e ricostruisci il deploy.");
+    const safeSubject = ticketSubject || 'Ticket senza titolo';
+    const safeDescription = ticketDescription || '';
+    const hasKey = Boolean(apiKeyToUse);
+
+    if (!hasKey && !apiUrlToUse) {
+      setAiError("Imposta almeno l'endpoint DeepSeek (VITE_DEEPSEEK_API_URL) oppure usa la diagnosi offline.");
       return;
     }
 
-    setLoadingAi(true); 
-    setAiSuggestion(null); 
+    setLoadingAi(true);
+    setAiSuggestion(null);
     setAiError(null);
+
+    if (!hasKey) {
+      const offline = buildOfflineSuggestion(safeSubject, safeDescription);
+      setAiSuggestion({ text: offline, confidence: "Offline" });
+      setLoadingAi(false);
+      return;
+    }
+
     const systemPrompt = "Sei un tecnico esperto di elettrodomestici. Analizza il problema e fornisci: 1) Possibile Causa 2) Diagnosi 3) Ricambi.";
     const endpoint = `${apiUrlToUse || 'https://api.deepseek.com'}/chat/completions`;
-    
+
     try {
       const response = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKeyToUse}` },
-        body: JSON.stringify({ model: "deepseek-chat", messages: [{ role: "system", content: systemPrompt }, { role: "user", content: `Oggetto: ${ticketSubject}. Descrizione: ${ticketDescription}` }], stream: false })
+        body: JSON.stringify({ model: "deepseek-chat", messages: [{ role: "system", content: systemPrompt }, { role: "user", content: `Oggetto: ${safeSubject}. Descrizione: ${safeDescription}` }], stream: false })
       });
       if (!response.ok) throw new Error(`Errore API: ${response.status}`);
       const data = await response.json();
       const content = data?.choices?.[0]?.message?.content;
       if (!content) throw new Error("Risposta AI non valida.");
-      setAiSuggestion({ text: content, confidence: "DeepSeek AI" });
+      setAiSuggestion({ text: content, confidence: hasKey ? "DeepSeek AI" : "Offline" });
     } catch (error) {
+      const offline = buildOfflineSuggestion(safeSubject, safeDescription);
       let message = error?.message || "Errore connessione AI.";
       if (message.toLowerCase().includes("failed to fetch")) {
-        message = "Impossibile contattare DeepSeek. Verifica che l'endpoint (VITE_DEEPSEEK_API_URL) sia raggiungibile via HTTPS, che il dominio dell'app sia autorizzato dal CORS e che la chiave VITE_DEEPSEEK_API_KEY sia stata impostata al build.";
+        message = "Impossibile contattare DeepSeek. Mostro una diagnosi offline; se vuoi l'AI completa, conferma l'endpoint (VITE_DEEPSEEK_API_URL) HTTPS e la chiave VITE_DEEPSEEK_API_KEY/DEEPSEEK_API_KEY.";
       }
+      setAiSuggestion({ text: offline, confidence: "Offline" });
       setAiError(message);
     } finally { setLoadingAi(false); }
   };
 
   // --- CALENDAR HELPERS ---
   const getDaysInMonth = (date) => {
+    if (!isValidDate(date)) return [];
     const year = date.getFullYear();
     const month = date.getMonth();
     const daysInMonth = new Date(year, month + 1, 0).getDate();
@@ -212,9 +344,14 @@ export default function App() {
   };
 
   const changeMonth = (offset) => {
-    const newDate = new Date(currentDate.setMonth(currentDate.getMonth() + offset));
-    setCurrentDate(new Date(newDate));
+    setCurrentDate((prev) => {
+      const next = new Date(prev);
+      next.setMonth(prev.getMonth() + offset);
+      return next;
+    });
   };
+
+  const isValidDate = (value) => value instanceof Date && !Number.isNaN(value.getTime());
 
   // --- VISTE AGGIUNTIVE ---
   
@@ -369,7 +506,7 @@ export default function App() {
           </div>
           <div className="grid grid-cols-7 gap-2">
             {days.map((day, idx) => {
-              if (!day) return <div key={idx} className="bg-slate-50 h-32 rounded"></div>;
+              if (!day || !isValidDate(day)) return <div key={idx} className="bg-slate-50 h-32 rounded"></div>;
               const dayString = day.toISOString().split('T')[0];
               const dayTickets = tickets.filter(t => t.date === dayString);
               const isToday = dayString === new Date().toISOString().split('T')[0];
@@ -377,7 +514,7 @@ export default function App() {
                 <div key={idx} className={`h-32 border rounded p-2 flex flex-col gap-1 overflow-y-auto ${isToday ? 'border-blue-500 bg-blue-50' : 'border-slate-200 hover:bg-slate-50'}`}>
                   <div className="text-right text-sm font-semibold text-slate-400">{day.getDate()}</div>
                   {dayTickets.map(t => (
-                    <div key={t.id} onClick={() => setCurrentTicketForAi(t)} className="text-xs bg-white border-l-4 border-yellow-500 p-1 rounded shadow-sm cursor-pointer hover:bg-yellow-50 truncate">
+                    <div key={t.id} onClick={() => openTicketModal(t)} className="text-xs bg-white border-l-4 border-yellow-500 p-1 rounded shadow-sm cursor-pointer hover:bg-yellow-50 truncate">
                       <span className="font-bold">{t.time}</span> {t.subject}
                     </div>
                   ))}
@@ -400,6 +537,11 @@ export default function App() {
         </header>
         <main className="flex-1 overflow-y-auto p-4 md:p-8">
           <div className="max-w-6xl mx-auto pb-20">
+            {storageWarning && (
+              <div className="mb-4 p-3 rounded bg-amber-50 border border-amber-200 text-amber-800 text-sm">
+                {storageWarning}
+              </div>
+            )}
             {activeTab === 'dashboard' && <DashboardView />}
             {activeTab === 'calendar' && <CalendarView />}
             {activeTab === 'customers' && <CustomerListView />}
@@ -413,7 +555,7 @@ export default function App() {
                             <thead className="bg-slate-100"><tr><th className="p-4">Data</th><th className="p-4">Problema</th><th className="p-4">Stato</th><th className="p-4 text-right">Azioni</th></tr></thead>
                             <tbody>
                                 {tickets.map(t => (
-                                    <tr key={t.id} className="border-b hover:bg-slate-50 cursor-pointer" onClick={() => setCurrentTicketForAi(t)}>
+                                    <tr key={t.id} className="border-b hover:bg-slate-50 cursor-pointer" onClick={() => openTicketModal(t)}>
                                         <td className="p-4 text-sm"><div className="font-bold">{t.date}</div><div className="text-slate-500">{t.time}</div></td>
                                         <td className="p-4"><div className="font-bold">{t.subject}</div><div className="text-xs text-slate-500">{t.description}</div></td>
                                         <td className="p-4"><span className="bg-yellow-100 text-yellow-800 text-xs px-2 py-1 rounded">{t.status}</span></td>
@@ -435,7 +577,7 @@ export default function App() {
                         <div className="flex justify-between items-start mb-6">
                             <div>
                                 <h3 className="text-2xl font-bold flex items-center gap-2"><Wrench className="text-blue-600"/> {currentTicketForAi.subject}</h3>
-                                <p className="text-slate-500 text-sm">Intervento del {currentTicketForAi.date} alle {currentTicketForAi.time}</p>
+                                <p className="text-slate-500 text-sm">Intervento del {currentTicketForAi.date || 'data non disponibile'} alle {currentTicketForAi.time || '--:--'}</p>
                             </div>
                             <button onClick={() => setCurrentTicketForAi(null)} className="text-slate-400 hover:text-slate-600"><X size={24}/></button>
                         </div>
@@ -449,11 +591,16 @@ export default function App() {
                                     <h4 className="font-bold text-sm text-indigo-800 uppercase mb-2 flex items-center gap-2"><Bot size={16}/> Diagnosi AI</h4>
                                     {aiError && <div className="text-sm text-red-700 bg-red-50 border border-red-200 p-2 rounded">{aiError}</div>}
                                     <div className="bg-white border border-indigo-100 p-3 rounded text-xs text-slate-600 space-y-2 mb-3">
-                                      <p className="font-semibold text-slate-800">Configurazione chiave (salvata nel browser)</p>
+                                      <p className="font-semibold text-slate-800 flex items-center justify-between">
+                                        <span>Chiave DeepSeek (salvata nel browser)</span>
+                                        <span className="text-[11px] px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 font-semibold">
+                                          {runtimeApiKey ? 'Usando chiave locale' : HAS_ENV_DEEPSEEK_KEY ? 'Usando chiave da build' : 'Nessuna chiave'}
+                                        </span>
+                                      </p>
                                       <input
                                         type="password"
                                         className="w-full border rounded p-2 text-sm"
-                                        placeholder="Incolla qui la tua VITE_DEEPSEEK_API_KEY"
+                                        placeholder="Incolla la chiave dal tuo account DeepSeek (VITE_DEEPSEEK_API_KEY/DEEPSEEK_API_KEY)"
                                         value={runtimeApiKey}
                                         onChange={(e) => setRuntimeApiKey(e.target.value)}
                                       />
@@ -466,7 +613,10 @@ export default function App() {
                                           onChange={(e) => setRuntimeApiUrl(e.target.value)}
                                         />
                                       </div>
-                                      <p className="text-[11px] leading-snug text-slate-500">Se hai già impostato le variables su Railway assicurati che il deploy venga ricostruito e che il nome sia <code className="font-mono">VITE_DEEPSEEK_API_KEY</code>. Questo campo permette un override locale per test immediati.</p>
+                                      <p className="text-[11px] leading-snug text-slate-500">
+                                        La chiave incollata qui resta memorizzata in questo browser (non serve reinserirla). In alternativa configura una variabile d'ambiente
+                                        <code className="font-mono"> VITE_DEEPSEEK_API_KEY</code> oppure <code className="font-mono">DEEPSEEK_API_KEY</code> e ricostruisci il deploy.
+                                      </p>
                                     </div>
                                     {aiSuggestion ? (
                                       <div className="text-sm whitespace-pre-line text-slate-700">{aiSuggestion.text}</div>
