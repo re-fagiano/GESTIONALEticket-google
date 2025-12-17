@@ -304,21 +304,43 @@ export default function App() {
   };
 
   // --- GOOGLE CALENDAR LINK ---
+  const isValidDate = (value) => value instanceof Date && !Number.isNaN(value.getTime());
+
   const addToGoogleCalendar = (ticket) => {
     const safeTicket = sanitizeTicket(ticket);
-    if (!safeTicket) return;
+    if (!safeTicket) {
+      console.error('Calendario: ticket non valido', ticket);
+      alert('Impossibile aprire l\'intervento: dati mancanti o corrotti.');
+      return;
+    }
 
     const customer = customers.find(c => c.id === safeTicket.customerId);
     const title = encodeURIComponent(`Intervento FIXLAB: ${safeTicket.subject}`);
     const details = encodeURIComponent(`Problema: ${safeTicket.description}\nCliente: ${customer?.name}\nTel: ${customer?.phone}`);
     const location = encodeURIComponent(customer?.address || "");
-    const dateStr = safeTicket.date || new Date().toISOString().split('T')[0];
-    const timeStr = safeTicket.time || '09:00';
+
+    const fallbackDate = new Date().toISOString().split('T')[0];
+    const dateStr = (typeof safeTicket.date === 'string' && !Number.isNaN(new Date(safeTicket.date).getTime())) ? safeTicket.date : fallbackDate;
+    const timeStr = (typeof safeTicket.time === 'string' && /^\d{2}:\d{2}$/.test(safeTicket.time.trim())) ? safeTicket.time.trim() : '09:00';
+
     const startDate = new Date(`${dateStr}T${timeStr}`);
+    if (!isValidDate(startDate)) {
+      console.error('Calendario: data/ora non valida', { dateStr, timeStr, ticket: safeTicket });
+      alert('Impossibile creare il link del calendario: data o ora non valide.');
+      return;
+    }
+
     const endDate = new Date(startDate.getTime() + 60*60*1000);
     const formatGCalDate = (date) => date.toISOString().replace(/-|:|\.\d\d\d/g, "");
     const url = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&details=${details}&location=${location}&dates=${formatGCalDate(startDate)}/${formatGCalDate(endDate)}`;
-    window.open(url, '_blank');
+
+    if (!url) {
+      console.error('Calendario: URL non valida generata', { url, ticket: safeTicket });
+      alert('Impossibile aprire Google Calendar: URL non valida.');
+      return;
+    }
+
+    window.open(url, '_blank', 'noopener,noreferrer');
   };
 
   // --- AI DEEPSEEK ---
@@ -413,8 +435,6 @@ export default function App() {
       return next;
     });
   };
-
-  const isValidDate = (value) => value instanceof Date && !Number.isNaN(value.getTime());
 
   // --- VISTE AGGIUNTIVE ---
   
