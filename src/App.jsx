@@ -20,8 +20,8 @@ import {
   MapPin
 } from 'lucide-react';
 
-const DEEPSEEK_API_URL = (import.meta.env.VITE_DEEPSEEK_API_URL || __DEEPSEEK_API_URL__ || 'https://api.deepseek.com').replace(/\/$/, '');
-const DEEPSEEK_API_KEY = (import.meta.env.VITE_DEEPSEEK_API_KEY || __DEEPSEEK_API_KEY__ || '').trim();
+const DEEPSEEK_API_URL = (import.meta.env.VITE_DEEPSEEK_API_URL || 'https://api.deepseek.com').replace(/\/$/, '');
+const DEEPSEEK_API_KEY = (import.meta.env.VITE_DEEPSEEK_API_KEY || '').trim();
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('inventory'); 
