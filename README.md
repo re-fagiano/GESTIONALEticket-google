@@ -17,9 +17,9 @@ If you are developing a production application, we recommend using TypeScript wi
 
 ## DeepSeek AI configuration
 
-The AI diagnosis panel calls the DeepSeek API directly from the client. Configure the following environment variables (for example on Railway) before building:
+The AI diagnosis panel calls the DeepSeek API directly from the client. Configure one of the following environment variables (for example on Railway) before building:
 
-- `VITE_DEEPSEEK_API_KEY`: your DeepSeek API key.
-- `VITE_DEEPSEEK_API_URL`: base URL for the API (defaults to `https://api.deepseek.com`).
+- `VITE_DEEPSEEK_API_KEY` **or** `DEEPSEEK_API_KEY`: your DeepSeek API key (the `VITE_` prefix is only the environment variable name used by Vite; the value is the same key you get from your DeepSeek account).
+- `VITE_DEEPSEEK_API_URL` **or** `DEEPSEEK_API_URL`: base URL for the API (defaults to `https://api.deepseek.com`).
 
-Copy `.env.example` to `.env` and set the values locally if you want to test AI calls during development. Only the `VITE_*` variables are read at build time to avoid leaking server-only secrets.
+Copy `.env.example` to `.env` and set the values locally if you want to test AI calls during development. Non-`VITE_` names are injected into the client bundle automatically to support hosting providers that reserve the `VITE_` prefix. You can also paste the key directly in the AI panel of the app: it is stored in the browser so you do not need to redeploy or retype it every time.

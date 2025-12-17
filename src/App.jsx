@@ -22,6 +22,8 @@ import {
 
 const DEEPSEEK_API_URL = (import.meta.env.VITE_DEEPSEEK_API_URL || 'https://api.deepseek.com').replace(/\/$/, '');
 const DEEPSEEK_API_KEY = (import.meta.env.VITE_DEEPSEEK_API_KEY || '').trim();
+const HAS_ENV_DEEPSEEK_KEY = Boolean(DEEPSEEK_API_KEY);
+const ENV_DEEPSEEK_API_URL = DEEPSEEK_API_URL;
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('inventory'); 
@@ -85,6 +87,9 @@ export default function App() {
     const stored = localStorage.getItem('deepseekApiUrl');
     return (stored || ENV_DEEPSEEK_API_URL || '').trim();
   });
+
+  const apiKeyToUse = (runtimeApiKey || DEEPSEEK_API_KEY).trim();
+  const apiUrlToUse = (runtimeApiUrl || DEEPSEEK_API_URL).trim();
 
   useEffect(() => {
     localStorage.setItem('deepseekApiKey', runtimeApiKey);
@@ -167,8 +172,13 @@ export default function App() {
 
   // --- AI DEEPSEEK ---
   const getDeepSeekAnalysis = async (ticketDescription, ticketSubject) => {
-    if (!DEEPSEEK_API_KEY) {
-      setAiError("Configura la chiave API di DeepSeek (VITE_DEEPSEEK_API_KEY) e ricostruisci il deploy.");
+    if (!apiKeyToUse) {
+      setAiError("Inserisci una chiave API DeepSeek (dal tuo account DeepSeek) oppure impostala come variabile d'ambiente VITE_DEEPSEEK_API_KEY/DEEPSEEK_API_KEY.");
+      return;
+    }
+
+    if (!apiUrlToUse) {
+      setAiError("Imposta un endpoint valido per DeepSeek (VITE_DEEPSEEK_API_URL).");
       return;
     }
 
@@ -192,7 +202,7 @@ export default function App() {
     } catch (error) {
       let message = error?.message || "Errore connessione AI.";
       if (message.toLowerCase().includes("failed to fetch")) {
-        message = "Impossibile contattare DeepSeek. Verifica che l'endpoint (VITE_DEEPSEEK_API_URL) sia raggiungibile via HTTPS, che il dominio dell'app sia autorizzato dal CORS e che la chiave VITE_DEEPSEEK_API_KEY sia stata impostata al build.";
+        message = "Impossibile contattare DeepSeek. Conferma l'endpoint (VITE_DEEPSEEK_API_URL) HTTPS, abilita il dominio nel CORS dell'API e verifica che la chiave VITE_DEEPSEEK_API_KEY/DEEPSEEK_API_KEY sia presente (o incollata qui sotto).";
       }
       setAiError(message);
     } finally { setLoadingAi(false); }
@@ -449,11 +459,16 @@ export default function App() {
                                     <h4 className="font-bold text-sm text-indigo-800 uppercase mb-2 flex items-center gap-2"><Bot size={16}/> Diagnosi AI</h4>
                                     {aiError && <div className="text-sm text-red-700 bg-red-50 border border-red-200 p-2 rounded">{aiError}</div>}
                                     <div className="bg-white border border-indigo-100 p-3 rounded text-xs text-slate-600 space-y-2 mb-3">
-                                      <p className="font-semibold text-slate-800">Configurazione chiave (salvata nel browser)</p>
+                                      <p className="font-semibold text-slate-800 flex items-center justify-between">
+                                        <span>Chiave DeepSeek (salvata nel browser)</span>
+                                        <span className="text-[11px] px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 font-semibold">
+                                          {runtimeApiKey ? 'Usando chiave locale' : HAS_ENV_DEEPSEEK_KEY ? 'Usando chiave da build' : 'Nessuna chiave'}
+                                        </span>
+                                      </p>
                                       <input
                                         type="password"
                                         className="w-full border rounded p-2 text-sm"
-                                        placeholder="Incolla qui la tua VITE_DEEPSEEK_API_KEY"
+                                        placeholder="Incolla la chiave dal tuo account DeepSeek (VITE_DEEPSEEK_API_KEY/DEEPSEEK_API_KEY)"
                                         value={runtimeApiKey}
                                         onChange={(e) => setRuntimeApiKey(e.target.value)}
                                       />
@@ -466,7 +481,10 @@ export default function App() {
                                           onChange={(e) => setRuntimeApiUrl(e.target.value)}
                                         />
                                       </div>
-                                      <p className="text-[11px] leading-snug text-slate-500">Se hai già impostato le variables su Railway assicurati che il deploy venga ricostruito e che il nome sia <code className="font-mono">VITE_DEEPSEEK_API_KEY</code>. Questo campo permette un override locale per test immediati.</p>
+                                      <p className="text-[11px] leading-snug text-slate-500">
+                                        La chiave incollata qui resta memorizzata in questo browser (non serve reinserirla). In alternativa configura una variabile d'ambiente
+                                        <code className="font-mono"> VITE_DEEPSEEK_API_KEY</code> oppure <code className="font-mono">DEEPSEEK_API_KEY</code> e ricostruisci il deploy.
+                                      </p>
                                     </div>
                                     {aiSuggestion ? (
                                       <div className="text-sm whitespace-pre-line text-slate-700">{aiSuggestion.text}</div>
