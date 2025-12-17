@@ -35,14 +35,69 @@ export default function App() {
   const [currentDate, setCurrentDate] = useState(new Date());
 
   // --- FUNZIONI DI MEMORIA ---
-  const loadData = (key, defaultData) => {
+  const storageAvailable = typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
+
+  const safeGetItem = (key, fallback = null) => {
+    if (!storageAvailable) return fallback;
     try {
       const saved = localStorage.getItem(key);
-      if (saved) return JSON.parse(saved);
+      return saved === null ? fallback : saved;
+    } catch (e) {
+      console.warn('Storage non accessibile, uso fallback', e);
+      return fallback;
+    }
+  };
+
+  const safeSetItem = (key, value) => {
+    if (!storageAvailable) return false;
+    try {
+      localStorage.setItem(key, value);
+      return true;
+    } catch (e) {
+      console.warn('Impossibile scrivere su storage, i dati non saranno salvati', e);
+      return false;
+    }
+  };
+
+  const loadData = (key, defaultData) => {
+    const saved = safeGetItem(key, null);
+    if (!saved) return defaultData;
+    try {
+      return JSON.parse(saved);
     } catch (e) {
       console.error("Errore lettura memoria", e);
+      return defaultData;
     }
-    return defaultData;
+  };
+
+  const sanitizeTicket = (ticket, idx = 0) => {
+    if (!ticket || typeof ticket !== 'object') return null;
+
+    const safeDate =
+      typeof ticket.date === 'string' && !Number.isNaN(new Date(ticket.date).getTime())
+        ? ticket.date
+        : '';
+
+    const safeTime = typeof ticket.time === 'string' && ticket.time.trim() ? ticket.time.trim() : '09:00';
+    const safeSubject =
+      typeof ticket.subject === 'string' && ticket.subject.trim()
+        ? ticket.subject.trim()
+        : `Ticket #${(ticket.id || idx) ?? idx}`;
+
+    return {
+      id: ticket.id || `${Date.now()}-${idx}`,
+      subject: safeSubject,
+      description: typeof ticket.description === 'string' ? ticket.description : '',
+      customerId: typeof ticket.customerId === 'string' ? ticket.customerId : '',
+      status: ticket.status || 'aperto',
+      date: safeDate,
+      time: safeTime
+    };
+  };
+
+  const sanitizeTickets = (list) => {
+    if (!Array.isArray(list)) return initialTickets.map((t, idx) => sanitizeTicket(t, idx)).filter(Boolean);
+    return list.map((t, idx) => sanitizeTicket(t, idx)).filter(Boolean);
   };
 
   const sanitizeTicket = (ticket, idx = 0) => {
@@ -97,6 +152,8 @@ export default function App() {
   const [tickets, setTickets] = useState(() => sanitizeTickets(loadData('tickets', initialTickets)));
   const [inventory, setInventory] = useState(() => loadData('inventory', initialInventory));
 
+  const [storageWarning, setStorageWarning] = useState(null);
+
   // --- EFFETTO SALVATAGGIO ---
   useEffect(() => { localStorage.setItem('customers', JSON.stringify(customers)); }, [customers]);
   useEffect(() => { localStorage.setItem('tickets', JSON.stringify(sanitizeTickets(tickets))); }, [tickets]);
@@ -112,11 +169,11 @@ export default function App() {
   const [currentTicketForAi, setCurrentTicketForAi] = useState(null);
   const [aiError, setAiError] = useState(null);
   const [runtimeApiKey, setRuntimeApiKey] = useState(() => {
-    const stored = localStorage.getItem('deepseekApiKey');
+    const stored = safeGetItem('deepseekApiKey', '');
     return stored ? stored.trim() : '';
   });
   const [runtimeApiUrl, setRuntimeApiUrl] = useState(() => {
-    const stored = localStorage.getItem('deepseekApiUrl');
+    const stored = safeGetItem('deepseekApiUrl', '');
     return (stored || ENV_DEEPSEEK_API_URL || '').trim();
   });
 
@@ -124,12 +181,14 @@ export default function App() {
   const apiUrlToUse = (runtimeApiUrl || DEEPSEEK_API_URL).trim();
 
   useEffect(() => {
-    localStorage.setItem('deepseekApiKey', runtimeApiKey);
+    if (!safeSetItem('deepseekApiKey', runtimeApiKey)) {
+      setStorageWarning('Impossibile salvare la chiave DeepSeek nel browser: storage disabilitato.');
+    }
   }, [runtimeApiKey]);
 
   useEffect(() => {
-    if (runtimeApiUrl) {
-      localStorage.setItem('deepseekApiUrl', runtimeApiUrl);
+    if (runtimeApiUrl && !safeSetItem('deepseekApiUrl', runtimeApiUrl)) {
+      setStorageWarning('Impossibile salvare l\'endpoint DeepSeek nel browser: storage disabilitato.');
     }
   }, [runtimeApiUrl]);
 
