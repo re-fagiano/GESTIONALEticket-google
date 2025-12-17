@@ -100,36 +100,6 @@ export default function App() {
     return list.map((t, idx) => sanitizeTicket(t, idx)).filter(Boolean);
   };
 
-  const sanitizeTicket = (ticket, idx = 0) => {
-    if (!ticket || typeof ticket !== 'object') return null;
-
-    const safeDate =
-      typeof ticket.date === 'string' && !Number.isNaN(new Date(ticket.date).getTime())
-        ? ticket.date
-        : '';
-
-    const safeTime = typeof ticket.time === 'string' && ticket.time.trim() ? ticket.time.trim() : '09:00';
-    const safeSubject =
-      typeof ticket.subject === 'string' && ticket.subject.trim()
-        ? ticket.subject.trim()
-        : `Ticket #${(ticket.id || idx) ?? idx}`;
-
-    return {
-      id: ticket.id || `${Date.now()}-${idx}`,
-      subject: safeSubject,
-      description: typeof ticket.description === 'string' ? ticket.description : '',
-      customerId: typeof ticket.customerId === 'string' ? ticket.customerId : '',
-      status: ticket.status || 'aperto',
-      date: safeDate,
-      time: safeTime
-    };
-  };
-
-  const sanitizeTickets = (list) => {
-    if (!Array.isArray(list)) return initialTickets.map((t, idx) => sanitizeTicket(t, idx)).filter(Boolean);
-    return list.map((t, idx) => sanitizeTicket(t, idx)).filter(Boolean);
-  };
-
   // --- DATI DI PROVA ---
   const initialCustomers = [
     { id: '1', name: 'Maria Bianchi', email: 'maria@test.com', phone: '3339988776', address: 'Via dei Fiori 12' },
@@ -334,21 +304,65 @@ export default function App() {
   };
 
   // --- GOOGLE CALENDAR LINK ---
+  const isValidDate = (value) => value instanceof Date && !Number.isNaN(value.getTime());
+
   const addToGoogleCalendar = (ticket) => {
     const safeTicket = sanitizeTicket(ticket);
-    if (!safeTicket) return;
+    if (!safeTicket) {
+      console.error('Calendario: ticket non valido', ticket);
+      alert('Impossibile aprire l\'intervento: dati mancanti o corrotti.');
+      return;
+    }
 
     const customer = customers.find(c => c.id === safeTicket.customerId);
+
+    const ensureDate = (value) => {
+      if (typeof value !== 'string') return null;
+      const parsed = new Date(value);
+      return Number.isNaN(parsed.getTime()) ? null : value;
+    };
+
+    const ensureTime = (value) => {
+      if (typeof value !== 'string') return null;
+      const trimmed = value.trim();
+      if (/^\d{2}:\d{2}$/.test(trimmed)) return trimmed;
+      if (/^\d:\d{2}$/.test(trimmed)) return `0${trimmed}`; // es. 9:30 -> 09:30
+      return null;
+    };
+
+    const fallbackDate = new Date().toISOString().split('T')[0];
+    const dateStr = ensureDate(safeTicket.date) || fallbackDate;
+    const timeStr = ensureTime(safeTicket.time) || '09:00';
+
+    const startDate = new Date(`${dateStr}T${timeStr}`);
+    if (!isValidDate(startDate)) {
+      console.error('Calendario: data/ora non valida', { dateStr, timeStr, ticket: safeTicket });
+      alert('Impossibile creare il link del calendario: data o ora non valide.');
+      return;
+    }
+
+    const endDate = new Date(startDate.getTime() + 60 * 60 * 1000);
+    const formatGCalDate = (date) => date.toISOString().replace(/-|:|\.\d\d\d/g, "");
+
     const title = encodeURIComponent(`Intervento FIXLAB: ${safeTicket.subject}`);
     const details = encodeURIComponent(`Problema: ${safeTicket.description}\nCliente: ${customer?.name}\nTel: ${customer?.phone}`);
     const location = encodeURIComponent(customer?.address || "");
-    const dateStr = safeTicket.date || new Date().toISOString().split('T')[0];
-    const timeStr = safeTicket.time || '09:00';
-    const startDate = new Date(`${dateStr}T${timeStr}`);
-    const endDate = new Date(startDate.getTime() + 60*60*1000);
-    const formatGCalDate = (date) => date.toISOString().replace(/-|:|\.\d\d\d/g, "");
+
     const url = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&details=${details}&location=${location}&dates=${formatGCalDate(startDate)}/${formatGCalDate(endDate)}`;
-    window.open(url, '_blank');
+
+    if (!url || url.trim() === '') {
+      console.error('Calendario: URL non valida generata', { url, ticket: safeTicket });
+      alert('Impossibile aprire Google Calendar: URL non valida.');
+      return;
+    }
+
+    const opened = window.open(url, '_blank', 'noopener,noreferrer');
+    if (!opened) {
+      // Alcuni browser o blocker possono impedire l'apertura di nuove schede
+      // senza un URL immediato. In tal caso effettuiamo un fallback sulla
+      // stessa scheda per evitare about:blank.
+      window.location.assign(url);
+    }
   };
 
   // --- AI DEEPSEEK ---
@@ -443,8 +457,6 @@ export default function App() {
       return next;
     });
   };
-
-  const isValidDate = (value) => value instanceof Date && !Number.isNaN(value.getTime());
 
   // --- VISTE AGGIUNTIVE ---
   
