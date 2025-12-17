@@ -20,8 +20,9 @@ import {
   MapPin
 } from 'lucide-react';
 
-const DEEPSEEK_API_URL = (import.meta.env.VITE_DEEPSEEK_API_URL || __DEEPSEEK_API_URL__ || 'https://api.deepseek.com').replace(/\/$/, '');
-const DEEPSEEK_API_KEY = (import.meta.env.VITE_DEEPSEEK_API_KEY || __DEEPSEEK_API_KEY__ || '').trim();
+const DEEPSEEK_API_URL = (import.meta.env.VITE_DEEPSEEK_API_URL || 'https://api.deepseek.com').replace(/\/$/, '');
+const ENV_DEEPSEEK_API_KEY = (import.meta.env.VITE_DEEPSEEK_API_KEY || '').trim();
+const ENV_DEEPSEEK_API_URL = (import.meta.env.VITE_DEEPSEEK_API_URL || '').trim();
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('inventory'); 
@@ -77,6 +78,24 @@ export default function App() {
   const [loadingAi, setLoadingAi] = useState(false);
   const [currentTicketForAi, setCurrentTicketForAi] = useState(null);
   const [aiError, setAiError] = useState(null);
+  const [runtimeApiKey, setRuntimeApiKey] = useState(() => {
+    const stored = localStorage.getItem('deepseekApiKey');
+    return stored ? stored.trim() : '';
+  });
+  const [runtimeApiUrl, setRuntimeApiUrl] = useState(() => {
+    const stored = localStorage.getItem('deepseekApiUrl');
+    return (stored || ENV_DEEPSEEK_API_URL || '').trim();
+  });
+
+  useEffect(() => {
+    localStorage.setItem('deepseekApiKey', runtimeApiKey);
+  }, [runtimeApiKey]);
+
+  useEffect(() => {
+    if (runtimeApiUrl) {
+      localStorage.setItem('deepseekApiUrl', runtimeApiUrl);
+    }
+  }, [runtimeApiUrl]);
 
   // Forms
   const [newCustomer, setNewCustomer] = useState({ name: '', email: '', phone: '', address: '' });
@@ -149,8 +168,11 @@ export default function App() {
 
   // --- AI DEEPSEEK ---
   const getDeepSeekAnalysis = async (ticketDescription, ticketSubject) => {
-    if (!DEEPSEEK_API_KEY) {
-      setAiError("Configura la chiave API di DeepSeek (VITE_DEEPSEEK_API_KEY o DEEPSEEK_API_KEY) nell'ambiente di deploy.");
+    const apiKeyToUse = (runtimeApiKey || ENV_DEEPSEEK_API_KEY).trim();
+    const apiUrlToUse = (runtimeApiUrl || DEEPSEEK_API_URL).replace(/\/$/, '');
+
+    if (!apiKeyToUse) {
+      setAiError("Configura la chiave API di DeepSeek (VITE_DEEPSEEK_API_KEY) e ricostruisci il deploy oppure incollala qui sotto.");
       return;
     }
 
@@ -158,12 +180,12 @@ export default function App() {
     setAiSuggestion(null); 
     setAiError(null);
     const systemPrompt = "Sei un tecnico esperto di elettrodomestici. Analizza il problema e fornisci: 1) Possibile Causa 2) Diagnosi 3) Ricambi.";
-    const endpoint = `${DEEPSEEK_API_URL}/chat/completions`;
+    const endpoint = `${apiUrlToUse || 'https://api.deepseek.com'}/chat/completions`;
     
     try {
       const response = await fetch(endpoint, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${DEEPSEEK_API_KEY}` },
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKeyToUse}` },
         body: JSON.stringify({ model: "deepseek-chat", messages: [{ role: "system", content: systemPrompt }, { role: "user", content: `Oggetto: ${ticketSubject}. Descrizione: ${ticketDescription}` }], stream: false })
       });
       if (!response.ok) throw new Error(`Errore API: ${response.status}`);
@@ -172,7 +194,11 @@ export default function App() {
       if (!content) throw new Error("Risposta AI non valida.");
       setAiSuggestion({ text: content, confidence: "DeepSeek AI" });
     } catch (error) {
-      setAiError(error.message || "Errore connessione AI.");
+      let message = error?.message || "Errore connessione AI.";
+      if (message.toLowerCase().includes("failed to fetch")) {
+        message = "Impossibile contattare DeepSeek. Verifica che l'endpoint (VITE_DEEPSEEK_API_URL) sia raggiungibile via HTTPS, che il dominio dell'app sia autorizzato dal CORS e che la chiave VITE_DEEPSEEK_API_KEY sia stata impostata al build.";
+      }
+      setAiError(message);
     } finally { setLoadingAi(false); }
   };
 
@@ -426,6 +452,26 @@ export default function App() {
                                 <div className="bg-indigo-50 p-4 rounded border border-indigo-100">
                                     <h4 className="font-bold text-sm text-indigo-800 uppercase mb-2 flex items-center gap-2"><Bot size={16}/> Diagnosi AI</h4>
                                     {aiError && <div className="text-sm text-red-700 bg-red-50 border border-red-200 p-2 rounded">{aiError}</div>}
+                                    <div className="bg-white border border-indigo-100 p-3 rounded text-xs text-slate-600 space-y-2 mb-3">
+                                      <p className="font-semibold text-slate-800">Configurazione chiave (salvata nel browser)</p>
+                                      <input
+                                        type="password"
+                                        className="w-full border rounded p-2 text-sm"
+                                        placeholder="Incolla qui la tua VITE_DEEPSEEK_API_KEY"
+                                        value={runtimeApiKey}
+                                        onChange={(e) => setRuntimeApiKey(e.target.value)}
+                                      />
+                                      <div className="flex flex-col gap-2">
+                                        <label className="text-xs font-semibold text-slate-700">Endpoint DeepSeek</label>
+                                        <input
+                                          className="w-full border rounded p-2 text-sm"
+                                          placeholder="https://api.deepseek.com"
+                                          value={runtimeApiUrl}
+                                          onChange={(e) => setRuntimeApiUrl(e.target.value)}
+                                        />
+                                      </div>
+                                      <p className="text-[11px] leading-snug text-slate-500">Se hai già impostato le variables su Railway assicurati che il deploy venga ricostruito e che il nome sia <code className="font-mono">VITE_DEEPSEEK_API_KEY</code>. Questo campo permette un override locale per test immediati.</p>
+                                    </div>
                                     {aiSuggestion ? (
                                       <div className="text-sm whitespace-pre-line text-slate-700">{aiSuggestion.text}</div>
                                     ) : loadingAi ? (
