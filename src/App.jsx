@@ -325,9 +325,7 @@ export default function App() {
     const ensureTime = (value) => {
       if (typeof value !== 'string') return null;
       const trimmed = value.trim();
-      if (/^\d{2}:\d{2}$/.test(trimmed)) return trimmed;
-      if (/^\d:\d{2}$/.test(trimmed)) return `0${trimmed}`; // es. 9:30 -> 09:30
-      return null;
+      return /^\d{2}:\d{2}$/.test(trimmed) ? trimmed : null;
     };
 
     const fallbackDate = new Date().toISOString().split('T')[0];
@@ -348,40 +346,28 @@ export default function App() {
     const details = encodeURIComponent(`Problema: ${safeTicket.description}\nCliente: ${customer?.name}\nTel: ${customer?.phone}`);
     const location = encodeURIComponent(customer?.address || "");
 
+    const fallbackDate = new Date().toISOString().split('T')[0];
+    const dateStr = (typeof safeTicket.date === 'string' && !Number.isNaN(new Date(safeTicket.date).getTime())) ? safeTicket.date : fallbackDate;
+    const timeStr = (typeof safeTicket.time === 'string' && /^\d{2}:\d{2}$/.test(safeTicket.time.trim())) ? safeTicket.time.trim() : '09:00';
+
+    const startDate = new Date(`${dateStr}T${timeStr}`);
+    if (!isValidDate(startDate)) {
+      console.error('Calendario: data/ora non valida', { dateStr, timeStr, ticket: safeTicket });
+      alert('Impossibile creare il link del calendario: data o ora non valide.');
+      return;
+    }
+
+    const endDate = new Date(startDate.getTime() + 60*60*1000);
+    const formatGCalDate = (date) => date.toISOString().replace(/-|:|\.\d\d\d/g, "");
     const url = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&details=${details}&location=${location}&dates=${formatGCalDate(startDate)}/${formatGCalDate(endDate)}`;
 
-    if (!url || url.trim() === '') {
+    if (!url) {
       console.error('Calendario: URL non valida generata', { url, ticket: safeTicket });
       alert('Impossibile aprire Google Calendar: URL non valida.');
       return;
     }
 
-    const openWithAnchorFallback = (targetUrl) => {
-      try {
-        const popup = window.open('', '_blank', 'noopener,noreferrer');
-        if (popup) {
-          popup.opener = null;
-          popup.location.href = targetUrl;
-          return true;
-        }
-
-        const anchor = document.createElement('a');
-        anchor.href = targetUrl;
-        anchor.target = '_blank';
-        anchor.rel = 'noopener noreferrer';
-        anchor.style.display = 'none';
-        document.body.appendChild(anchor);
-        anchor.click();
-        anchor.remove();
-        return true;
-      } catch (err) {
-        console.error('Calendario: apertura popup fallita, fallback sulla stessa scheda', err);
-        window.location.assign(targetUrl);
-        return false;
-      }
-    };
-
-    openWithAnchorFallback(url);
+    window.open(url, '_blank', 'noopener,noreferrer');
   };
 
   // --- AI DEEPSEEK ---
