@@ -319,6 +319,7 @@ export default function App() {
 
   // --- CALENDAR HELPERS ---
   const getDaysInMonth = (date) => {
+    if (!isValidDate(date)) return [];
     const year = date.getFullYear();
     const month = date.getMonth();
     const daysInMonth = new Date(year, month + 1, 0).getDate();
@@ -331,9 +332,14 @@ export default function App() {
   };
 
   const changeMonth = (offset) => {
-    const newDate = new Date(currentDate.setMonth(currentDate.getMonth() + offset));
-    setCurrentDate(new Date(newDate));
+    setCurrentDate((prev) => {
+      const next = new Date(prev);
+      next.setMonth(prev.getMonth() + offset);
+      return next;
+    });
   };
+
+  const isValidDate = (value) => value instanceof Date && !Number.isNaN(value.getTime());
 
   // --- VISTE AGGIUNTIVE ---
   
@@ -488,7 +494,7 @@ export default function App() {
           </div>
           <div className="grid grid-cols-7 gap-2">
             {days.map((day, idx) => {
-              if (!day) return <div key={idx} className="bg-slate-50 h-32 rounded"></div>;
+              if (!day || !isValidDate(day)) return <div key={idx} className="bg-slate-50 h-32 rounded"></div>;
               const dayString = day.toISOString().split('T')[0];
               const dayTickets = tickets.filter(t => t.date === dayString);
               const isToday = dayString === new Date().toISOString().split('T')[0];
