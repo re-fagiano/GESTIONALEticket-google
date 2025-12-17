@@ -1,14 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
-  LayoutDashboard, 
-  Users, 
-  Ticket, 
-  Wrench, 
-  Plus, 
-  Bot, 
-  Menu, 
-  X, 
-  Trash2, 
+  LayoutDashboard,
+  Users,
+  Ticket,
+  Wrench,
+  Plus,
+  Bot,
+  Menu,
+  X,
+  Trash2,
   RefreshCw,
   Zap,
   Calendar as CalendarIcon,
@@ -17,12 +17,14 @@ import {
   Package, // Icona Magazzino
   AlertTriangle, // Icona Avvisi
   Phone,
-  MapPin
+  MapPin,
+  Download,
+  Upload,
+  FileSpreadsheet
 } from 'lucide-react';
 
 const DEEPSEEK_API_URL = (import.meta.env.VITE_DEEPSEEK_API_URL || 'https://api.deepseek.com').replace(/\/$/, '');
 const DEEPSEEK_API_KEY = (import.meta.env.VITE_DEEPSEEK_API_KEY || '').trim();
-const HAS_ENV_DEEPSEEK_KEY = Boolean(DEEPSEEK_API_KEY);
 const ENV_DEEPSEEK_API_URL = DEEPSEEK_API_URL;
 
 export default function App() {
@@ -103,11 +105,13 @@ export default function App() {
 
   // Forms
   const [newCustomer, setNewCustomer] = useState({ name: '', email: '', phone: '', address: '' });
-  const [newTicket, setNewTicket] = useState({ 
-    subject: '', description: '', customerId: '', status: 'aperto', 
-    date: new Date().toISOString().split('T')[0], time: '09:00' 
+  const [newTicket, setNewTicket] = useState({
+    subject: '', description: '', customerId: '', status: 'aperto',
+    date: new Date().toISOString().split('T')[0], time: '09:00'
   });
   const [newPart, setNewPart] = useState({ name: '', location: '', qty: 1, price: 0, minQty: 5 });
+  const [importError, setImportError] = useState('');
+  const fileInputRef = useRef(null);
 
   // --- AZIONI ---
   const handleAddCustomer = () => {
@@ -155,6 +159,78 @@ export default function App() {
     }
   };
 
+  const exportToCsv = (filename, headers, rows) => {
+    const csvContent = [headers.join(';'), ...rows.map(row => row.map(value => `"${(value ?? '').toString().replace(/"/g, '""')}"`).join(';'))].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = filename;
+    link.click();
+  };
+
+  const handleExportTickets = () => {
+    exportToCsv('tickets_export.csv',
+      ['ID', 'Oggetto', 'Descrizione', 'Cliente', 'Stato', 'Data', 'Ora'],
+      tickets.map(t => [t.id, t.subject, t.description, customers.find(c => c.id === t.customerId)?.name || '', t.status, t.date, t.time])
+    );
+  };
+
+  const handleExportInventory = () => {
+    exportToCsv('magazzino_export.csv',
+      ['ID', 'Prodotto', 'Posizione', 'Quantità', 'Prezzo (€)', 'Soglia Minima'],
+      inventory.map(i => [i.id, i.name, i.location, i.qty, i.price, i.minQty])
+    );
+  };
+
+  const handleExportCustomers = () => {
+    exportToCsv('clienti_export.csv',
+      ['ID', 'Nome', 'Telefono', 'Email', 'Indirizzo'],
+      customers.map(c => [c.id, c.name, c.phone, c.email, c.address])
+    );
+  };
+
+  const handleDownloadBackup = () => {
+    const backup = {
+      exportedAt: new Date().toISOString(),
+      customers,
+      tickets,
+      inventory
+    };
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = 'gestionale_backup.json';
+    link.click();
+  };
+
+  const handleImportBackup = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const parsed = JSON.parse(e.target.result);
+        if (parsed.customers && parsed.tickets && parsed.inventory) {
+          setCustomers(parsed.customers);
+          setTickets(parsed.tickets);
+          setInventory(parsed.inventory);
+          setImportError('');
+        } else {
+          throw new Error('Formato non valido');
+        }
+      } catch (err) {
+        console.error('Errore import backup', err);
+        setImportError('File di backup non valido. Assicurati di aver caricato un JSON generato dal Gestionale.');
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const handleSelectBackupFile = () => {
+    setImportError('');
+    fileInputRef.current?.click();
+  };
+
   // --- GOOGLE CALENDAR LINK ---
   const addToGoogleCalendar = (ticket) => {
     const customer = customers.find(c => c.id === ticket.customerId);
@@ -195,10 +271,13 @@ export default function App() {
   };
 
   const getDeepSeekAnalysis = async (ticketDescription, ticketSubject) => {
-    const hasKey = Boolean(apiKeyToUse);
+    if (!apiKeyToUse) {
+      setAiError("Configura la chiave API di DeepSeek (VITE_DEEPSEEK_API_KEY) o inserisci una chiave locale nel browser.");
+      return;
+    }
 
-    if (!hasKey && !apiUrlToUse) {
-      setAiError("Imposta almeno l'endpoint DeepSeek (VITE_DEEPSEEK_API_URL) oppure usa la diagnosi offline.");
+    if (!apiUrlToUse) {
+      setAiError("Imposta un endpoint valido per DeepSeek (VITE_DEEPSEEK_API_URL).");
       return;
     }
 
@@ -231,7 +310,7 @@ export default function App() {
       const offline = buildOfflineSuggestion(ticketSubject, ticketDescription);
       let message = error?.message || "Errore connessione AI.";
       if (message.toLowerCase().includes("failed to fetch")) {
-        message = "Impossibile contattare DeepSeek. Mostro una diagnosi offline; se vuoi l'AI completa, conferma l'endpoint (VITE_DEEPSEEK_API_URL) HTTPS e la chiave VITE_DEEPSEEK_API_KEY/DEEPSEEK_API_KEY.";
+        message = "Impossibile contattare DeepSeek. Conferma l'endpoint (VITE_DEEPSEEK_API_URL) HTTPS, abilita il dominio nel CORS dell'API e verifica che la chiave VITE_DEEPSEEK_API_KEY/DEEPSEEK_API_KEY sia presente (o incollata qui sotto).";
       }
       setAiSuggestion({ text: offline, confidence: "Offline" });
       setAiError(message);
@@ -440,6 +519,23 @@ export default function App() {
         </header>
         <main className="flex-1 overflow-y-auto p-4 md:p-8">
           <div className="max-w-6xl mx-auto pb-20">
+            <div className="bg-white rounded shadow p-4 mb-6 border border-slate-200">
+              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <p className="text-sm font-semibold text-slate-700 flex items-center gap-2"><FileSpreadsheet size={16}/> Backup e Export</p>
+                  <p className="text-xs text-slate-500">Scarica un JSON di backup per conservarlo su Drive/Cloud, oppure esporta CSV apribili in Excel per storico o assenza di connessione.</p>
+                </div>
+                <div className="flex flex-wrap gap-2 justify-end">
+                  <button onClick={handleDownloadBackup} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-800 text-white rounded hover:bg-slate-700"><Download size={16}/> Backup JSON</button>
+                  <button onClick={handleSelectBackupFile} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded hover:bg-slate-200 border"><Upload size={16}/> Importa Backup</button>
+                  <button onClick={handleExportTickets} className="flex items-center gap-2 px-3 py-2 text-sm bg-blue-50 text-blue-700 rounded hover:bg-blue-100 border border-blue-200"><FileSpreadsheet size={16}/> Ticket CSV</button>
+                  <button onClick={handleExportInventory} className="flex items-center gap-2 px-3 py-2 text-sm bg-purple-50 text-purple-700 rounded hover:bg-purple-100 border border-purple-200"><FileSpreadsheet size={16}/> Magazzino CSV</button>
+                  <button onClick={handleExportCustomers} className="flex items-center gap-2 px-3 py-2 text-sm bg-green-50 text-green-700 rounded hover:bg-green-100 border border-green-200"><FileSpreadsheet size={16}/> Clienti CSV</button>
+                  <input ref={fileInputRef} type="file" accept="application/json" className="hidden" onChange={handleImportBackup} />
+                </div>
+              </div>
+              {importError && <p className="mt-2 text-sm text-red-600">{importError}</p>}
+            </div>
             {activeTab === 'dashboard' && <DashboardView />}
             {activeTab === 'calendar' && <CalendarView />}
             {activeTab === 'customers' && <CustomerListView />}
@@ -511,10 +607,7 @@ export default function App() {
                                           onChange={(e) => setRuntimeApiUrl(e.target.value)}
                                         />
                                       </div>
-                                      <p className="text-[11px] leading-snug text-slate-500">
-                                        La chiave incollata qui resta memorizzata in questo browser (non serve reinserirla). In alternativa configura una variabile d'ambiente
-                                        <code className="font-mono"> VITE_DEEPSEEK_API_KEY</code> oppure <code className="font-mono">DEEPSEEK_API_KEY</code> e ricostruisci il deploy.
-                                      </p>
+                                      <p className="text-[11px] leading-snug text-slate-500">Se hai già impostato le variabili su Railway assicurati che il deploy venga ricostruito. Sono accettati sia <code className="font-mono">VITE_DEEPSEEK_API_KEY</code> sia <code className="font-mono">DEEPSEEK_API_KEY</code>. Questo campo permette un override locale per test immediati.</p>
                                     </div>
                                     {aiSuggestion ? (
                                       <div className="text-sm whitespace-pre-line text-slate-700">{aiSuggestion.text}</div>
