@@ -346,24 +346,28 @@ export default function App() {
     const details = encodeURIComponent(`Problema: ${safeTicket.description}\nCliente: ${customer?.name}\nTel: ${customer?.phone}`);
     const location = encodeURIComponent(customer?.address || "");
 
+    const fallbackDate = new Date().toISOString().split('T')[0];
+    const dateStr = (typeof safeTicket.date === 'string' && !Number.isNaN(new Date(safeTicket.date).getTime())) ? safeTicket.date : fallbackDate;
+    const timeStr = (typeof safeTicket.time === 'string' && /^\d{2}:\d{2}$/.test(safeTicket.time.trim())) ? safeTicket.time.trim() : '09:00';
+
+    const startDate = new Date(`${dateStr}T${timeStr}`);
+    if (!isValidDate(startDate)) {
+      console.error('Calendario: data/ora non valida', { dateStr, timeStr, ticket: safeTicket });
+      alert('Impossibile creare il link del calendario: data o ora non valide.');
+      return;
+    }
+
+    const endDate = new Date(startDate.getTime() + 60*60*1000);
+    const formatGCalDate = (date) => date.toISOString().replace(/-|:|\.\d\d\d/g, "");
     const url = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&details=${details}&location=${location}&dates=${formatGCalDate(startDate)}/${formatGCalDate(endDate)}`;
 
-    if (!url || url.trim() === '') {
+    if (!url) {
       console.error('Calendario: URL non valida generata', { url, ticket: safeTicket });
       alert('Impossibile aprire Google Calendar: URL non valida.');
       return;
     }
 
-    const newWindow = window.open(url, '_blank', 'noopener,noreferrer');
-
-    // Alcuni browser aprono una tab vuota quando l'URL è valutato come vuoto o viene bloccato: forziamo la navigazione se la tab
-    // rimane su about:blank.
-    if (newWindow && newWindow.location && newWindow.location.href === 'about:blank') {
-      newWindow.location.href = url;
-    } else if (!newWindow) {
-      // Popup bloccato: fallback nella stessa scheda per evitare una pagina vuota.
-      window.location.href = url;
-    }
+    window.open(url, '_blank', 'noopener,noreferrer');
   };
 
   // --- AI DEEPSEEK ---
