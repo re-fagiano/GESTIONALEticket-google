@@ -150,7 +150,7 @@ export default function App() {
   // --- AI DEEPSEEK ---
   const getDeepSeekAnalysis = async (ticketDescription, ticketSubject) => {
     if (!DEEPSEEK_API_KEY) {
-      setAiError("Configura la chiave API di DeepSeek (VITE_DEEPSEEK_API_KEY o DEEPSEEK_API_KEY) nell'ambiente di deploy.");
+      setAiError("Configura la chiave API di DeepSeek (VITE_DEEPSEEK_API_KEY) e ricostruisci il deploy.");
       return;
     }
 
@@ -172,7 +172,11 @@ export default function App() {
       if (!content) throw new Error("Risposta AI non valida.");
       setAiSuggestion({ text: content, confidence: "DeepSeek AI" });
     } catch (error) {
-      setAiError(error.message || "Errore connessione AI.");
+      let message = error?.message || "Errore connessione AI.";
+      if (message.toLowerCase().includes("failed to fetch")) {
+        message = "Impossibile contattare DeepSeek. Verifica che l'endpoint (VITE_DEEPSEEK_API_URL) sia raggiungibile via HTTPS, che il dominio dell'app sia autorizzato dal CORS e che la chiave VITE_DEEPSEEK_API_KEY sia stata impostata al build.";
+      }
+      setAiError(message);
     } finally { setLoadingAi(false); }
   };
 
