@@ -25,7 +25,133 @@ import {
 
 const DEEPSEEK_API_URL = (import.meta.env.VITE_DEEPSEEK_API_URL || 'https://api.deepseek.com').replace(/\/$/, '');
 const DEEPSEEK_API_KEY = (import.meta.env.VITE_DEEPSEEK_API_KEY || '').trim();
+const HAS_ENV_DEEPSEEK_KEY = Boolean(DEEPSEEK_API_KEY && DEEPSEEK_API_KEY.trim());
 const ENV_DEEPSEEK_API_URL = DEEPSEEK_API_URL;
+
+const storageAvailable = typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
+
+const safeGetItem = (key, fallback = null) => {
+  if (!storageAvailable) return fallback;
+  try {
+    const saved = localStorage.getItem(key);
+    return saved === null ? fallback : saved;
+  } catch (e) {
+    console.warn('Storage non accessibile, uso fallback', e);
+    return fallback;
+  }
+};
+
+const safeSetItem = (key, value) => {
+  if (!storageAvailable) return false;
+  try {
+    localStorage.setItem(key, value);
+    return true;
+  } catch (e) {
+    console.warn('Impossibile scrivere su storage, i dati non saranno salvati', e);
+    return false;
+  }
+};
+
+const loadData = (key, defaultData) => {
+  const saved = safeGetItem(key, null);
+  if (!saved) return defaultData;
+  try {
+    return JSON.parse(saved);
+  } catch (e) {
+    console.error("Errore lettura memoria", e);
+    return defaultData;
+  }
+};
+
+const sanitizeTicket = (ticket, idx = 0) => {
+  if (!ticket || typeof ticket !== 'object') return null;
+
+  const safeDate =
+    typeof ticket.date === 'string' && !Number.isNaN(new Date(ticket.date).getTime())
+      ? ticket.date
+      : '';
+
+  const safeTime = typeof ticket.time === 'string' && ticket.time.trim() ? ticket.time.trim() : '09:00';
+  const safeSubject =
+    typeof ticket.subject === 'string' && ticket.subject.trim()
+      ? ticket.subject.trim()
+      : `Ticket #${(ticket.id || idx) ?? idx}`;
+
+  return {
+    id: ticket.id || `${Date.now()}-${idx}`,
+    subject: safeSubject,
+    description: typeof ticket.description === 'string' ? ticket.description : '',
+    customerId: typeof ticket.customerId === 'string' ? ticket.customerId : '',
+    status: ticket.status || 'aperto',
+    date: safeDate,
+    time: safeTime
+  };
+};
+
+const sanitizeTickets = (list, fallback = []) => {
+  const source = Array.isArray(list) ? list : fallback;
+  return source.map((t, idx) => sanitizeTicket(t, idx)).filter(Boolean);
+};
+
+const sanitizeCustomer = (customer, idx = 0) => {
+  if (!customer || typeof customer !== 'object') return null;
+
+  const safeName = typeof customer.name === 'string' && customer.name.trim() ? customer.name.trim() : `Cliente #${idx + 1}`;
+  const safeEmail = typeof customer.email === 'string' ? customer.email.trim() : '';
+  const safePhone = typeof customer.phone === 'string' ? customer.phone.trim() : '';
+  const safeAddress = typeof customer.address === 'string' ? customer.address.trim() : '';
+
+  return {
+    id: customer.id || `${Date.now()}-${idx}`,
+    name: safeName,
+    email: safeEmail,
+    phone: safePhone,
+    address: safeAddress
+  };
+};
+
+const sanitizeCustomers = (list, fallback = []) => {
+  const source = Array.isArray(list) ? list : fallback;
+  return source.map((c, idx) => sanitizeCustomer(c, idx)).filter(Boolean);
+};
+
+const sanitizeInventoryItem = (item, idx = 0) => {
+  if (!item || typeof item !== 'object') return null;
+
+  const parsedQty = Number.isFinite(Number(item.qty)) ? Number(item.qty) : 0;
+  const parsedPrice = Number.isFinite(Number(item.price)) ? Number(item.price) : 0;
+  const parsedMinQty = Number.isFinite(Number(item.minQty)) ? Number(item.minQty) : 0;
+
+  return {
+    id: item.id || `${Date.now()}-${idx}`,
+    name: typeof item.name === 'string' ? item.name.trim() : `Ricambio #${idx + 1}`,
+    location: typeof item.location === 'string' ? item.location.trim() : '',
+    qty: parsedQty,
+    price: parsedPrice,
+    minQty: parsedMinQty
+  };
+};
+
+const sanitizeInventoryList = (list, fallback = []) => {
+  const source = Array.isArray(list) ? list : fallback;
+  return source.map((item, idx) => sanitizeInventoryItem(item, idx)).filter(Boolean);
+};
+
+const initialCustomers = [
+  { id: '1', name: 'Maria Bianchi', email: 'maria@test.com', phone: '3339988776', address: 'Via dei Fiori 12' },
+  { id: '2', name: 'Ristorante Da Luigi', email: 'info@luigi.com', phone: '06123456', address: 'Piazza Navona 5' }
+];
+
+const initialTickets = [
+  { id: '101', subject: 'Lavatrice non scarica', description: 'La lavatrice Bosch si blocca piena di acqua', customerId: '1', status: 'aperto', date: new Date().toISOString().split('T')[0], time: '09:00' },
+  { id: '102', subject: 'Frigorifero caldo', description: 'Il reparto freezer funziona ma il frigo è caldo', customerId: '2', status: 'in lavorazione', date: new Date().toISOString().split('T')[0], time: '14:30' }
+];
+
+const initialInventory = [
+  { id: 'p1', name: 'Pompa Scarico Universale', location: 'AF-01-A', qty: 3, price: 25.00, minQty: 5 },
+  { id: 'p2', name: 'Cuscinetti Cestello', location: 'BF-02-C', qty: 10, price: 15.50, minQty: 2 },
+  { id: 'p3', name: 'Scheda Elettronica Samsung', location: 'SEC-09', qty: 1, price: 120.00, minQty: 1 }
+];
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('inventory'); 
@@ -34,93 +160,10 @@ export default function App() {
   // --- STATO CALENDARIO ---
   const [currentDate, setCurrentDate] = useState(new Date());
 
-  // --- FUNZIONI DI MEMORIA ---
-  const storageAvailable = typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
-
-  const safeGetItem = (key, fallback = null) => {
-    if (!storageAvailable) return fallback;
-    try {
-      const saved = localStorage.getItem(key);
-      return saved === null ? fallback : saved;
-    } catch (e) {
-      console.warn('Storage non accessibile, uso fallback', e);
-      return fallback;
-    }
-  };
-
-  const safeSetItem = (key, value) => {
-    if (!storageAvailable) return false;
-    try {
-      localStorage.setItem(key, value);
-      return true;
-    } catch (e) {
-      console.warn('Impossibile scrivere su storage, i dati non saranno salvati', e);
-      return false;
-    }
-  };
-
-  const loadData = (key, defaultData) => {
-    const saved = safeGetItem(key, null);
-    if (!saved) return defaultData;
-    try {
-      return JSON.parse(saved);
-    } catch (e) {
-      console.error("Errore lettura memoria", e);
-      return defaultData;
-    }
-  };
-
-  const sanitizeTicket = (ticket, idx = 0) => {
-    if (!ticket || typeof ticket !== 'object') return null;
-
-    const safeDate =
-      typeof ticket.date === 'string' && !Number.isNaN(new Date(ticket.date).getTime())
-        ? ticket.date
-        : '';
-
-    const safeTime = typeof ticket.time === 'string' && ticket.time.trim() ? ticket.time.trim() : '09:00';
-    const safeSubject =
-      typeof ticket.subject === 'string' && ticket.subject.trim()
-        ? ticket.subject.trim()
-        : `Ticket #${(ticket.id || idx) ?? idx}`;
-
-    return {
-      id: ticket.id || `${Date.now()}-${idx}`,
-      subject: safeSubject,
-      description: typeof ticket.description === 'string' ? ticket.description : '',
-      customerId: typeof ticket.customerId === 'string' ? ticket.customerId : '',
-      status: ticket.status || 'aperto',
-      date: safeDate,
-      time: safeTime
-    };
-  };
-
-  const sanitizeTickets = (list) => {
-    if (!Array.isArray(list)) return initialTickets.map((t, idx) => sanitizeTicket(t, idx)).filter(Boolean);
-    return list.map((t, idx) => sanitizeTicket(t, idx)).filter(Boolean);
-  };
-
-  // --- DATI DI PROVA ---
-  const initialCustomers = [
-    { id: '1', name: 'Maria Bianchi', email: 'maria@test.com', phone: '3339988776', address: 'Via dei Fiori 12' },
-    { id: '2', name: 'Ristorante Da Luigi', email: 'info@luigi.com', phone: '06123456', address: 'Piazza Navona 5' }
-  ];
-
-  const initialTickets = [
-    { id: '101', subject: 'Lavatrice non scarica', description: 'La lavatrice Bosch si blocca piena di acqua', customerId: '1', status: 'aperto', date: new Date().toISOString().split('T')[0], time: '09:00' },
-    { id: '102', subject: 'Frigorifero caldo', description: 'Il reparto freezer funziona ma il frigo è caldo', customerId: '2', status: 'in lavorazione', date: new Date().toISOString().split('T')[0], time: '14:30' }
-  ];
-
-  const initialInventory = [
-    { id: 'p1', name: 'Pompa Scarico Universale', location: 'AF-01-A', qty: 3, price: 25.00, minQty: 5 },
-    { id: 'p2', name: 'Cuscinetti Cestello', location: 'BF-02-C', qty: 10, price: 15.50, minQty: 2 },
-    { id: 'p3', name: 'Scheda Elettronica Samsung', location: 'SEC-09', qty: 1, price: 120.00, minQty: 1 }
-  ];
-
   // --- STATO APP ---
-  const [customers, setCustomers] = useState(() => loadData('customers', initialCustomers));
-  const [tickets, setTickets] = useState(() => sanitizeTickets(loadData('tickets', initialTickets)));
-  const [inventory, setInventory] = useState(() => loadData('inventory', initialInventory));
+  const [customers, setCustomers] = useState(() => sanitizeCustomers(loadData('customers', initialCustomers), initialCustomers));
+  const [tickets, setTickets] = useState(() => sanitizeTickets(loadData('tickets', initialTickets), initialTickets));
+  const [inventory, setInventory] = useState(() => sanitizeInventoryList(loadData('inventory', initialInventory), initialInventory));
 
   const [storageWarning, setStorageWarning] = useState(null);
 
@@ -381,10 +424,9 @@ export default function App() {
   };
 
   const getDeepSeekAnalysis = async (ticketDescription, ticketSubject) => {
-    if (!apiKeyToUse) {
-      setAiError("Configura la chiave API di DeepSeek (VITE_DEEPSEEK_API_KEY) o inserisci una chiave locale nel browser.");
-      return;
-    }
+    const hasKey = Boolean(apiKeyToUse);
+    const safeSubject = (ticketSubject || '').trim() || 'Intervento senza oggetto';
+    const safeDescription = (ticketDescription || '').trim() || 'Nessuna descrizione fornita.';
 
     if (!apiUrlToUse) {
       setAiError("Imposta un endpoint valido per DeepSeek (VITE_DEEPSEEK_API_URL).");
@@ -398,6 +440,7 @@ export default function App() {
     if (!hasKey) {
       const offline = buildOfflineSuggestion(ticketSubject, ticketDescription);
       setAiSuggestion({ text: offline, confidence: "Offline" });
+      setAiError("Configura la chiave API di DeepSeek (VITE_DEEPSEEK_API_KEY) o inserisci una chiave locale nel browser.");
       setLoadingAi(false);
       return;
     }
@@ -633,6 +676,11 @@ export default function App() {
         </header>
         <main className="flex-1 overflow-y-auto p-4 md:p-8">
           <div className="max-w-6xl mx-auto pb-20">
+            {storageWarning && (
+              <div className="bg-amber-50 border border-amber-200 text-amber-800 text-sm p-3 rounded mb-4">
+                {storageWarning}
+              </div>
+            )}
             <div className="bg-white rounded shadow p-4 mb-6 border border-slate-200">
               <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <div>
