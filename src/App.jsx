@@ -154,7 +154,7 @@ const initialInventory = [
 ];
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState('inventory'); 
+  const [activeTab, setActiveTab] = useState('calendar'); 
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
 
   // --- STATO CALENDARIO ---
@@ -168,9 +168,23 @@ export default function App() {
   const [storageWarning, setStorageWarning] = useState(null);
 
   // --- EFFETTO SALVATAGGIO ---
-  useEffect(() => { localStorage.setItem('customers', JSON.stringify(customers)); }, [customers]);
-  useEffect(() => { localStorage.setItem('tickets', JSON.stringify(sanitizeTickets(tickets))); }, [tickets]);
-  useEffect(() => { localStorage.setItem('inventory', JSON.stringify(inventory)); }, [inventory]);
+  useEffect(() => {
+    if (!safeSetItem('customers', JSON.stringify(customers))) {
+      setStorageWarning('Impossibile salvare i clienti nel browser: storage disabilitato.');
+    }
+  }, [customers]);
+
+  useEffect(() => {
+    if (!safeSetItem('tickets', JSON.stringify(sanitizeTickets(tickets)))) {
+      setStorageWarning('Impossibile salvare i ticket nel browser: storage disabilitato.');
+    }
+  }, [tickets]);
+
+  useEffect(() => {
+    if (!safeSetItem('inventory', JSON.stringify(inventory))) {
+      setStorageWarning('Impossibile salvare il magazzino nel browser: storage disabilitato.');
+    }
+  }, [inventory]);
 
   // Modal & AI State
   const [showNewTicket, setShowNewTicket] = useState(false);
@@ -192,6 +206,13 @@ export default function App() {
 
   const apiKeyToUse = (runtimeApiKey || DEEPSEEK_API_KEY).trim();
   const apiUrlToUse = (runtimeApiUrl || DEEPSEEK_API_URL).trim();
+  const hasClientKey = Boolean(apiKeyToUse);
+  const shouldUseProxy = apiUrlToUse.startsWith('/');
+  const endpoint = shouldUseProxy ? '/api/deepseek' : `${apiUrlToUse}/chat/completions`;
+  const requestHeaders = {
+    'Content-Type': 'application/json',
+    ...(!shouldUseProxy && hasClientKey ? { Authorization: `Bearer ${apiKeyToUse}` } : {})
+  };
 
   useEffect(() => {
     if (!safeSetItem('deepseekApiKey', runtimeApiKey)) {
@@ -326,9 +347,9 @@ export default function App() {
       try {
         const parsed = JSON.parse(e.target.result);
         if (parsed.customers && parsed.tickets && parsed.inventory) {
-          setCustomers(parsed.customers);
-          setTickets(parsed.tickets);
-          setInventory(parsed.inventory);
+          setCustomers(sanitizeCustomers(parsed.customers, initialCustomers));
+          setTickets(sanitizeTickets(parsed.tickets, initialTickets));
+          setInventory(sanitizeInventoryList(parsed.inventory, initialInventory));
           setImportError('');
         } else {
           throw new Error('Formato non valido');
@@ -371,24 +392,24 @@ export default function App() {
       return /^\d{2}:\d{2}$/.test(trimmed) ? trimmed : null;
     };
 
-    const fallbackDate = new Date().toISOString().split('T')[0];
-    const dateString = ensureDate(safeTicket.date) || fallbackDate;
-    const timeString = ensureTime(safeTicket.time) || '09:00';
+    const fallbackDateStr = new Date().toISOString().split('T')[0];
+    const eventDate = ensureDate(safeTicket.date) || fallbackDateStr;
+    const eventTime = ensureTime(safeTicket.time) || '09:00';
 
-    const startDate = new Date(`${dateString}T${timeString}`);
-    if (!isValidDate(startDate)) {
-      console.error('Calendario: data/ora non valida', { dateString, timeString, ticket: safeTicket });
+    const eventStartDate = new Date(`${eventDate}T${eventTime}`);
+    if (!isValidDate(eventStartDate)) {
+      console.error('Calendario: data/ora non valida', { eventDate, eventTime, ticket: safeTicket });
       alert('Impossibile creare il link del calendario: data o ora non valide.');
       return;
     }
 
-    const endDate = new Date(startDate.getTime() + 60 * 60 * 1000);
+    const eventEndDate = new Date(eventStartDate.getTime() + 60 * 60 * 1000);
     const formatGCalDate = (value) => value.toISOString().replace(/-|:|\.\d\d\d/g, "");
 
     const title = encodeURIComponent(`Intervento FIXLAB: ${safeTicket.subject}`);
     const details = encodeURIComponent(`Problema: ${safeTicket.description}\nCliente: ${customer?.name}\nTel: ${customer?.phone}`);
     const location = encodeURIComponent(customer?.address || "");
-    const url = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&details=${details}&location=${location}&dates=${formatGCalDate(startDate)}/${formatGCalDate(endDate)}`;
+    const url = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&details=${details}&location=${location}&dates=${formatGCalDate(eventStartDate)}/${formatGCalDate(eventEndDate)}`;
 
     if (!url) {
       console.error('Calendario: URL non valida generata', { url, ticket: safeTicket });
