@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { 
+import {
   LayoutDashboard,
   Users,
   Ticket,
@@ -22,6 +22,11 @@ import {
   Upload,
   FileSpreadsheet
 } from 'lucide-react';
+
+const isBrowser = typeof window !== 'undefined';
+const isLocalhost = isBrowser && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+const allowLocalOverrides = isLocalhost;
+const forcedProxyEndpoint = '/api/deepseek';
 
 const DEEPSEEK_API_URL = (import.meta.env.VITE_DEEPSEEK_API_URL || 'https://api.deepseek.com').replace(/\/$/, '');
 const DEEPSEEK_API_KEY = (import.meta.env.VITE_DEEPSEEK_API_KEY || '').trim();
@@ -196,31 +201,42 @@ export default function App() {
   const [currentTicketForAi, setCurrentTicketForAi] = useState(null);
   const [aiError, setAiError] = useState(null);
   const [runtimeApiKey, setRuntimeApiKey] = useState(() => {
+    if (!allowLocalOverrides) return '';
     const stored = safeGetItem('deepseekApiKey', '');
     return stored ? stored.trim() : '';
   });
   const [runtimeApiUrl, setRuntimeApiUrl] = useState(() => {
+    if (!allowLocalOverrides) return forcedProxyEndpoint;
     const stored = safeGetItem('deepseekApiUrl', '');
     return (stored || ENV_DEEPSEEK_API_URL || '').trim();
   });
 
-  const apiKeyToUse = (runtimeApiKey || DEEPSEEK_API_KEY).trim();
-  const apiUrlToUse = (runtimeApiUrl || DEEPSEEK_API_URL).trim();
+  const apiKeyToUse = allowLocalOverrides ? (runtimeApiKey || DEEPSEEK_API_KEY).trim() : '';
+  const apiUrlToUse = allowLocalOverrides ? (runtimeApiUrl || DEEPSEEK_API_URL).trim() : forcedProxyEndpoint;
   const hasClientKey = Boolean(apiKeyToUse);
-  const shouldUseProxy = apiUrlToUse.startsWith('/');
-  const endpoint = shouldUseProxy ? '/api/deepseek' : `${apiUrlToUse}/chat/completions`;
+  const shouldUseProxy = !allowLocalOverrides || apiUrlToUse.startsWith('/');
+  const endpoint = shouldUseProxy ? forcedProxyEndpoint : `${apiUrlToUse}/chat/completions`;
   const requestHeaders = {
     'Content-Type': 'application/json',
     ...(!shouldUseProxy && hasClientKey ? { Authorization: `Bearer ${apiKeyToUse}` } : {})
   };
+  const keyModeLabel = !allowLocalOverrides
+    ? 'Proxy backend (chiavi gestite lato server)'
+    : runtimeApiKey
+      ? 'Usando chiave locale'
+      : HAS_ENV_DEEPSEEK_KEY
+        ? 'Usando chiave da build'
+        : 'Nessuna chiave';
 
   useEffect(() => {
+    if (!allowLocalOverrides) return;
     if (!safeSetItem('deepseekApiKey', runtimeApiKey)) {
       setStorageWarning('Impossibile salvare la chiave DeepSeek nel browser: storage disabilitato.');
     }
   }, [runtimeApiKey]);
 
   useEffect(() => {
+    if (!allowLocalOverrides) return;
     if (runtimeApiUrl && !safeSetItem('deepseekApiUrl', runtimeApiUrl)) {
       setStorageWarning('Impossibile salvare l\'endpoint DeepSeek nel browser: storage disabilitato.');
     }
@@ -445,11 +461,11 @@ export default function App() {
   };
 
   const getDeepSeekAnalysis = async (ticketDescription, ticketSubject) => {
-    const hasKey = Boolean(apiKeyToUse);
+    const hasKey = shouldUseProxy ? true : Boolean(apiKeyToUse);
     const safeSubject = (ticketSubject || '').trim() || 'Intervento senza oggetto';
     const safeDescription = (ticketDescription || '').trim() || 'Nessuna descrizione fornita.';
 
-    if (!apiUrlToUse) {
+    if (!apiUrlToUse && !shouldUseProxy) {
       setAiError("Imposta un endpoint valido per DeepSeek (VITE_DEEPSEEK_API_URL).");
       return;
     }
@@ -772,7 +788,7 @@ export default function App() {
                                       <p className="font-semibold text-slate-800 flex items-center justify-between">
                                         <span>Chiave DeepSeek (salvata nel browser)</span>
                                         <span className="text-[11px] px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 font-semibold">
-                                          {runtimeApiKey ? 'Usando chiave locale' : HAS_ENV_DEEPSEEK_KEY ? 'Usando chiave da build' : 'Nessuna chiave'}
+                                          {keyModeLabel}
                                         </span>
                                       </p>
                                       <input
@@ -781,6 +797,7 @@ export default function App() {
                                         placeholder="Incolla la chiave dal tuo account DeepSeek (VITE_DEEPSEEK_API_KEY/DEEPSEEK_API_KEY)"
                                         value={runtimeApiKey}
                                         onChange={(e) => setRuntimeApiKey(e.target.value)}
+                                        disabled={!allowLocalOverrides}
                                       />
                                       <div className="flex flex-col gap-2">
                                         <label className="text-xs font-semibold text-slate-700">Endpoint DeepSeek</label>
@@ -789,9 +806,18 @@ export default function App() {
                                           placeholder="https://api.deepseek.com"
                                           value={runtimeApiUrl}
                                           onChange={(e) => setRuntimeApiUrl(e.target.value)}
+                                          disabled={!allowLocalOverrides}
                                         />
                                       </div>
-                                      <p className="text-[11px] leading-snug text-slate-500">Se hai già impostato le variabili su Railway assicurati che il deploy venga ricostruito. Sono accettati sia <code className="font-mono">VITE_DEEPSEEK_API_KEY</code> sia <code className="font-mono">DEEPSEEK_API_KEY</code>. Questo campo permette un override locale per test immediati.</p>
+                                      {allowLocalOverrides ? (
+                                        <p className="text-[11px] leading-snug text-slate-500">
+                                          Se hai già impostato le variabili su Railway assicurati che il deploy venga ricostruito. Sono accettati sia <code className="font-mono">VITE_DEEPSEEK_API_KEY</code> sia <code className="font-mono">DEEPSEEK_API_KEY</code>. Questo campo permette un override locale per test immediati.
+                                        </p>
+                                      ) : (
+                                        <p className="text-[11px] leading-snug text-slate-500">
+                                          In produzione il browser usa sempre il proxy <code className="font-mono">/api/deepseek</code>; le chiavi locali e <code className="font-mono">VITE_DEEPSEEK_*</code> lato client sono ignorate. Configura <code className="font-mono">DEEPSEEK_API_KEY</code> sul server Railway.
+                                        </p>
+                                      )}
                                     </div>
                                     {aiSuggestion ? (
                                       <div className="text-sm whitespace-pre-line text-slate-700">{aiSuggestion.text}</div>
