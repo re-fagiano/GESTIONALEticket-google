@@ -27,7 +27,6 @@ const DEEPSEEK_API_URL = (import.meta.env.VITE_DEEPSEEK_API_URL || 'https://api.
 const DEEPSEEK_API_KEY = (import.meta.env.VITE_DEEPSEEK_API_KEY || '').trim();
 const HAS_ENV_DEEPSEEK_KEY = Boolean(DEEPSEEK_API_KEY && DEEPSEEK_API_KEY.trim());
 const ENV_DEEPSEEK_API_URL = DEEPSEEK_API_URL;
-const DEEPSEEK_PROXY_PATH = (import.meta.env.VITE_DEEPSEEK_PROXY || '/api/deepseek').trim();
 
 const storageAvailable = typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
 
@@ -425,14 +424,12 @@ export default function App() {
   };
 
   const getDeepSeekAnalysis = async (ticketDescription, ticketSubject) => {
-    const hasClientKey = Boolean(apiKeyToUse);
-    const proxyBase = DEEPSEEK_PROXY_PATH.replace(/\/$/, '');
-    const shouldUseProxy = Boolean(proxyBase && proxyBase.startsWith('/'));
+    const hasKey = Boolean(apiKeyToUse);
     const safeSubject = (ticketSubject || '').trim() || 'Intervento senza oggetto';
     const safeDescription = (ticketDescription || '').trim() || 'Nessuna descrizione fornita.';
 
-    if (!apiUrlToUse && !shouldUseProxy) {
-      setAiError("Imposta un endpoint valido per DeepSeek (VITE_DEEPSEEK_API_URL) oppure usa il proxy /api/deepseek.");
+    if (!apiUrlToUse) {
+      setAiError("Imposta un endpoint valido per DeepSeek (VITE_DEEPSEEK_API_URL).");
       return;
     }
 
@@ -440,20 +437,12 @@ export default function App() {
     setAiSuggestion(null);
     setAiError(null);
 
-    const endpoint = shouldUseProxy
-      ? `${proxyBase}`
-      : `${(apiUrlToUse || 'https://api.deepseek.com').replace(/\/$/, '')}/chat/completions`;
-    const requestHeaders = { "Content-Type": "application/json" };
-
-    if (!shouldUseProxy) {
-      if (!hasClientKey) {
-        const offline = buildOfflineSuggestion(ticketSubject, ticketDescription);
-        setAiSuggestion({ text: offline, confidence: "Offline" });
-        setAiError("Configura la chiave API di DeepSeek (VITE_DEEPSEEK_API_KEY) o inserisci una chiave locale nel browser.");
-        setLoadingAi(false);
-        return;
-      }
-      requestHeaders.Authorization = `Bearer ${apiKeyToUse}`;
+    if (!hasKey) {
+      const offline = buildOfflineSuggestion(ticketSubject, ticketDescription);
+      setAiSuggestion({ text: offline, confidence: "Offline" });
+      setAiError("Configura la chiave API di DeepSeek (VITE_DEEPSEEK_API_KEY) o inserisci una chiave locale nel browser.");
+      setLoadingAi(false);
+      return;
     }
 
     const systemPrompt = "Sei un tecnico esperto di elettrodomestici. Analizza il problema e fornisci: 1) Possibile Causa 2) Diagnosi 3) Ricambi.";
