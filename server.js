@@ -8,19 +8,6 @@ const PORT = process.env.PORT || 4173
 const DEEPSEEK_API_URL = (process.env.DEEPSEEK_API_URL || 'https://api.deepseek.com').replace(/\/$/, '')
 const DEEPSEEK_API_KEY = (process.env.DEEPSEEK_API_KEY || '').trim()
 const DIST_DIR = path.join(process.cwd(), 'dist')
-const MIME_MAP = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
-  '.svg': 'image/svg+xml',
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.gif': 'image/gif',
-  '.ico': 'image/x-icon',
-  '.map': 'application/json; charset=utf-8'
-}
 
 const sendJson = (res, status, payload) => {
   res.statusCode = status
@@ -59,29 +46,22 @@ const handleProxy = async (req, res, body) => {
   }
 }
 
-const serveStatic = (req, res, isHead = false) => {
-  const cleanPath = req.url.split('?')[0]
-  const filePath = path.join(DIST_DIR, cleanPath)
-  const fileExists = fs.existsSync(filePath) && fs.statSync(filePath).isFile()
-  const target = fileExists ? filePath : path.join(DIST_DIR, 'index.html')
-
-  if (!fs.existsSync(target)) {
-    res.statusCode = 404
-    res.end('Not Found')
+const serveStatic = (req, res) => {
+  const filePath = path.join(DIST_DIR, req.url.split('?')[0])
+  if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+    const stream = fs.createReadStream(filePath)
+    stream.pipe(res)
     return
   }
 
-  const ext = path.extname(target).toLowerCase()
-  const contentType = MIME_MAP[ext] || 'application/octet-stream'
-  res.setHeader('Content-Type', contentType)
-
-  if (isHead) {
-    res.statusCode = 200
-    res.end()
+  const indexPath = path.join(DIST_DIR, 'index.html')
+  if (fs.existsSync(indexPath)) {
+    fs.createReadStream(indexPath).pipe(res)
     return
   }
 
-  fs.createReadStream(target).pipe(res)
+  res.statusCode = 404
+  res.end('Not Found')
 }
 
 const server = http.createServer((req, res) => {
@@ -103,8 +83,8 @@ const server = http.createServer((req, res) => {
     return
   }
 
-  if (req.method === 'GET' || req.method === 'HEAD') {
-    serveStatic(req, res, req.method === 'HEAD')
+  if (req.method === 'GET') {
+    serveStatic(req, res)
     return
   }
 
