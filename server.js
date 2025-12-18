@@ -5,16 +5,35 @@ import path from 'node:path'
 import fs from 'node:fs'
 
 const PORT = process.env.PORT || 4173
-const DEEPSEEK_API_URL = (process.env.DEEPSEEK_API_URL || 'https://api.deepseek.com').replace(/\/$/, '')
+const rawDeepSeekUrl = process.env.DEEPSEEK_API_URL || process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com'
+const DEEPSEEK_API_URL = rawDeepSeekUrl.replace(/\/$/, '')
 const DEEPSEEK_API_KEY = (process.env.DEEPSEEK_API_KEY || '').trim()
+
 const DIST_DIR = path.join(process.cwd(), 'dist')
 const DIST_INDEX = path.join(DIST_DIR, 'index.html')
-const hasBuiltAssets = () => fs.existsSync(DIST_DIR) && fs.existsSync(DIST_INDEX)
+
+const MIME_MAP = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'application/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.ico': 'image/x-icon',
+}
 
 const sendJson = (res, status, payload) => {
   res.statusCode = status
   res.setHeader('Content-Type', 'application/json')
   res.end(JSON.stringify(payload))
+}
+
+const serveFile = (res, filePath) => {
+  const ext = path.extname(filePath).toLowerCase()
+  const contentType = MIME_MAP[ext] || 'application/octet-stream'
+  res.statusCode = 200
+  res.setHeader('Content-Type', contentType)
+  fs.createReadStream(filePath).pipe(res)
 }
 
 const handleProxy = async (req, res, body) => {
@@ -48,28 +67,6 @@ const handleProxy = async (req, res, body) => {
   }
 }
 
-const serveStatic = (req, res) => {
-  if (!hasBuiltAssets()) {
-    sendJson(res, 503, { error: 'L’app non è stata ancora costruita. Esegui `npm run build` o usa `npm start` che effettua la build automaticamente.' })
-    return
-  }
-
-  const filePath = path.join(DIST_DIR, req.url.split('?')[0])
-  if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
-    const stream = fs.createReadStream(filePath)
-    stream.pipe(res)
-    return
-  }
-
-  if (fs.existsSync(DIST_INDEX)) {
-    fs.createReadStream(DIST_INDEX).pipe(res)
-    return
-  }
-
-  res.statusCode = 404
-  res.end('Not Found')
-}
-
 const server = http.createServer((req, res) => {
   if (req.method === 'POST' && req.url.startsWith('/api/deepseek')) {
     let body = ''
@@ -89,8 +86,36 @@ const server = http.createServer((req, res) => {
     return
   }
 
-  if (req.method === 'GET') {
-    serveStatic(req, res)
+  if (req.method === 'GET' || req.method === 'HEAD') {
+    const cleanPath = req.url.split('?')[0] || '/'
+    const requested = path.join(DIST_DIR, cleanPath)
+
+    const exists = fs.existsSync(requested) && fs.statSync(requested).isFile()
+    if (exists) {
+      if (req.method === 'HEAD') {
+        const ext = path.extname(requested).toLowerCase()
+        res.statusCode = 200
+        res.setHeader('Content-Type', MIME_MAP[ext] || 'application/octet-stream')
+        res.end()
+        return
+      }
+      serveFile(res, requested)
+      return
+    }
+
+    if (fs.existsSync(DIST_INDEX)) {
+      if (req.method === 'HEAD') {
+        res.statusCode = 200
+        res.setHeader('Content-Type', MIME_MAP['.html'])
+        res.end()
+        return
+      }
+      serveFile(res, DIST_INDEX)
+      return
+    }
+
+    res.statusCode = 404
+    res.end('Not Found')
     return
   }
 
@@ -100,7 +125,13 @@ const server = http.createServer((req, res) => {
 
 server.listen(PORT, () => {
   console.log(`Server avviato su http://localhost:${PORT}`)
-  if (!hasBuiltAssets()) {
-    console.warn('Attenzione: cartella dist mancante. Esegui `npm start` o `npm run build` prima di provare a visitare l’app.')
+  if (!fs.existsSync(DIST_DIR) || !fs.existsSync(DIST_INDEX)) {
+    console.warn('Attenzione: cartella dist mancante. Esegui `npm start` o `npm run build` prima di visitare l’app.')
   }
+  const envInfo = {
+    PORT,
+    DEEPSEEK_API_URL,
+    hasDeepseekKey: Boolean(DEEPSEEK_API_KEY),
+  }
+  console.log('Configurazione server:', JSON.stringify(envInfo))
 })
