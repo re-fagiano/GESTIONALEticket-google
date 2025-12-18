@@ -1,44 +1,28 @@
 /* eslint-env node */
-import http from 'node:http'
-import process from 'node:process'
+import express from 'express'
 import path from 'node:path'
-import fs from 'node:fs'
+import { fileURLToPath } from 'node:url'
 
 const PORT = process.env.PORT || 4173
 const DEEPSEEK_API_URL = (process.env.DEEPSEEK_API_URL || 'https://api.deepseek.com').replace(/\/$/, '')
 const DEEPSEEK_API_KEY = (process.env.DEEPSEEK_API_KEY || '').trim()
 
-const DIST_DIR = path.join(process.cwd(), 'dist')
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+const DIST_DIR = path.join(__dirname, 'dist')
 const DIST_INDEX = path.join(DIST_DIR, 'index.html')
 
-const MIME_MAP = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'application/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
-  '.svg': 'image/svg+xml',
-  '.png': 'image/png',
-  '.ico': 'image/x-icon',
-}
+const app = express()
 
-const sendJson = (res, status, payload) => {
-  res.statusCode = status
-  res.setHeader('Content-Type', 'application/json')
-  res.end(JSON.stringify(payload))
-}
+app.use(express.json())
 
-const serveFile = (res, filePath) => {
-  const ext = path.extname(filePath).toLowerCase()
-  const contentType = MIME_MAP[ext] || 'application/octet-stream'
-  res.statusCode = 200
-  res.setHeader('Content-Type', contentType)
-  fs.createReadStream(filePath).pipe(res)
-}
+// Serve assets from Vite build
+app.use(express.static(DIST_DIR))
 
-const handleProxy = async (req, res, body) => {
+// Proxy DeepSeek API calls
+app.post('/api/deepseek', async (req, res) => {
   if (!DEEPSEEK_API_KEY) {
-    sendJson(res, 500, { error: 'DEEPSEEK_API_KEY non configurata lato server.' })
-    return
+    return res.status(500).json({ error: 'DEEPSEEK_API_KEY non configurata lato server.' })
   }
 
   try {
@@ -49,7 +33,7 @@ const handleProxy = async (req, res, body) => {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${DEEPSEEK_API_KEY}`,
       },
-      body: JSON.stringify(body || {}),
+      body: JSON.stringify(req.body || {}),
     })
 
     const text = await response.text()
@@ -60,71 +44,17 @@ const handleProxy = async (req, res, body) => {
       payload = text
     }
 
-    sendJson(res, response.status, payload)
+    res.status(response.status).json(payload)
   } catch (error) {
-    sendJson(res, 502, { error: error?.message || 'Errore durante la chiamata a DeepSeek.' })
+    res.status(502).json({ error: error?.message || 'Errore durante la chiamata a DeepSeek.' })
   }
-}
-
-const server = http.createServer((req, res) => {
-  if (req.method === 'POST' && req.url.startsWith('/api/deepseek')) {
-    let body = ''
-    req.on('data', (chunk) => { body += chunk })
-    req.on('end', () => {
-      let parsed = {}
-      if (body) {
-        try {
-          parsed = JSON.parse(body)
-        } catch {
-          sendJson(res, 400, { error: 'Corpo JSON non valido.' })
-          return
-        }
-      }
-      handleProxy(req, res, parsed)
-    })
-    return
-  }
-
-  if (req.method === 'GET' || req.method === 'HEAD') {
-    const cleanPath = req.url.split('?')[0] || '/'
-    const requested = path.join(DIST_DIR, cleanPath)
-
-    const exists = fs.existsSync(requested) && fs.statSync(requested).isFile()
-    if (exists) {
-      if (req.method === 'HEAD') {
-        const ext = path.extname(requested).toLowerCase()
-        res.statusCode = 200
-        res.setHeader('Content-Type', MIME_MAP[ext] || 'application/octet-stream')
-        res.end()
-        return
-      }
-      serveFile(res, requested)
-      return
-    }
-
-    if (fs.existsSync(DIST_INDEX)) {
-      if (req.method === 'HEAD') {
-        res.statusCode = 200
-        res.setHeader('Content-Type', MIME_MAP['.html'])
-        res.end()
-        return
-      }
-      serveFile(res, DIST_INDEX)
-      return
-    }
-
-    res.statusCode = 404
-    res.end('Not Found')
-    return
-  }
-
-  res.statusCode = 405
-  res.end('Method Not Allowed')
 })
 
-server.listen(PORT, () => {
+// React routing fallback
+app.get('*', (req, res) => {
+  res.sendFile(DIST_INDEX)
+})
+
+app.listen(PORT, () => {
   console.log(`Server avviato su http://localhost:${PORT}`)
-  if (!fs.existsSync(DIST_DIR) || !fs.existsSync(DIST_INDEX)) {
-    console.warn('Attenzione: cartella dist mancante. Esegui `npm start` o `npm run build` prima di visitare l’app.')
-  }
 })
