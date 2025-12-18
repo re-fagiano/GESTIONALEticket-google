@@ -154,7 +154,7 @@ const initialInventory = [
 ];
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState('inventory'); 
+  const [activeTab, setActiveTab] = useState('calendar'); 
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
 
   // --- STATO CALENDARIO ---
@@ -168,9 +168,23 @@ export default function App() {
   const [storageWarning, setStorageWarning] = useState(null);
 
   // --- EFFETTO SALVATAGGIO ---
-  useEffect(() => { localStorage.setItem('customers', JSON.stringify(customers)); }, [customers]);
-  useEffect(() => { localStorage.setItem('tickets', JSON.stringify(sanitizeTickets(tickets))); }, [tickets]);
-  useEffect(() => { localStorage.setItem('inventory', JSON.stringify(inventory)); }, [inventory]);
+  useEffect(() => {
+    if (!safeSetItem('customers', JSON.stringify(customers))) {
+      setStorageWarning('Impossibile salvare i clienti nel browser: storage disabilitato.');
+    }
+  }, [customers]);
+
+  useEffect(() => {
+    if (!safeSetItem('tickets', JSON.stringify(sanitizeTickets(tickets)))) {
+      setStorageWarning('Impossibile salvare i ticket nel browser: storage disabilitato.');
+    }
+  }, [tickets]);
+
+  useEffect(() => {
+    if (!safeSetItem('inventory', JSON.stringify(inventory))) {
+      setStorageWarning('Impossibile salvare il magazzino nel browser: storage disabilitato.');
+    }
+  }, [inventory]);
 
   // Modal & AI State
   const [showNewTicket, setShowNewTicket] = useState(false);
@@ -192,6 +206,13 @@ export default function App() {
 
   const apiKeyToUse = (runtimeApiKey || DEEPSEEK_API_KEY).trim();
   const apiUrlToUse = (runtimeApiUrl || DEEPSEEK_API_URL).trim();
+  const hasClientKey = Boolean(apiKeyToUse);
+  const shouldUseProxy = apiUrlToUse.startsWith('/');
+  const endpoint = shouldUseProxy ? '/api/deepseek' : `${apiUrlToUse}/chat/completions`;
+  const requestHeaders = {
+    'Content-Type': 'application/json',
+    ...(!shouldUseProxy && hasClientKey ? { Authorization: `Bearer ${apiKeyToUse}` } : {})
+  };
 
   useEffect(() => {
     if (!safeSetItem('deepseekApiKey', runtimeApiKey)) {
@@ -326,9 +347,9 @@ export default function App() {
       try {
         const parsed = JSON.parse(e.target.result);
         if (parsed.customers && parsed.tickets && parsed.inventory) {
-          setCustomers(parsed.customers);
-          setTickets(parsed.tickets);
-          setInventory(parsed.inventory);
+          setCustomers(sanitizeCustomers(parsed.customers, initialCustomers));
+          setTickets(sanitizeTickets(parsed.tickets, initialTickets));
+          setInventory(sanitizeInventoryList(parsed.inventory, initialInventory));
           setImportError('');
         } else {
           throw new Error('Formato non valido');
