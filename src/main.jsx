@@ -45,35 +45,10 @@ window.addEventListener('unhandledrejection', (event) => {
   console.error('Promise non gestita:', event.reason)
 })
 
-const rootElement = document.getElementById('root')
-
-const renderApp = async () => {
-  try {
-    const { default: App } = await import('./App.jsx')
-    createRoot(rootElement).render(
-      <StrictMode>
-        <RootErrorBoundary>
-          <App />
-        </RootErrorBoundary>
-      </StrictMode>,
-    )
-  } catch (error) {
-    console.error('Errore critico durante il bootstrap:', error)
-    rootElement.innerHTML = `
-      <div style="font-family: Arial, sans-serif; padding: 16px;">
-        <h1>Impossibile avviare l'app</h1>
-        <p style="color:#991b1b;">${error?.message || 'Errore sconosciuto'}</p>
-        <button id="reload-btn" style="background:#991b1b;color:#fff;padding:8px 12px;border:none;border-radius:6px;cursor:pointer;">Svuota dati locali e ricarica</button>
-      </div>
-    `
-    const reloadBtn = document.getElementById('reload-btn')
-    if (reloadBtn) {
-      reloadBtn.addEventListener('click', () => {
-        try { localStorage.clear() } catch (e) { console.warn('Impossibile svuotare lo storage', e) }
-        window.location.reload()
-      })
-    }
-  }
-}
-
-renderApp()
+createRoot(document.getElementById('root')).render(
+  <StrictMode>
+    <RootErrorBoundary>
+      <App />
+    </RootErrorBoundary>
+  </StrictMode>,
+)
