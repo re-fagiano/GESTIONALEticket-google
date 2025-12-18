@@ -392,24 +392,24 @@ export default function App() {
       return /^\d{2}:\d{2}$/.test(trimmed) ? trimmed : null;
     };
 
-    const fallbackDate = new Date().toISOString().split('T')[0];
-    const dateString = ensureDate(safeTicket.date) || fallbackDate;
-    const timeString = ensureTime(safeTicket.time) || '09:00';
+    const fallbackDateStr = new Date().toISOString().split('T')[0];
+    const eventDate = ensureDate(safeTicket.date) || fallbackDateStr;
+    const eventTime = ensureTime(safeTicket.time) || '09:00';
 
-    const startDate = new Date(`${dateString}T${timeString}`);
-    if (!isValidDate(startDate)) {
-      console.error('Calendario: data/ora non valida', { dateString, timeString, ticket: safeTicket });
+    const eventStartDate = new Date(`${eventDate}T${eventTime}`);
+    if (!isValidDate(eventStartDate)) {
+      console.error('Calendario: data/ora non valida', { eventDate, eventTime, ticket: safeTicket });
       alert('Impossibile creare il link del calendario: data o ora non valide.');
       return;
     }
 
-    const endDate = new Date(startDate.getTime() + 60 * 60 * 1000);
+    const eventEndDate = new Date(eventStartDate.getTime() + 60 * 60 * 1000);
     const formatGCalDate = (value) => value.toISOString().replace(/-|:|\.\d\d\d/g, "");
 
     const title = encodeURIComponent(`Intervento FIXLAB: ${safeTicket.subject}`);
     const details = encodeURIComponent(`Problema: ${safeTicket.description}\nCliente: ${customer?.name}\nTel: ${customer?.phone}`);
     const location = encodeURIComponent(customer?.address || "");
-    const url = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&details=${details}&location=${location}&dates=${formatGCalDate(startDate)}/${formatGCalDate(endDate)}`;
+    const url = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&details=${details}&location=${location}&dates=${formatGCalDate(eventStartDate)}/${formatGCalDate(eventEndDate)}`;
 
     if (!url) {
       console.error('Calendario: URL non valida generata', { url, ticket: safeTicket });
