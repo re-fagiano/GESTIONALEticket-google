@@ -372,23 +372,23 @@ export default function App() {
     };
 
     const fallbackDate = new Date().toISOString().split('T')[0];
-    const dateStr = ensureDate(safeTicket.date) || fallbackDate;
-    const timeStr = ensureTime(safeTicket.time) || '09:00';
+    const dateString = ensureDate(safeTicket.date) || fallbackDate;
+    const timeString = ensureTime(safeTicket.time) || '09:00';
 
-    const startDate = new Date(`${dateStr}T${timeStr}`);
+    const startDate = new Date(`${dateString}T${timeString}`);
     if (!isValidDate(startDate)) {
-      console.error('Calendario: data/ora non valida', { dateStr, timeStr, ticket: safeTicket });
+      console.error('Calendario: data/ora non valida', { dateString, timeString, ticket: safeTicket });
       alert('Impossibile creare il link del calendario: data o ora non valide.');
       return;
     }
 
     const endDate = new Date(startDate.getTime() + 60 * 60 * 1000);
-    const formatGCalDate = (date) => date.toISOString().replace(/-|:|\.\d\d\d/g, "");
+    const formatGCalDate = (value) => value.toISOString().replace(/-|:|\.\d\d\d/g, "");
 
     const title = encodeURIComponent(`Intervento FIXLAB: ${safeTicket.subject}`);
-      const details = encodeURIComponent(`Problema: ${safeTicket.description}\nCliente: ${customer?.name}\nTel: ${customer?.phone}`);
-      const location = encodeURIComponent(customer?.address || "");
-      const url = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&details=${details}&location=${location}&dates=${formatGCalDate(startDate)}/${formatGCalDate(endDate)}`;
+    const details = encodeURIComponent(`Problema: ${safeTicket.description}\nCliente: ${customer?.name}\nTel: ${customer?.phone}`);
+    const location = encodeURIComponent(customer?.address || "");
+    const url = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&details=${details}&location=${location}&dates=${formatGCalDate(startDate)}/${formatGCalDate(endDate)}`;
 
     if (!url) {
       console.error('Calendario: URL non valida generata', { url, ticket: safeTicket });
