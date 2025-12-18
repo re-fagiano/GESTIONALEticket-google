@@ -446,24 +446,25 @@ export default function App() {
     }
 
     const systemPrompt = "Sei un tecnico esperto di elettrodomestici. Analizza il problema e fornisci: 1) Possibile Causa 2) Diagnosi 3) Ricambi.";
-    const endpoint = `${apiUrlToUse || 'https://api.deepseek.com'}/chat/completions`;
 
     try {
       const response = await fetch(endpoint, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKeyToUse}` },
+        headers: requestHeaders,
         body: JSON.stringify({ model: "deepseek-chat", messages: [{ role: "system", content: systemPrompt }, { role: "user", content: `Oggetto: ${safeSubject}. Descrizione: ${safeDescription}` }], stream: false })
       });
       if (!response.ok) throw new Error(`Errore API: ${response.status}`);
       const data = await response.json();
       const content = data?.choices?.[0]?.message?.content;
       if (!content) throw new Error("Risposta AI non valida.");
-      setAiSuggestion({ text: content, confidence: hasKey ? "DeepSeek AI" : "Offline" });
+      setAiSuggestion({ text: content, confidence: shouldUseProxy || hasClientKey ? "DeepSeek AI" : "Offline" });
     } catch (error) {
       const offline = buildOfflineSuggestion(ticketSubject, ticketDescription);
       let message = error?.message || "Errore connessione AI.";
       if (message.toLowerCase().includes("failed to fetch")) {
-        message = "Impossibile contattare DeepSeek. Conferma l'endpoint (VITE_DEEPSEEK_API_URL) HTTPS, abilita il dominio nel CORS dell'API e verifica che la chiave VITE_DEEPSEEK_API_KEY/DEEPSEEK_API_KEY sia presente (o incollata qui sotto).";
+        message = shouldUseProxy
+          ? "Impossibile contattare il proxy DeepSeek (/api/deepseek). Verifica che il server sia avviato e che la variabile DEEPSEEK_API_KEY sia impostata lato backend."
+          : "Impossibile contattare DeepSeek. Conferma l'endpoint (VITE_DEEPSEEK_API_URL) HTTPS e verifica che la chiave VITE_DEEPSEEK_API_KEY/DEEPSEEK_API_KEY sia presente (o incollata qui sotto).";
       }
       setAiSuggestion({ text: offline, confidence: "Offline" });
       setAiError(message);
