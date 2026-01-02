@@ -34,6 +34,7 @@ const HAS_ENV_DEEPSEEK_KEY = Boolean(DEEPSEEK_API_KEY && DEEPSEEK_API_KEY.trim()
 const ENV_DEEPSEEK_API_URL = DEEPSEEK_API_URL;
 
 const storageAvailable = typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
+const nowIso = () => new Date().toISOString();
 
 const safeGetItem = (key, fallback = null) => {
   if (!storageAvailable) return fallback;
@@ -68,6 +69,17 @@ const loadData = (key, defaultData) => {
   }
 };
 
+const cacheKeys = {
+  customers: 'cache_customers',
+  tickets: 'cache_tickets',
+  inventory: 'cache_inventory',
+  settings: 'cache_settings'
+};
+
+const loadCache = (key, fallback) => loadData(cacheKeys[key], fallback);
+
+const saveCache = (key, value) => safeSetItem(cacheKeys[key], JSON.stringify(value));
+
 const sanitizeTicket = (ticket, idx = 0) => {
   if (!ticket || typeof ticket !== 'object') return null;
 
@@ -89,7 +101,9 @@ const sanitizeTicket = (ticket, idx = 0) => {
     customerId: typeof ticket.customerId === 'string' ? ticket.customerId : '',
     status: ticket.status || 'aperto',
     date: safeDate,
-    time: safeTime
+    time: safeTime,
+    updatedAt: typeof ticket.updatedAt === 'string' ? ticket.updatedAt : nowIso(),
+    version: Number.isFinite(Number(ticket.version)) ? Number(ticket.version) : 1
   };
 };
 
@@ -111,7 +125,9 @@ const sanitizeCustomer = (customer, idx = 0) => {
     name: safeName,
     email: safeEmail,
     phone: safePhone,
-    address: safeAddress
+    address: safeAddress,
+    updatedAt: typeof customer.updatedAt === 'string' ? customer.updatedAt : nowIso(),
+    version: Number.isFinite(Number(customer.version)) ? Number(customer.version) : 1
   };
 };
 
@@ -133,7 +149,9 @@ const sanitizeInventoryItem = (item, idx = 0) => {
     location: typeof item.location === 'string' ? item.location.trim() : '',
     qty: parsedQty,
     price: parsedPrice,
-    minQty: parsedMinQty
+    minQty: parsedMinQty,
+    updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : nowIso(),
+    version: Number.isFinite(Number(item.version)) ? Number(item.version) : 1
   };
 };
 
@@ -166,30 +184,44 @@ export default function App() {
   const [currentDate, setCurrentDate] = useState(new Date());
 
   // --- STATO APP ---
-  const [customers, setCustomers] = useState(() => sanitizeCustomers(loadData('customers', initialCustomers), initialCustomers));
-  const [tickets, setTickets] = useState(() => sanitizeTickets(loadData('tickets', initialTickets), initialTickets));
-  const [inventory, setInventory] = useState(() => sanitizeInventoryList(loadData('inventory', initialInventory), initialInventory));
-
+  const [customers, setCustomers] = useState(() => sanitizeCustomers(loadCache('customers', initialCustomers), initialCustomers));
+  const [tickets, setTickets] = useState(() => sanitizeTickets(loadCache('tickets', initialTickets), initialTickets));
+  const [inventory, setInventory] = useState(() => sanitizeInventoryList(loadCache('inventory', initialInventory), initialInventory));
+  const [settings, setSettings] = useState(() => loadCache('settings', []));
   const [storageWarning, setStorageWarning] = useState(null);
+  const [apiToken, setApiToken] = useState(() => safeGetItem('apiToken', isLocalhost ? 'dev-token' : ''));
+  const [syncStatus, setSyncStatus] = useState(null);
 
-  // --- EFFETTO SALVATAGGIO ---
+  // --- CACHE LOCALE ---
   useEffect(() => {
-    if (!safeSetItem('customers', JSON.stringify(customers))) {
+    if (!saveCache('customers', customers)) {
       setStorageWarning('Impossibile salvare i clienti nel browser: storage disabilitato.');
     }
   }, [customers]);
 
   useEffect(() => {
-    if (!safeSetItem('tickets', JSON.stringify(sanitizeTickets(tickets)))) {
+    if (!saveCache('tickets', sanitizeTickets(tickets))) {
       setStorageWarning('Impossibile salvare i ticket nel browser: storage disabilitato.');
     }
   }, [tickets]);
 
   useEffect(() => {
-    if (!safeSetItem('inventory', JSON.stringify(inventory))) {
+    if (!saveCache('inventory', inventory)) {
       setStorageWarning('Impossibile salvare il magazzino nel browser: storage disabilitato.');
     }
   }, [inventory]);
+
+  useEffect(() => {
+    if (!saveCache('settings', settings)) {
+      setStorageWarning('Impossibile salvare le impostazioni nel browser: storage disabilitato.');
+    }
+  }, [settings]);
+
+  useEffect(() => {
+    if (!safeSetItem('apiToken', apiToken || '')) {
+      setStorageWarning('Impossibile salvare il token API nel browser: storage disabilitato.');
+    }
+  }, [apiToken]);
 
   // Modal & AI State
   const [showNewTicket, setShowNewTicket] = useState(false);
@@ -228,6 +260,50 @@ export default function App() {
         ? 'Usando chiave da build'
         : 'Nessuna chiave';
 
+  const apiFetch = async (path, options = {}) => {
+    const headers = {
+      'Content-Type': 'application/json',
+      ...(options.headers || {})
+    };
+    if (apiToken) {
+      headers.Authorization = `Bearer ${apiToken}`;
+    }
+    const response = await fetch(path, { ...options, headers });
+    const payload = response.status === 204 ? null : await response.json().catch(() => null);
+    if (!response.ok) {
+      const error = new Error(payload?.error || `Errore API: ${response.status}`);
+      error.status = response.status;
+      error.payload = payload;
+      throw error;
+    }
+    return payload;
+  };
+
+  const refreshFromBackend = async () => {
+    if (!apiToken && !isLocalhost) {
+      setStorageWarning('Configura un token API per sincronizzare i dati.');
+      return;
+    }
+    try {
+      setSyncStatus('Caricamento dati dal backend...');
+      const data = await apiFetch('/api/bootstrap');
+      setCustomers(sanitizeCustomers(data.customers, initialCustomers));
+      setTickets(sanitizeTickets(data.tickets, initialTickets));
+      setInventory(sanitizeInventoryList(data.inventory, initialInventory));
+      setSettings(Array.isArray(data.settings) ? data.settings : []);
+      setStorageWarning(null);
+      setSyncStatus('Dati sincronizzati con il backend.');
+    } catch (error) {
+      console.error('Errore sincronizzazione backend', error);
+      setStorageWarning(error.message || 'Impossibile contattare il backend.');
+      setSyncStatus('Backend non raggiungibile: uso cache locale.');
+    }
+  };
+
+  useEffect(() => {
+    refreshFromBackend();
+  }, [apiToken]);
+
   useEffect(() => {
     if (!allowLocalOverrides) return;
     if (!safeSetItem('deepseekApiKey', runtimeApiKey)) {
@@ -253,28 +329,63 @@ export default function App() {
   const fileInputRef = useRef(null);
 
   // --- AZIONI ---
-  const handleAddCustomer = () => {
+  const handleApiError = (error, fallback) => {
+    if (error?.status === 401) {
+      setStorageWarning('Token API mancante o non valido. Verifica le impostazioni.');
+      return;
+    }
+    setStorageWarning(error?.message || fallback);
+  };
+
+  const handleAddCustomer = async () => {
     if (!newCustomer.name) return;
-    const customer = sanitizeCustomer({ ...newCustomer, id: Date.now().toString() }, customers.length);
-    setCustomers(sanitizeCustomers([...customers, customer]));
-    setNewCustomer({ name: '', email: '', phone: '', address: '' });
-    setShowNewCustomer(false);
+    const customer = sanitizeCustomer({ ...newCustomer, id: crypto?.randomUUID?.() || Date.now().toString() }, customers.length);
+    try {
+      const created = await apiFetch('/api/customers', {
+        method: 'POST',
+        body: JSON.stringify(customer)
+      });
+      setCustomers((prev) => sanitizeCustomers([...prev, created], initialCustomers));
+      setNewCustomer({ name: '', email: '', phone: '', address: '' });
+      setShowNewCustomer(false);
+      setSyncStatus('Cliente salvato nel backend.');
+    } catch (error) {
+      handleApiError(error, 'Impossibile salvare il cliente.');
+    }
   };
 
-  const handleAddTicket = () => {
+  const handleAddTicket = async () => {
     if (!newTicket.subject || !newTicket.customerId) return;
-    const ticket = sanitizeTicket({ ...newTicket, id: Date.now().toString() }, tickets.length);
-    setTickets([...tickets, ticket]);
-    setNewTicket({ subject: '', description: '', customerId: '', status: 'aperto', date: new Date().toISOString().split('T')[0], time: '09:00' });
-    setShowNewTicket(false);
+    const ticket = sanitizeTicket({ ...newTicket, id: crypto?.randomUUID?.() || Date.now().toString() }, tickets.length);
+    try {
+      const created = await apiFetch('/api/tickets', {
+        method: 'POST',
+        body: JSON.stringify(ticket)
+      });
+      setTickets((prev) => sanitizeTickets([...prev, created], initialTickets));
+      setNewTicket({ subject: '', description: '', customerId: '', status: 'aperto', date: new Date().toISOString().split('T')[0], time: '09:00' });
+      setShowNewTicket(false);
+      setSyncStatus('Ticket salvato nel backend.');
+    } catch (error) {
+      handleApiError(error, 'Impossibile salvare il ticket.');
+    }
   };
 
-  const handleAddPart = () => {
+  const handleAddPart = async () => {
     if (!newPart.name) return;
-    const part = { ...newPart, id: Date.now().toString() };
-    setInventory([...inventory, part]);
-    setNewPart({ name: '', location: '', qty: 1, price: 0, minQty: 5 });
-    setShowNewPart(false);
+    const part = sanitizeInventoryItem({ ...newPart, id: crypto?.randomUUID?.() || Date.now().toString() }, inventory.length);
+    try {
+      const created = await apiFetch('/api/inventory', {
+        method: 'POST',
+        body: JSON.stringify(part)
+      });
+      setInventory((prev) => sanitizeInventoryList([...prev, created], initialInventory));
+      setNewPart({ name: '', location: '', qty: 1, price: 0, minQty: 5 });
+      setShowNewPart(false);
+      setSyncStatus('Ricambio salvato nel backend.');
+    } catch (error) {
+      handleApiError(error, 'Impossibile salvare il ricambio.');
+    }
   };
 
   const openTicketModal = (ticket) => {
@@ -290,24 +401,61 @@ export default function App() {
     setCurrentTicketForAi(safeTicket);
   };
 
-  const updateStock = (id, delta) => {
-    setInventory(inventory.map(item => 
-      item.id === id ? { ...item, qty: Math.max(0, parseInt(item.qty) + delta) } : item
-    ));
+  const updateStock = async (id, delta) => {
+    const item = inventory.find((entry) => entry.id === id);
+    if (!item) return;
+    const updatedItem = {
+      ...item,
+      qty: Math.max(0, parseInt(item.qty) + delta),
+      updatedAt: nowIso()
+    };
+    try {
+      const saved = await apiFetch(`/api/inventory/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(updatedItem)
+      });
+      setInventory((prev) => prev.map((entry) => (entry.id === id ? saved : entry)));
+      setSyncStatus('Magazzino aggiornato.');
+    } catch (error) {
+      if (error?.status === 409 && error?.payload?.current) {
+        setInventory((prev) => prev.map((entry) => (entry.id === id ? error.payload.current : entry)));
+        setStorageWarning('Conflitto magazzino: dati aggiornati con l\'ultima versione dal server.');
+      } else {
+        handleApiError(error, 'Impossibile aggiornare il magazzino.');
+      }
+    }
   };
 
-  const handleDelete = (type, id) => {
+  const handleDelete = async (type, id) => {
     if (!confirm("Sei sicuro?")) return;
-    if (type === 'customers') setCustomers(customers.filter(c => c.id !== id));
-    if (type === 'tickets') setTickets(tickets.filter(t => t.id !== id));
-    if (type === 'inventory') setInventory(inventory.filter(i => i.id !== id));
+    try {
+      await apiFetch(`/api/${type}/${id}`, { method: 'DELETE' });
+      if (type === 'customers') setCustomers(customers.filter(c => c.id !== id));
+      if (type === 'tickets') setTickets(tickets.filter(t => t.id !== id));
+      if (type === 'inventory') setInventory(inventory.filter(i => i.id !== id));
+      setSyncStatus('Elemento eliminato dal backend.');
+    } catch (error) {
+      handleApiError(error, 'Impossibile eliminare l\'elemento.');
+    }
   };
 
-  const handleResetData = () => {
+  const handleResetData = async () => {
     if(confirm("Reset completo dati?")) {
-      setCustomers(sanitizeCustomers(initialCustomers));
-      setTickets(sanitizeTickets(initialTickets));
-      setInventory(sanitizeInventoryList(initialInventory));
+      try {
+        await apiFetch('/api/import', {
+          method: 'POST',
+          body: JSON.stringify({
+            force: true,
+            customers: initialCustomers,
+            tickets: initialTickets,
+            inventory: initialInventory,
+            settings: []
+          })
+        });
+        await refreshFromBackend();
+      } catch (error) {
+        handleApiError(error, 'Impossibile ripristinare i dati iniziali.');
+      }
     }
   };
 
@@ -346,7 +494,8 @@ export default function App() {
       exportedAt: new Date().toISOString(),
       customers,
       tickets,
-      inventory
+      inventory,
+      settings
     };
     const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
     const link = document.createElement('a');
@@ -359,23 +508,52 @@ export default function App() {
     const file = event.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       try {
         const parsed = JSON.parse(e.target.result);
-        if (parsed.customers && parsed.tickets && parsed.inventory) {
-          setCustomers(sanitizeCustomers(parsed.customers, initialCustomers));
-          setTickets(sanitizeTickets(parsed.tickets, initialTickets));
-          setInventory(sanitizeInventoryList(parsed.inventory, initialInventory));
-          setImportError('');
-        } else {
+        if (!parsed.customers || !parsed.tickets || !parsed.inventory) {
           throw new Error('Formato non valido');
         }
+        await apiFetch('/api/import', {
+          method: 'POST',
+          body: JSON.stringify({
+            customers: parsed.customers,
+            tickets: parsed.tickets,
+            inventory: parsed.inventory,
+            settings: parsed.settings || []
+          })
+        });
+        await refreshFromBackend();
+        setImportError('');
       } catch (err) {
         console.error('Errore import backup', err);
-        setImportError('File di backup non valido. Assicurati di aver caricato un JSON generato dal Gestionale.');
+        if (err?.status) {
+          setImportError(err.message || 'Errore durante l\'import nel backend.');
+        } else {
+          setImportError('File di backup non valido. Assicurati di aver caricato un JSON generato dal Gestionale.');
+        }
       }
     };
     reader.readAsText(file);
+  };
+
+  const handleImportLocalData = async () => {
+    try {
+      await apiFetch('/api/import', {
+        method: 'POST',
+        body: JSON.stringify({
+          customers,
+          tickets,
+          inventory,
+          settings
+        })
+      });
+      await refreshFromBackend();
+      setImportError('');
+      setSyncStatus('Dati locali importati nel backend.');
+    } catch (error) {
+      handleApiError(error, 'Impossibile importare i dati locali.');
+    }
   };
 
   const handleSelectBackupFile = () => {
@@ -719,6 +897,33 @@ export default function App() {
                 {storageWarning}
               </div>
             )}
+            <div className="bg-white rounded shadow p-4 mb-6 border border-slate-200">
+              <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                <div className="space-y-1">
+                  <p className="text-sm font-semibold text-slate-700 flex items-center gap-2"><Zap size={16}/> Backend &amp; sincronizzazione</p>
+                  <p className="text-xs text-slate-500">Imposta il token per accedere alle API e aggiorna il database con i dati locali quando necessario.</p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button onClick={refreshFromBackend} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded hover:bg-slate-200 border"><RefreshCw size={16}/> Aggiorna da backend</button>
+                  <button onClick={handleImportLocalData} className="flex items-center gap-2 px-3 py-2 text-sm bg-emerald-50 text-emerald-700 rounded hover:bg-emerald-100 border border-emerald-200"><Upload size={16}/> Importa dati locali</button>
+                </div>
+              </div>
+              <div className="mt-4 grid gap-2 md:grid-cols-2">
+                <div className="flex flex-col gap-2">
+                  <label className="text-xs font-semibold text-slate-700">Token API</label>
+                  <input
+                    type="password"
+                    className="w-full border rounded p-2 text-sm"
+                    placeholder="Incolla il token API fornito dal server"
+                    value={apiToken}
+                    onChange={(e) => setApiToken(e.target.value)}
+                  />
+                </div>
+                <div className="text-xs text-slate-500 flex items-center">
+                  {syncStatus || 'Sincronizzazione pronta.'}
+                </div>
+              </div>
+            </div>
             <div className="bg-white rounded shadow p-4 mb-6 border border-slate-200">
               <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <div>
