@@ -9,6 +9,8 @@ const PORT = process.env.PORT || 4173
 const rawDeepSeekUrl = process.env.DEEPSEEK_API_URL || process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com'
 const DEEPSEEK_API_URL = rawDeepSeekUrl.replace(/\/$/, '')
 const DEEPSEEK_API_KEY = (process.env.DEEPSEEK_API_KEY || '').trim()
+const rawRagUrl = process.env.RAG_API_URL || ''
+const RAG_API_URL = rawRagUrl ? rawRagUrl.replace(/\/$/, '') : ''
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -93,6 +95,48 @@ const handleDeepSeekProxy = async (req, res) => {
   }
 }
 
+const handleRagProxy = async (req, res) => {
+  if (!RAG_API_URL) {
+    return respond(res, 500, { error: 'RAG_API_URL non configurata lato server.' })
+  }
+
+  let body = ''
+  for await (const chunk of req) {
+    body += chunk
+  }
+
+  let payload = {}
+  if (body) {
+    try {
+      payload = JSON.parse(body)
+    } catch (error) {
+      return respond(res, 400, { error: 'Payload JSON non valido.' })
+    }
+  }
+
+  try {
+    const response = await fetch(RAG_API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    })
+
+    const text = await response.text()
+    let parsed = text
+    try {
+      parsed = JSON.parse(text)
+    } catch {
+      parsed = text
+    }
+
+    respond(res, response.status, parsed)
+  } catch (error) {
+    respond(res, 502, { error: error?.message || 'Errore durante la chiamata RAG.' })
+  }
+}
+
 const handleStaticRequest = async (pathname, res) => {
   const decodedPath = decodeURIComponent(pathname)
   const safePath = path.normalize(decodedPath).replace(/^(\.\.[/\\])+/, '').replace(/^\/+/, '')
@@ -129,6 +173,10 @@ const server = createServer((req, res) => {
 
   if (req.method === 'POST' && url.pathname === '/api/deepseek') {
     return handleDeepSeekProxy(req, res)
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/rag') {
+    return handleRagProxy(req, res)
   }
 
   if (req.method === 'GET') {
