@@ -11,8 +11,8 @@ const PORT = process.env.PORT || 4173
 const rawDeepSeekUrl = process.env.DEEPSEEK_API_URL || process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com'
 const DEEPSEEK_API_URL = rawDeepSeekUrl.replace(/\/$/, '')
 const DEEPSEEK_API_KEY = (process.env.DEEPSEEK_API_KEY || '').trim()
-const API_TOKEN = (process.env.API_TOKEN || process.env.AUTH_TOKEN || '').trim()
-const DEFAULT_TOKEN = 'dev-token'
+const rawRagUrl = process.env.RAG_API_URL || ''
+const RAG_API_URL = rawRagUrl ? rawRagUrl.replace(/\/$/, '') : ''
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -256,495 +256,46 @@ const handleDeepSeekProxy = async (req, res) => {
   }
 }
 
-const handleApiRequest = async (req, res, url) => {
-  const { pathname } = url
-  if (pathname === '/api/health' && req.method === 'GET') {
-    return respond(res, 200, { ok: true })
+const handleRagProxy = async (req, res) => {
+  if (!RAG_API_URL) {
+    return respond(res, 500, { error: 'RAG_API_URL non configurata lato server.' })
   }
 
-  if (pathname === '/api/auth/status' && req.method === 'GET') {
-    return respond(res, 200, {
-      required: authTokens.size > 0,
-      defaultToken: authTokens.has(DEFAULT_TOKEN) ? DEFAULT_TOKEN : null,
-    })
+  let body = ''
+  for await (const chunk of req) {
+    body += chunk
   }
 
-  if (pathname === '/api/deepseek' && req.method === 'POST') {
-    return handleDeepSeekProxy(req, res)
-  }
-
-  if (!checkAuth(req)) {
-    return respond(res, 401, { error: 'Token API mancante o non valido.' })
-  }
-
-  if (pathname === '/api/bootstrap' && req.method === 'GET') {
-    const customers = getAll('SELECT * FROM customers ORDER BY name')
-    const tickets = getAll('SELECT * FROM tickets ORDER BY date DESC')
-    const inventory = getAll('SELECT * FROM inventory ORDER BY name')
-    const settings = getAll('SELECT * FROM settings ORDER BY key')
-    return respond(res, 200, {
-      customers: customers.map(mapCustomerRow),
-      tickets: tickets.map(mapTicketRow),
-      inventory: inventory.map(mapInventoryRow),
-      settings: settings.map(mapSettingRow),
-    })
-  }
-
-  if (pathname === '/api/customers' && req.method === 'GET') {
-    const rows = getAll('SELECT * FROM customers ORDER BY name')
-    return respond(res, 200, rows.map(mapCustomerRow))
-  }
-
-  if (pathname === '/api/tickets' && req.method === 'GET') {
-    const rows = getAll('SELECT * FROM tickets ORDER BY date DESC')
-    return respond(res, 200, rows.map(mapTicketRow))
-  }
-
-  if (pathname === '/api/inventory' && req.method === 'GET') {
-    const rows = getAll('SELECT * FROM inventory ORDER BY name')
-    return respond(res, 200, rows.map(mapInventoryRow))
-  }
-
-  if (pathname === '/api/settings' && req.method === 'GET') {
-    const rows = getAll('SELECT * FROM settings ORDER BY key')
-    return respond(res, 200, rows.map(mapSettingRow))
-  }
-
-  if (pathname === '/api/customers' && req.method === 'POST') {
-    let body = {}
+  let payload = {}
+  if (body) {
     try {
-      body = await readJsonBody(req)
+      payload = JSON.parse(body)
     } catch (error) {
-      return respond(res, error.status || 400, { error: error.message || 'Payload JSON non valido.' })
+      return respond(res, 400, { error: 'Payload JSON non valido.' })
     }
-    const id = ensureId(body.id)
-    const existing = getRow('SELECT * FROM customers WHERE id = ?', [id])
-    if (existing) {
-      return sendConflict(res, 'Cliente già esistente.', mapCustomerRow(existing))
-    }
-    const now = nowIso()
-    runQuery(
-      'INSERT INTO customers (id, name, email, phone, address, created_at, updated_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      [
-        id,
-        body.name?.trim() || 'Cliente',
-        body.email?.trim() || '',
-        body.phone?.trim() || '',
-        body.address?.trim() || '',
-        now,
-        now,
-        1,
-      ],
-    )
-    const row = getRow('SELECT * FROM customers WHERE id = ?', [id])
-    return respond(res, 201, mapCustomerRow(row))
   }
 
-  if (pathname.startsWith('/api/customers/') && req.method === 'PUT') {
-    const id = pathname.split('/').pop()
-    let body = {}
-    try {
-      body = await readJsonBody(req)
-    } catch (error) {
-      return respond(res, error.status || 400, { error: error.message || 'Payload JSON non valido.' })
-    }
-    const existing = getRow('SELECT * FROM customers WHERE id = ?', [id])
-    if (!existing) {
-      const now = nowIso()
-      runQuery(
-        'INSERT INTO customers (id, name, email, phone, address, created_at, updated_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-        [
-          id,
-          body.name?.trim() || 'Cliente',
-          body.email?.trim() || '',
-          body.phone?.trim() || '',
-          body.address?.trim() || '',
-          now,
-          now,
-          1,
-        ],
-      )
-      const row = getRow('SELECT * FROM customers WHERE id = ?', [id])
-      return respond(res, 201, mapCustomerRow(row))
-    }
-
-    const conflict = resolveConflict(existing, body)
-    if (conflict) {
-      return sendConflict(res, 'Conflitto di aggiornamento cliente.', mapCustomerRow(existing))
-    }
-
-    const updatedAt = ensureUpdatedAt(body.updatedAt)
-    const version = existing.version + 1
-    runQuery(
-      'UPDATE customers SET name = ?, email = ?, phone = ?, address = ?, updated_at = ?, version = ? WHERE id = ?',
-      [
-        body.name?.trim() || existing.name,
-        body.email?.trim() || '',
-        body.phone?.trim() || '',
-        body.address?.trim() || '',
-        updatedAt,
-        version,
-        id,
-      ],
-    )
-    const row = getRow('SELECT * FROM customers WHERE id = ?', [id])
-    return respond(res, 200, mapCustomerRow(row))
-  }
-
-  if (pathname.startsWith('/api/customers/') && req.method === 'DELETE') {
-    const id = pathname.split('/').pop()
-    runQuery('DELETE FROM customers WHERE id = ?', [id])
-    res.writeHead(204)
-    return res.end()
-  }
-
-  if (pathname === '/api/tickets' && req.method === 'POST') {
-    let body = {}
-    try {
-      body = await readJsonBody(req)
-    } catch (error) {
-      return respond(res, error.status || 400, { error: error.message || 'Payload JSON non valido.' })
-    }
-    const id = ensureId(body.id)
-    const existing = getRow('SELECT * FROM tickets WHERE id = ?', [id])
-    if (existing) {
-      return sendConflict(res, 'Ticket già esistente.', mapTicketRow(existing))
-    }
-    const now = nowIso()
-    runQuery(
-      'INSERT INTO tickets (id, subject, description, customer_id, status, date, time, created_at, updated_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [
-        id,
-        body.subject?.trim() || 'Ticket',
-        body.description?.trim() || '',
-        body.customerId || '',
-        body.status || 'aperto',
-        body.date || '',
-        body.time || '09:00',
-        now,
-        now,
-        1,
-      ],
-    )
-    const row = getRow('SELECT * FROM tickets WHERE id = ?', [id])
-    return respond(res, 201, mapTicketRow(row))
-  }
-
-  if (pathname.startsWith('/api/tickets/') && req.method === 'PUT') {
-    const id = pathname.split('/').pop()
-    let body = {}
-    try {
-      body = await readJsonBody(req)
-    } catch (error) {
-      return respond(res, error.status || 400, { error: error.message || 'Payload JSON non valido.' })
-    }
-    const existing = getRow('SELECT * FROM tickets WHERE id = ?', [id])
-    if (!existing) {
-      const now = nowIso()
-      runQuery(
-        'INSERT INTO tickets (id, subject, description, customer_id, status, date, time, created_at, updated_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        [
-          id,
-          body.subject?.trim() || 'Ticket',
-          body.description?.trim() || '',
-          body.customerId || '',
-          body.status || 'aperto',
-          body.date || '',
-          body.time || '09:00',
-          now,
-          now,
-          1,
-        ],
-      )
-      const row = getRow('SELECT * FROM tickets WHERE id = ?', [id])
-      return respond(res, 201, mapTicketRow(row))
-    }
-
-    const conflict = resolveConflict(existing, body)
-    if (conflict) {
-      return sendConflict(res, 'Conflitto di aggiornamento ticket.', mapTicketRow(existing))
-    }
-
-    const updatedAt = ensureUpdatedAt(body.updatedAt)
-    const version = existing.version + 1
-    runQuery(
-      'UPDATE tickets SET subject = ?, description = ?, customer_id = ?, status = ?, date = ?, time = ?, updated_at = ?, version = ? WHERE id = ?',
-      [
-        body.subject?.trim() || existing.subject,
-        body.description?.trim() || '',
-        body.customerId || '',
-        body.status || existing.status,
-        body.date || existing.date,
-        body.time || existing.time,
-        updatedAt,
-        version,
-        id,
-      ],
-    )
-    const row = getRow('SELECT * FROM tickets WHERE id = ?', [id])
-    return respond(res, 200, mapTicketRow(row))
-  }
-
-  if (pathname.startsWith('/api/tickets/') && req.method === 'DELETE') {
-    const id = pathname.split('/').pop()
-    runQuery('DELETE FROM tickets WHERE id = ?', [id])
-    res.writeHead(204)
-    return res.end()
-  }
-
-  if (pathname === '/api/inventory' && req.method === 'POST') {
-    let body = {}
-    try {
-      body = await readJsonBody(req)
-    } catch (error) {
-      return respond(res, error.status || 400, { error: error.message || 'Payload JSON non valido.' })
-    }
-    const id = ensureId(body.id)
-    const existing = getRow('SELECT * FROM inventory WHERE id = ?', [id])
-    if (existing) {
-      return sendConflict(res, 'Elemento di magazzino già esistente.', mapInventoryRow(existing))
-    }
-    const now = nowIso()
-    runQuery(
-      'INSERT INTO inventory (id, name, location, qty, price, min_qty, created_at, updated_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [
-        id,
-        body.name?.trim() || 'Ricambio',
-        body.location?.trim() || '',
-        Number.isFinite(Number(body.qty)) ? Number(body.qty) : 0,
-        Number.isFinite(Number(body.price)) ? Number(body.price) : 0,
-        Number.isFinite(Number(body.minQty)) ? Number(body.minQty) : 0,
-        now,
-        now,
-        1,
-      ],
-    )
-    const row = getRow('SELECT * FROM inventory WHERE id = ?', [id])
-    return respond(res, 201, mapInventoryRow(row))
-  }
-
-  if (pathname.startsWith('/api/inventory/') && req.method === 'PUT') {
-    const id = pathname.split('/').pop()
-    let body = {}
-    try {
-      body = await readJsonBody(req)
-    } catch (error) {
-      return respond(res, error.status || 400, { error: error.message || 'Payload JSON non valido.' })
-    }
-    const existing = getRow('SELECT * FROM inventory WHERE id = ?', [id])
-    if (!existing) {
-      const now = nowIso()
-      runQuery(
-        'INSERT INTO inventory (id, name, location, qty, price, min_qty, created_at, updated_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        [
-          id,
-          body.name?.trim() || 'Ricambio',
-          body.location?.trim() || '',
-          Number.isFinite(Number(body.qty)) ? Number(body.qty) : 0,
-          Number.isFinite(Number(body.price)) ? Number(body.price) : 0,
-          Number.isFinite(Number(body.minQty)) ? Number(body.minQty) : 0,
-          now,
-          now,
-          1,
-        ],
-      )
-      const row = getRow('SELECT * FROM inventory WHERE id = ?', [id])
-      return respond(res, 201, mapInventoryRow(row))
-    }
-
-    const conflict = resolveConflict(existing, body)
-    if (conflict) {
-      return sendConflict(res, 'Conflitto di aggiornamento magazzino.', mapInventoryRow(existing))
-    }
-
-    const updatedAt = ensureUpdatedAt(body.updatedAt)
-    const version = existing.version + 1
-    runQuery(
-      'UPDATE inventory SET name = ?, location = ?, qty = ?, price = ?, min_qty = ?, updated_at = ?, version = ? WHERE id = ?',
-      [
-        body.name?.trim() || existing.name,
-        body.location?.trim() || '',
-        Number.isFinite(Number(body.qty)) ? Number(body.qty) : existing.qty,
-        Number.isFinite(Number(body.price)) ? Number(body.price) : existing.price,
-        Number.isFinite(Number(body.minQty)) ? Number(body.minQty) : existing.min_qty,
-        updatedAt,
-        version,
-        id,
-      ],
-    )
-    const row = getRow('SELECT * FROM inventory WHERE id = ?', [id])
-    return respond(res, 200, mapInventoryRow(row))
-  }
-
-  if (pathname.startsWith('/api/inventory/') && req.method === 'DELETE') {
-    const id = pathname.split('/').pop()
-    runQuery('DELETE FROM inventory WHERE id = ?', [id])
-    res.writeHead(204)
-    return res.end()
-  }
-
-  if (pathname.startsWith('/api/settings/') && req.method === 'PUT') {
-    const key = pathname.split('/').pop()
-    let body = {}
-    try {
-      body = await readJsonBody(req)
-    } catch (error) {
-      return respond(res, error.status || 400, { error: error.message || 'Payload JSON non valido.' })
-    }
-    const existing = getRow('SELECT * FROM settings WHERE key = ?', [key])
-    if (!existing) {
-      const now = nowIso()
-      runQuery(
-        'INSERT INTO settings (key, value, created_at, updated_at, version) VALUES (?, ?, ?, ?, ?)',
-        [
-          key,
-          JSON.stringify(body.value ?? ''),
-          now,
-          now,
-          1,
-        ],
-      )
-      const row = getRow('SELECT * FROM settings WHERE key = ?', [key])
-      return respond(res, 201, mapSettingRow(row))
-    }
-
-    const conflict = resolveConflict(existing, body)
-    if (conflict) {
-      return sendConflict(res, 'Conflitto di aggiornamento impostazioni.', mapSettingRow(existing))
-    }
-
-    const updatedAt = ensureUpdatedAt(body.updatedAt)
-    const version = existing.version + 1
-    runQuery(
-      'UPDATE settings SET value = ?, updated_at = ?, version = ? WHERE key = ?',
-      [
-        JSON.stringify(body.value ?? existing.value),
-        updatedAt,
-        version,
-        key,
-      ],
-    )
-    const row = getRow('SELECT * FROM settings WHERE key = ?', [key])
-    return respond(res, 200, mapSettingRow(row))
-  }
-
-  if (pathname === '/api/import' && req.method === 'POST') {
-    let body = {}
-    try {
-      body = await readJsonBody(req)
-    } catch (error) {
-      return respond(res, error.status || 400, { error: error.message || 'Payload JSON non valido.' })
-    }
-    const force = Boolean(body.force)
-    const customers = Array.isArray(body.customers) ? body.customers : []
-    const tickets = Array.isArray(body.tickets) ? body.tickets : []
-    const inventory = Array.isArray(body.inventory) ? body.inventory : []
-    const settings = Array.isArray(body.settings)
-      ? body.settings
-      : body.settings && typeof body.settings === 'object'
-        ? Object.entries(body.settings).map(([key, value]) => ({ key, value }))
-        : []
-
-    const importCollection = (items, config) => {
-      const result = { imported: 0, skipped: 0, conflicts: 0 }
-      for (const item of items) {
-        const incoming = config.mapIncoming(item)
-        const id = incoming[config.idField]
-        if (!id) continue
-        const existing = getRow(`SELECT * FROM ${config.table} WHERE ${config.idField} = ?`, [id])
-        if (!existing) {
-          runQuery(
-            `INSERT INTO ${config.table} (${Object.keys(incoming).join(', ')}) VALUES (${Object.keys(incoming).map(() => '?').join(', ')})`,
-            Object.values(incoming),
-          )
-          result.imported += 1
-          continue
-        }
-        const conflict = !force && resolveConflict(existing, incoming)
-        if (conflict) {
-          result.conflicts += 1
-          result.skipped += 1
-          continue
-        }
-        const updatedValues = { ...incoming, created_at: existing.created_at, version: existing.version + 1 }
-        runQuery(
-          `UPDATE ${config.table} SET ${Object.keys(updatedValues).map((key) => `${key} = ?`).join(', ')} WHERE ${config.idField} = ?`,
-          [...Object.values(updatedValues), id],
-        )
-        result.imported += 1
-      }
-      return result
-    }
-
-    const customerResult = importCollection(customers, {
-      table: 'customers',
-      idField: 'id',
-      mapIncoming: (item) => ({
-        id: ensureId(item.id),
-        name: item.name?.trim() || 'Cliente',
-        email: item.email?.trim() || '',
-        phone: item.phone?.trim() || '',
-        address: item.address?.trim() || '',
-        created_at: normalizeIso(item.createdAt) || nowIso(),
-        updated_at: ensureUpdatedAt(item.updatedAt),
-        version: parseVersion(item.version) || 1,
-      }),
+  try {
+    const response = await fetch(RAG_API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
     })
 
-    const ticketResult = importCollection(tickets, {
-      table: 'tickets',
-      idField: 'id',
-      mapIncoming: (item) => ({
-        id: ensureId(item.id),
-        subject: item.subject?.trim() || 'Ticket',
-        description: item.description?.trim() || '',
-        customer_id: item.customerId || '',
-        status: item.status || 'aperto',
-        date: item.date || '',
-        time: item.time || '09:00',
-        created_at: normalizeIso(item.createdAt) || nowIso(),
-        updated_at: ensureUpdatedAt(item.updatedAt),
-        version: parseVersion(item.version) || 1,
-      }),
-    })
+    const text = await response.text()
+    let parsed = text
+    try {
+      parsed = JSON.parse(text)
+    } catch {
+      parsed = text
+    }
 
-    const inventoryResult = importCollection(inventory, {
-      table: 'inventory',
-      idField: 'id',
-      mapIncoming: (item) => ({
-        id: ensureId(item.id),
-        name: item.name?.trim() || 'Ricambio',
-        location: item.location?.trim() || '',
-        qty: Number.isFinite(Number(item.qty)) ? Number(item.qty) : 0,
-        price: Number.isFinite(Number(item.price)) ? Number(item.price) : 0,
-        min_qty: Number.isFinite(Number(item.minQty)) ? Number(item.minQty) : 0,
-        created_at: normalizeIso(item.createdAt) || nowIso(),
-        updated_at: ensureUpdatedAt(item.updatedAt),
-        version: parseVersion(item.version) || 1,
-      }),
-    })
-
-    const settingsResult = importCollection(settings, {
-      table: 'settings',
-      idField: 'key',
-      mapIncoming: (item) => ({
-        key: item.key,
-        value: JSON.stringify(item.value ?? ''),
-        created_at: normalizeIso(item.createdAt) || nowIso(),
-        updated_at: ensureUpdatedAt(item.updatedAt),
-        version: parseVersion(item.version) || 1,
-      }),
-    })
-
-    return respond(res, 200, {
-      customers: customerResult,
-      tickets: ticketResult,
-      inventory: inventoryResult,
-      settings: settingsResult,
-    })
+    respond(res, response.status, parsed)
+  } catch (error) {
+    respond(res, 502, { error: error?.message || 'Errore durante la chiamata RAG.' })
   }
-
-  return respond(res, 404, { error: 'Endpoint non trovato.' })
 }
 
 const handleStaticRequest = async (pathname, res) => {
@@ -783,6 +334,10 @@ const server = createServer(async (req, res) => {
 
   if (url.pathname.startsWith('/api/')) {
     return handleApiRequest(req, res, url)
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/rag') {
+    return handleRagProxy(req, res)
   }
 
   if (req.method === 'GET') {

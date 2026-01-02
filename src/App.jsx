@@ -32,6 +32,8 @@ const DEEPSEEK_API_URL = (import.meta.env.VITE_DEEPSEEK_API_URL || 'https://api.
 const DEEPSEEK_API_KEY = (import.meta.env.VITE_DEEPSEEK_API_KEY || '').trim();
 const HAS_ENV_DEEPSEEK_KEY = Boolean(DEEPSEEK_API_KEY && DEEPSEEK_API_KEY.trim());
 const ENV_DEEPSEEK_API_URL = DEEPSEEK_API_URL;
+const RAG_API_URL = (import.meta.env.VITE_RAG_API_URL || '').trim().replace(/\/$/, '');
+const RAG_ENDPOINT = RAG_API_URL || '/api/rag';
 
 const storageAvailable = typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
 const nowIso = () => new Date().toISOString();
@@ -55,6 +57,44 @@ const safeSetItem = (key, value) => {
   } catch (e) {
     console.warn('Impossibile scrivere su storage, i dati non saranno salvati', e);
     return false;
+  }
+};
+
+const callRagApi = async (payload = {}) => {
+  if (!payload || typeof payload !== 'object') {
+    throw new Error('Payload RAG non valido.');
+  }
+
+  try {
+    const response = await fetch(RAG_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    const text = await response.text();
+    let parsed = text;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      parsed = text;
+    }
+
+    if (!response.ok) {
+      const message = parsed?.error || `Errore RAG: ${response.status}`;
+      if (typeof message === 'string' && message.toLowerCase().includes('rag_api_url')) {
+        throw new Error('RAG non configurata. Imposta VITE_RAG_API_URL (client) o RAG_API_URL (server).');
+      }
+      throw new Error(message);
+    }
+
+    return parsed;
+  } catch (error) {
+    const message = error?.message || 'Errore durante la chiamata RAG.';
+    if (message.toLowerCase().includes('rag non configurata')) {
+      throw error;
+    }
+    throw new Error(message);
   }
 };
 
