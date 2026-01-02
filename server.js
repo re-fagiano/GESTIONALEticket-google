@@ -13,6 +13,8 @@ const DEEPSEEK_API_URL = rawDeepSeekUrl.replace(/\/$/, '')
 const DEEPSEEK_API_KEY = (process.env.DEEPSEEK_API_KEY || '').trim()
 const rawRagUrl = process.env.RAG_API_URL || ''
 const RAG_API_URL = rawRagUrl ? rawRagUrl.replace(/\/$/, '') : ''
+const API_TOKEN = (process.env.API_TOKEN || '').trim()
+const DEFAULT_TOKEN = (process.env.DEFAULT_API_TOKEN || '').trim() || crypto.randomUUID()
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
