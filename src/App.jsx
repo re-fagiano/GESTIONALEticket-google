@@ -36,6 +36,49 @@ const RAG_API_URL = (import.meta.env.VITE_RAG_API_URL || '').trim().replace(/\/$
 const RAG_ENDPOINT = RAG_API_URL || '/api/rag';
 
 const storageAvailable = typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
+const storageFallbackState = { active: false };
+const IDB_DB_NAME = 'gestionale_storage';
+const IDB_STORE = 'keyval';
+
+const openIdb = () => {
+  if (!isBrowser) return Promise.reject(new Error('IDB non disponibile'));
+  if (!openIdb.promise) {
+    openIdb.promise = new Promise((resolve, reject) => {
+      const request = window.indexedDB.open(IDB_DB_NAME, 1);
+      request.onupgradeneeded = () => {
+        const db = request.result;
+        if (!db.objectStoreNames.contains(IDB_STORE)) {
+          db.createObjectStore(IDB_STORE);
+        }
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+  }
+  return openIdb.promise;
+};
+
+const idbGet = async (key) => {
+  const db = await openIdb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, 'readonly');
+    const store = tx.objectStore(IDB_STORE);
+    const request = store.get(key);
+    request.onsuccess = () => resolve(request.result ?? null);
+    request.onerror = () => reject(request.error);
+  });
+};
+
+const idbSet = async (key, value) => {
+  const db = await openIdb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, 'readwrite');
+    const store = tx.objectStore(IDB_STORE);
+    const request = store.put(value, key);
+    request.onsuccess = () => resolve(true);
+    request.onerror = () => reject(request.error);
+  });
+};
 const nowIso = () => new Date().toISOString();
 
 const safeGetItem = (key, fallback = null) => {
@@ -44,17 +87,24 @@ const safeGetItem = (key, fallback = null) => {
     const saved = localStorage.getItem(key);
     return saved === null ? fallback : saved;
   } catch (e) {
+    storageFallbackState.active = true;
     console.warn('Storage non accessibile, uso fallback', e);
     return fallback;
   }
 };
 
 const safeSetItem = (key, value) => {
-  if (!storageAvailable) return false;
+  if (!storageAvailable) {
+    storageFallbackState.active = true;
+    idbSet(key, value).catch((error) => console.warn('Fallback IndexedDB fallito', error));
+    return false;
+  }
   try {
     localStorage.setItem(key, value);
     return true;
   } catch (e) {
+    storageFallbackState.active = true;
+    idbSet(key, value).catch((error) => console.warn('Fallback IndexedDB fallito', error));
     console.warn('Impossibile scrivere su storage, i dati non saranno salvati', e);
     return false;
   }
@@ -200,6 +250,19 @@ const sanitizeInventoryList = (list, fallback = []) => {
   return source.map((item, idx) => sanitizeInventoryItem(item, idx)).filter(Boolean);
 };
 
+const parseCsvRows = (text = '') => {
+  const lines = text.split(/\r?\n/).filter(Boolean);
+  const delimiter = lines[0]?.includes(';') && !lines[0]?.includes(',') ? ';' : ',';
+  const headers = lines.shift()?.split(delimiter).map((h) => h.trim()) || [];
+  return lines.map((line) => {
+    const cols = line.split(delimiter).map((c) => c.trim().replace(/^"|"$/g, ''));
+    return headers.reduce((acc, header, idx) => {
+      acc[header] = cols[idx] ?? '';
+      return acc;
+    }, {});
+  });
+};
+
 const initialCustomers = [
   { id: '1', name: 'Maria Bianchi', email: 'maria@test.com', phone: '3339988776', address: 'Via dei Fiori 12' },
   { id: '2', name: 'Ristorante Da Luigi', email: 'info@luigi.com', phone: '06123456', address: 'Piazza Navona 5' }
@@ -229,8 +292,26 @@ export default function App() {
   const [inventory, setInventory] = useState(() => sanitizeInventoryList(loadCache('inventory', initialInventory), initialInventory));
   const [settings, setSettings] = useState(() => loadCache('settings', []));
   const [storageWarning, setStorageWarning] = useState(null);
-  const [apiToken, setApiToken] = useState(() => safeGetItem('apiToken', isLocalhost ? 'dev-token' : ''));
+  const [apiToken, setApiToken] = useState('');
+  const [tokenInput, setTokenInput] = useState('');
+  const [maskedToken, setMaskedToken] = useState('');
+  const [showTokenPrompt, setShowTokenPrompt] = useState(false);
   const [syncStatus, setSyncStatus] = useState(null);
+  const [backendOnline, setBackendOnline] = useState(true);
+  const [retryStatus, setRetryStatus] = useState(null);
+  const [toasts, setToasts] = useState([]);
+  const [autoBackupAt, setAutoBackupAt] = useState(() => safeGetItem('lastBackupAt', ''));
+  const [latestBackup, setLatestBackup] = useState(null);
+  const [backupStatus, setBackupStatus] = useState(null);
+  const [conflictState, setConflictState] = useState(null);
+  const [isPersistingStorage, setIsPersistingStorage] = useState(false);
+  const [uploadPreview, setUploadPreview] = useState([]);
+  const [uploadError, setUploadError] = useState('');
+  const [isUploadingImport, setIsUploadingImport] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [isSavingCustomer, setIsSavingCustomer] = useState(false);
+  const [isSavingTicket, setIsSavingTicket] = useState(false);
+  const [isSavingPart, setIsSavingPart] = useState(false);
 
   // --- CACHE LOCALE ---
   useEffect(() => {
@@ -258,10 +339,50 @@ export default function App() {
   }, [settings]);
 
   useEffect(() => {
-    if (!safeSetItem('apiToken', apiToken || '')) {
-      setStorageWarning('Impossibile salvare il token API nel browser: storage disabilitato.');
+    if (!storageAvailable || storageFallbackState.active) {
+      const loadFallback = async () => {
+        try {
+          const [customersRaw, ticketsRaw, inventoryRaw, settingsRaw, backupRaw, backupAt] = await Promise.all([
+            idbGet(cacheKeys.customers),
+            idbGet(cacheKeys.tickets),
+            idbGet(cacheKeys.inventory),
+            idbGet(cacheKeys.settings),
+            idbGet('lastBackup'),
+            idbGet('lastBackupAt'),
+          ]);
+          if (customersRaw) setCustomers(sanitizeCustomers(JSON.parse(customersRaw), initialCustomers));
+          if (ticketsRaw) setTickets(sanitizeTickets(JSON.parse(ticketsRaw), initialTickets));
+          if (inventoryRaw) setInventory(sanitizeInventoryList(JSON.parse(inventoryRaw), initialInventory));
+          if (settingsRaw) setSettings(JSON.parse(settingsRaw));
+          if (backupRaw) setLatestBackup(JSON.parse(backupRaw));
+          if (backupAt) setAutoBackupAt(backupAt);
+        } catch (error) {
+          console.warn('Fallback IndexedDB non disponibile', error);
+        }
+      };
+      loadFallback();
     }
-  }, [apiToken]);
+  }, []);
+
+  useEffect(() => {
+    const loadTokenStatus = async () => {
+      try {
+        const response = await fetch('/api/token/status', { credentials: 'include' });
+        if (response.status === 204) {
+          setShowTokenPrompt(true);
+          return;
+        }
+        const data = await response.json().catch(() => null);
+        if (data?.maskedToken) {
+          setMaskedToken(data.maskedToken);
+          setShowTokenPrompt(false);
+        }
+      } catch {
+        setShowTokenPrompt(true);
+      }
+    };
+    loadTokenStatus();
+  }, []);
 
   // Modal & AI State
   const [showNewTicket, setShowNewTicket] = useState(false);
@@ -299,6 +420,7 @@ export default function App() {
       : HAS_ENV_DEEPSEEK_KEY
         ? 'Usando chiave da build'
         : 'Nessuna chiave';
+  const aiEnabled = shouldUseProxy || hasClientKey;
 
   const apiFetch = async (path, options = {}) => {
     const headers = {
@@ -308,7 +430,7 @@ export default function App() {
     if (apiToken) {
       headers.Authorization = `Bearer ${apiToken}`;
     }
-    const response = await fetch(path, { ...options, headers });
+    const response = await fetch(path, { ...options, headers, credentials: 'include' });
     const payload = response.status === 204 ? null : await response.json().catch(() => null);
     if (!response.ok) {
       const error = new Error(payload?.error || `Errore API: ${response.status}`);
@@ -319,29 +441,83 @@ export default function App() {
     return payload;
   };
 
+  const apiFetchWithRetry = async (path, options = {}) => {
+    const method = (options.method || 'GET').toUpperCase();
+    const retryable = ['GET', 'PUT'].includes(method);
+    const maxAttempts = 3;
+    let attempt = 0;
+    let lastError;
+    while (attempt < maxAttempts) {
+      attempt += 1;
+      try {
+        if (attempt > 1) {
+          setRetryStatus({ attempt, maxAttempts, path });
+        }
+        const result = await apiFetch(path, options);
+        setRetryStatus(null);
+        return result;
+      } catch (error) {
+        lastError = error;
+        const status = error?.status;
+        if (!retryable || ![502, 503].includes(status) || attempt >= maxAttempts) {
+          setRetryStatus(null);
+          throw error;
+        }
+        const delay = 500 * 2 ** (attempt - 1);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+    setRetryStatus(null);
+    throw lastError;
+  };
+
   const refreshFromBackend = async () => {
-    if (!apiToken && !isLocalhost) {
+    if (!apiToken && !maskedToken && !isLocalhost) {
       setStorageWarning('Configura un token API per sincronizzare i dati.');
       return;
     }
     try {
       setSyncStatus('Caricamento dati dal backend...');
-      const data = await apiFetch('/api/bootstrap');
+      setIsSyncing(true);
+      const data = await apiFetchWithRetry('/api/bootstrap');
       setCustomers(sanitizeCustomers(data.customers, initialCustomers));
       setTickets(sanitizeTickets(data.tickets, initialTickets));
       setInventory(sanitizeInventoryList(data.inventory, initialInventory));
       setSettings(Array.isArray(data.settings) ? data.settings : []);
       setStorageWarning(null);
       setSyncStatus('Dati sincronizzati con il backend.');
+      setBackendOnline(true);
     } catch (error) {
       console.error('Errore sincronizzazione backend', error);
       setStorageWarning(error.message || 'Impossibile contattare il backend.');
       setSyncStatus('Backend non raggiungibile: uso cache locale.');
+      setBackendOnline(false);
+    } finally {
+      setIsSyncing(false);
     }
   };
 
   useEffect(() => {
     refreshFromBackend();
+  }, [apiToken]);
+
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      try {
+        const response = await fetch('/api/health', { credentials: 'include' });
+        setBackendOnline(response.ok);
+      } catch {
+        setBackendOnline(false);
+      }
+    }, 180000);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      refreshFromBackend();
+    }, 3600000);
+    return () => clearInterval(interval);
   }, [apiToken]);
 
   useEffect(() => {
@@ -367,20 +543,34 @@ export default function App() {
   const [newPart, setNewPart] = useState({ name: '', location: '', qty: 1, price: 0, minQty: 5 });
   const [importError, setImportError] = useState('');
   const fileInputRef = useRef(null);
+  const importFileRef = useRef(null);
+
+  const addToast = (message, tone = 'success') => {
+    const id = `${Date.now()}-${Math.random()}`;
+    setToasts((prev) => [...prev, { id, message, tone }]);
+    setTimeout(() => {
+      setToasts((prev) => prev.filter((toast) => toast.id !== id));
+    }, 4000);
+  };
 
   // --- AZIONI ---
   const handleApiError = (error, fallback) => {
     if (error?.status === 401) {
-      setStorageWarning('Token API mancante o non valido. Verifica le impostazioni.');
+      setStorageWarning('Token API mancante o non valido. Verifica il token nelle impostazioni.');
+      addToast('Token non valido o mancante.', 'error');
       return;
     }
-    setStorageWarning(error?.message || fallback);
+    const message = error?.message || fallback;
+    const causes = ['Backend offline', 'Token errato', 'Problemi di rete'];
+    setStorageWarning(`${message} Possibili cause: ${causes.join(', ')}.`);
+    addToast(message, 'error');
   };
 
   const handleAddCustomer = async () => {
     if (!newCustomer.name) return;
     const customer = sanitizeCustomer({ ...newCustomer, id: crypto?.randomUUID?.() || Date.now().toString() }, customers.length);
     try {
+      setIsSavingCustomer(true);
       const created = await apiFetch('/api/customers', {
         method: 'POST',
         body: JSON.stringify(customer)
@@ -389,8 +579,11 @@ export default function App() {
       setNewCustomer({ name: '', email: '', phone: '', address: '' });
       setShowNewCustomer(false);
       setSyncStatus('Cliente salvato nel backend.');
+      addToast('Cliente aggiunto con successo.', 'success');
     } catch (error) {
       handleApiError(error, 'Impossibile salvare il cliente.');
+    } finally {
+      setIsSavingCustomer(false);
     }
   };
 
@@ -398,6 +591,7 @@ export default function App() {
     if (!newTicket.subject || !newTicket.customerId) return;
     const ticket = sanitizeTicket({ ...newTicket, id: crypto?.randomUUID?.() || Date.now().toString() }, tickets.length);
     try {
+      setIsSavingTicket(true);
       const created = await apiFetch('/api/tickets', {
         method: 'POST',
         body: JSON.stringify(ticket)
@@ -406,8 +600,11 @@ export default function App() {
       setNewTicket({ subject: '', description: '', customerId: '', status: 'aperto', date: new Date().toISOString().split('T')[0], time: '09:00' });
       setShowNewTicket(false);
       setSyncStatus('Ticket salvato nel backend.');
+      addToast('Ticket creato con successo.', 'success');
     } catch (error) {
       handleApiError(error, 'Impossibile salvare il ticket.');
+    } finally {
+      setIsSavingTicket(false);
     }
   };
 
@@ -415,6 +612,7 @@ export default function App() {
     if (!newPart.name) return;
     const part = sanitizeInventoryItem({ ...newPart, id: crypto?.randomUUID?.() || Date.now().toString() }, inventory.length);
     try {
+      setIsSavingPart(true);
       const created = await apiFetch('/api/inventory', {
         method: 'POST',
         body: JSON.stringify(part)
@@ -423,8 +621,11 @@ export default function App() {
       setNewPart({ name: '', location: '', qty: 1, price: 0, minQty: 5 });
       setShowNewPart(false);
       setSyncStatus('Ricambio salvato nel backend.');
+      addToast('Ricambio salvato.', 'success');
     } catch (error) {
       handleApiError(error, 'Impossibile salvare il ricambio.');
+    } finally {
+      setIsSavingPart(false);
     }
   };
 
@@ -450,19 +651,52 @@ export default function App() {
       updatedAt: nowIso()
     };
     try {
-      const saved = await apiFetch(`/api/inventory/${id}`, {
+      const saved = await apiFetchWithRetry(`/api/inventory/${id}`, {
         method: 'PUT',
         body: JSON.stringify(updatedItem)
       });
       setInventory((prev) => prev.map((entry) => (entry.id === id ? saved : entry)));
       setSyncStatus('Magazzino aggiornato.');
+      addToast('Stock aggiornato.', 'success');
     } catch (error) {
       if (error?.status === 409 && error?.payload?.current) {
-        setInventory((prev) => prev.map((entry) => (entry.id === id ? error.payload.current : entry)));
-        setStorageWarning('Conflitto magazzino: dati aggiornati con l\'ultima versione dal server.');
+        setConflictState({
+          type: 'inventory',
+          local: updatedItem,
+          remote: error.payload.current
+        });
+        setStorageWarning('Conflitto magazzino: scegli la versione da mantenere.');
       } else {
         handleApiError(error, 'Impossibile aggiornare il magazzino.');
       }
+    }
+  };
+
+  const resolveConflictAction = async (action) => {
+    if (!conflictState) return;
+    const { local, remote, type } = conflictState;
+    if (type !== 'inventory') {
+      setConflictState(null);
+      return;
+    }
+    if (action === 'server') {
+      setInventory((prev) => prev.map((entry) => (entry.id === remote.id ? remote : entry)));
+      setConflictState(null);
+      return;
+    }
+    const merged = action === 'merge'
+      ? { ...remote, qty: Number(remote.qty) + Number(local.qty), updatedAt: nowIso() }
+      : { ...local, version: remote.version };
+    try {
+      const saved = await apiFetch(`/api/inventory/${remote.id}`, {
+        method: 'PUT',
+        body: JSON.stringify(merged)
+      });
+      setInventory((prev) => prev.map((entry) => (entry.id === remote.id ? saved : entry)));
+      setConflictState(null);
+      addToast('Conflitto risolto.', 'success');
+    } catch (error) {
+      handleApiError(error, 'Impossibile risolvere il conflitto.');
     }
   };
 
@@ -474,6 +708,7 @@ export default function App() {
       if (type === 'tickets') setTickets(tickets.filter(t => t.id !== id));
       if (type === 'inventory') setInventory(inventory.filter(i => i.id !== id));
       setSyncStatus('Elemento eliminato dal backend.');
+      addToast('Elemento eliminato.', 'success');
     } catch (error) {
       handleApiError(error, 'Impossibile eliminare l\'elemento.');
     }
@@ -493,6 +728,7 @@ export default function App() {
           })
         });
         await refreshFromBackend();
+        addToast('Dati iniziali ripristinati.', 'success');
       } catch (error) {
         handleApiError(error, 'Impossibile ripristinare i dati iniziali.');
       }
@@ -507,6 +743,35 @@ export default function App() {
     link.download = filename;
     link.click();
   };
+
+  const buildBackup = () => ({
+    exportedAt: new Date().toISOString(),
+    customers,
+    tickets,
+    inventory,
+    settings
+  });
+
+  const saveAutoBackup = () => {
+    const backup = buildBackup();
+    const payload = JSON.stringify(backup);
+    const stored = safeSetItem('lastBackup', payload);
+    safeSetItem('lastBackupAt', backup.exportedAt);
+    if (!stored) {
+      idbSet('lastBackup', payload).catch(() => null);
+      idbSet('lastBackupAt', backup.exportedAt).catch(() => null);
+    }
+    setLatestBackup(backup);
+    setAutoBackupAt(backup.exportedAt);
+  };
+
+  useEffect(() => {
+    saveAutoBackup();
+    const interval = setInterval(() => {
+      saveAutoBackup();
+    }, 600000);
+    return () => clearInterval(interval);
+  }, [customers, tickets, inventory, settings]);
 
   const handleExportTickets = () => {
     exportToCsv('tickets_export.csv',
@@ -530,17 +795,23 @@ export default function App() {
   };
 
   const handleDownloadBackup = () => {
-    const backup = {
-      exportedAt: new Date().toISOString(),
-      customers,
-      tickets,
-      inventory,
-      settings
-    };
+    const backup = buildBackup();
     const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
     link.download = 'gestionale_backup.json';
+    link.click();
+  };
+
+  const handleDownloadLatestBackup = () => {
+    if (!latestBackup) {
+      setBackupStatus('Nessun backup automatico disponibile.');
+      return;
+    }
+    const blob = new Blob([JSON.stringify(latestBackup, null, 2)], { type: 'application/json' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = 'gestionale_backup_auto.json';
     link.click();
   };
 
@@ -577,6 +848,29 @@ export default function App() {
     reader.readAsText(file);
   };
 
+  const handleRestoreLatestBackup = async () => {
+    if (!latestBackup) {
+      setBackupStatus('Nessun backup automatico disponibile.');
+      return;
+    }
+    try {
+      await apiFetch('/api/import', {
+        method: 'POST',
+        body: JSON.stringify({
+          customers: latestBackup.customers,
+          tickets: latestBackup.tickets,
+          inventory: latestBackup.inventory,
+          settings: latestBackup.settings || []
+        })
+      });
+      await refreshFromBackend();
+      setBackupStatus('Backup automatico ripristinato con successo.');
+      addToast('Backup automatico ripristinato.', 'success');
+    } catch (error) {
+      handleApiError(error, 'Impossibile ripristinare il backup automatico.');
+    }
+  };
+
   const handleImportLocalData = async () => {
     try {
       await apiFetch('/api/import', {
@@ -591,6 +885,7 @@ export default function App() {
       await refreshFromBackend();
       setImportError('');
       setSyncStatus('Dati locali importati nel backend.');
+      addToast('Dati locali importati.', 'success');
     } catch (error) {
       handleApiError(error, 'Impossibile importare i dati locali.');
     }
@@ -601,15 +896,123 @@ export default function App() {
     fileInputRef.current?.click();
   };
 
+  const handlePersistStorage = async () => {
+    if (!navigator?.storage?.persist) {
+      setStorageWarning('Storage persistente non supportato da questo browser.');
+      return;
+    }
+    try {
+      setIsPersistingStorage(true);
+      const granted = await navigator.storage.persist();
+      if (granted) {
+        addToast('Storage persistente attivato: dati protetti.', 'success');
+        setStorageWarning('Storage persistente attivato: i dati sono protetti.');
+      } else {
+        addToast('Richiesta storage persistente non concessa.', 'error');
+        setStorageWarning('Richiesta storage persistente non concessa: usa backup manuali.');
+      }
+    } finally {
+      setIsPersistingStorage(false);
+    }
+  };
+
+  const handleSelectImportFile = () => {
+    setUploadError('');
+    importFileRef.current?.click();
+  };
+
+  const handleSaveToken = async () => {
+    if (!tokenInput) return;
+    try {
+      const response = await fetch('/api/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: tokenInput }),
+        credentials: 'include'
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(data?.error || 'Impossibile salvare il token.');
+      }
+      setApiToken(tokenInput);
+      setMaskedToken(data?.maskedToken || '');
+      setTokenInput('');
+      setShowTokenPrompt(false);
+      addToast('Token configurato correttamente.', 'success');
+    } catch (error) {
+      handleApiError(error, 'Token non valido.');
+    }
+  };
+
+  const handleRequestNewToken = async () => {
+    try {
+      const data = await apiFetch('/api/token');
+      setApiToken(data?.token || '');
+      setMaskedToken(data?.maskedToken || '');
+      addToast('Nuovo token generato.', 'success');
+    } catch (error) {
+      handleApiError(error, 'Impossibile generare un nuovo token.');
+    }
+  };
+
+  const handleImportFileChange = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (file.name.toLowerCase().endsWith('.xlsx')) {
+      setUploadError('Formato XLSX non supportato nel browser: esporta in CSV.');
+      setUploadPreview([]);
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const text = reader.result;
+      const rows = parseCsvRows(typeof text === 'string' ? text : '');
+      setUploadPreview(rows.slice(0, 5));
+      setUploadError('');
+    };
+    reader.readAsText(file);
+  };
+
+  const handleImportExcel = async () => {
+    const file = importFileRef.current?.files?.[0];
+    if (!file) {
+      setUploadError('Seleziona un file CSV prima di importare.');
+      return;
+    }
+    setIsUploadingImport(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const response = await fetch('/api/import/excel', {
+        method: 'POST',
+        body: formData,
+        credentials: 'include',
+        headers: apiToken ? { Authorization: `Bearer ${apiToken}` } : {}
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(data?.error || 'Errore import CSV.');
+      }
+      setInventory((prev) => sanitizeInventoryList([...prev, ...(data?.items || [])], initialInventory));
+      addToast('Import CSV completato.', 'success');
+      setUploadError('');
+      await refreshFromBackend();
+    } catch (error) {
+      handleApiError(error, 'Impossibile importare il file.');
+    } finally {
+      setIsUploadingImport(false);
+    }
+  };
+
   // --- GOOGLE CALENDAR LINK ---
   const isValidDate = (value) => value instanceof Date && !Number.isNaN(value.getTime());
 
-  const addToGoogleCalendar = (ticket) => {
+  const getGoogleCalendarUrl = (ticket) => {
     const safeTicket = sanitizeTicket(ticket);
     if (!safeTicket) {
       console.error('Calendario: ticket non valido', ticket);
       alert('Impossibile aprire l\'intervento: dati mancanti o corrotti.');
-      return;
+      return null;
     }
 
     const customer = customers.find(c => c.id === safeTicket.customerId);
@@ -634,7 +1037,7 @@ export default function App() {
     if (!isValidDate(eventStartDate)) {
       console.error('Calendario: data/ora non valida', { eventDate, eventTime, ticket: safeTicket });
       alert('Impossibile creare il link del calendario: data o ora non valide.');
-      return;
+      return null;
     }
 
     const eventEndDate = new Date(eventStartDate.getTime() + 60 * 60 * 1000);
@@ -648,10 +1051,9 @@ export default function App() {
     if (!url) {
       console.error('Calendario: URL non valida generata', { url, ticket: safeTicket });
       alert('Impossibile aprire Google Calendar: URL non valida.');
-      return;
+      return null;
     }
-
-    window.open(url, '_blank', 'noopener,noreferrer');
+    return url;
   };
 
   // --- AI DEEPSEEK ---
@@ -863,6 +1265,61 @@ export default function App() {
     </div>
   );
 
+  const SettingsView = () => (
+    <div className="space-y-6">
+      <div className="bg-white rounded shadow p-4 border border-slate-200">
+        <h2 className="text-lg font-bold text-slate-800 mb-2">Token API</h2>
+        <p className="text-sm text-slate-500 mb-4">Gestisci il token API per l'accesso al backend. Il token viene salvato in cookie HttpOnly.</p>
+        <div className="flex flex-col gap-3 md:flex-row md:items-center">
+          <input
+            type="password"
+            className="w-full border rounded p-2 text-sm"
+            placeholder="Inserisci il token API"
+            value={tokenInput}
+            onChange={(e) => setTokenInput(e.target.value)}
+          />
+          <button onClick={handleSaveToken} className="px-4 py-2 bg-slate-800 text-white rounded">Salva token</button>
+          <button onClick={handleRequestNewToken} className="px-4 py-2 bg-slate-100 text-slate-700 rounded border">Richiedi nuovo token</button>
+        </div>
+        <p className="text-xs text-slate-500 mt-2">Token attuale: {maskedToken || 'non configurato'}.</p>
+      </div>
+
+      <div className="bg-white rounded shadow p-4 border border-slate-200">
+        <h2 className="text-lg font-bold text-slate-800 mb-2">Configurazione AI DeepSeek</h2>
+        {allowLocalOverrides ? (
+          <div className="space-y-3">
+            <div>
+              <label className="text-xs font-semibold text-slate-700">Chiave DeepSeek</label>
+              <input
+                type="password"
+                className="w-full border rounded p-2 text-sm"
+                placeholder="Incolla la chiave DeepSeek"
+                value={runtimeApiKey}
+                onChange={(e) => setRuntimeApiKey(e.target.value)}
+              />
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-slate-700">Endpoint DeepSeek</label>
+              <input
+                className="w-full border rounded p-2 text-sm"
+                placeholder="https://api.deepseek.com"
+                value={runtimeApiUrl}
+                onChange={(e) => setRuntimeApiUrl(e.target.value)}
+              />
+            </div>
+            <p className="text-xs text-slate-500">
+              Usa queste impostazioni solo per test locali. In produzione il proxy <code className="font-mono">/api/deepseek</code> gestisce le chiavi lato server.
+            </p>
+          </div>
+        ) : (
+          <p className="text-sm text-slate-500">
+            La configurazione AI è gestita dal server. Assicurati che <code className="font-mono">DEEPSEEK_API_KEY</code> sia impostata.
+          </p>
+        )}
+      </div>
+    </div>
+  );
+
   const Sidebar = () => (
     <div className={`fixed inset-y-0 left-0 z-40 w-64 bg-slate-900 text-white transition-transform duration-300 transform ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} md:relative md:translate-x-0 flex flex-col`}>
       <div className="flex items-center justify-between p-4 border-b border-slate-700 h-16">
@@ -875,6 +1332,7 @@ export default function App() {
         <button onClick={() => setActiveTab('tickets')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'tickets' ? 'bg-slate-800 text-yellow-400' : ''}`}><Ticket size={20}/> Lista Ticket</button>
         <button onClick={() => setActiveTab('customers')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'customers' ? 'bg-slate-800 text-yellow-400' : ''}`}><Users size={20}/> Clienti</button>
         <button onClick={() => setActiveTab('inventory')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'inventory' ? 'bg-slate-800 text-yellow-400' : ''}`}><Package size={20}/> Magazzino</button>
+        <button onClick={() => setActiveTab('settings')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'settings' ? 'bg-slate-800 text-yellow-400' : ''}`}><Bot size={20}/> Impostazioni</button>
       </nav>
       <div className="p-4 border-t border-slate-700"><button onClick={handleResetData} className="w-full text-xs bg-red-900/50 text-red-200 p-2 rounded">Reset Dati</button></div>
     </div>
@@ -942,22 +1400,35 @@ export default function App() {
                 <div className="space-y-1">
                   <p className="text-sm font-semibold text-slate-700 flex items-center gap-2"><Zap size={16}/> Backend &amp; sincronizzazione</p>
                   <p className="text-xs text-slate-500">Imposta il token per accedere alle API e aggiorna il database con i dati locali quando necessario.</p>
+                  <p className={`text-xs ${backendOnline ? 'text-emerald-600' : 'text-red-600'}`}>
+                    {backendOnline ? 'Backend online' : 'Backend offline: modalità locale attiva'}
+                  </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <button onClick={refreshFromBackend} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded hover:bg-slate-200 border"><RefreshCw size={16}/> Aggiorna da backend</button>
+                  <button onClick={refreshFromBackend} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded hover:bg-slate-200 border" disabled={isSyncing}>
+                    <RefreshCw size={16} className={isSyncing ? 'animate-spin' : ''}/> Aggiorna da backend
+                  </button>
                   <button onClick={handleImportLocalData} className="flex items-center gap-2 px-3 py-2 text-sm bg-emerald-50 text-emerald-700 rounded hover:bg-emerald-100 border border-emerald-200"><Upload size={16}/> Importa dati locali</button>
                 </div>
               </div>
+              {retryStatus && (
+                <div className="mt-3 text-xs text-slate-500">
+                  Retry in corso ({retryStatus.attempt}/{retryStatus.maxAttempts}) per {retryStatus.path}.
+                  <div className="mt-1 h-1 bg-slate-200 rounded">
+                    <div
+                      className="h-1 bg-blue-500 rounded"
+                      style={{ width: `${Math.round((retryStatus.attempt / retryStatus.maxAttempts) * 100)}%` }}
+                    />
+                  </div>
+                </div>
+              )}
               <div className="mt-4 grid gap-2 md:grid-cols-2">
                 <div className="flex flex-col gap-2">
                   <label className="text-xs font-semibold text-slate-700">Token API</label>
-                  <input
-                    type="password"
-                    className="w-full border rounded p-2 text-sm"
-                    placeholder="Incolla il token API fornito dal server"
-                    value={apiToken}
-                    onChange={(e) => setApiToken(e.target.value)}
-                  />
+                  <div className="text-sm text-slate-600">
+                    {maskedToken ? `Token configurato: ${maskedToken}` : 'Token non configurato.'}
+                  </div>
+                  <button onClick={() => setActiveTab('settings')} className="text-xs text-blue-600 underline w-fit">Gestisci token</button>
                 </div>
                 <div className="text-xs text-slate-500 flex items-center">
                   {syncStatus || 'Sincronizzazione pronta.'}
@@ -972,19 +1443,54 @@ export default function App() {
                 </div>
                 <div className="flex flex-wrap gap-2 justify-end">
                   <button onClick={handleDownloadBackup} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-800 text-white rounded hover:bg-slate-700"><Download size={16}/> Backup JSON</button>
+                  <button onClick={handleDownloadLatestBackup} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded hover:bg-slate-200 border"><Download size={16}/> Ultimo Backup</button>
+                  <button onClick={handleRestoreLatestBackup} className="flex items-center gap-2 px-3 py-2 text-sm bg-amber-50 text-amber-700 rounded hover:bg-amber-100 border border-amber-200">Ripristina Backup</button>
                   <button onClick={handleSelectBackupFile} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded hover:bg-slate-200 border"><Upload size={16}/> Importa Backup</button>
+                  <button onClick={handlePersistStorage} className="flex items-center gap-2 px-3 py-2 text-sm bg-emerald-600 text-white rounded hover:bg-emerald-500" disabled={isPersistingStorage}>
+                    {isPersistingStorage ? <RefreshCw size={16} className="animate-spin"/> : <Download size={16}/>} Blocca dati nel browser
+                  </button>
                   <button onClick={handleExportTickets} className="flex items-center gap-2 px-3 py-2 text-sm bg-blue-50 text-blue-700 rounded hover:bg-blue-100 border border-blue-200"><FileSpreadsheet size={16}/> Ticket CSV</button>
                   <button onClick={handleExportInventory} className="flex items-center gap-2 px-3 py-2 text-sm bg-purple-50 text-purple-700 rounded hover:bg-purple-100 border border-purple-200"><FileSpreadsheet size={16}/> Magazzino CSV</button>
                   <button onClick={handleExportCustomers} className="flex items-center gap-2 px-3 py-2 text-sm bg-green-50 text-green-700 rounded hover:bg-green-100 border border-green-200"><FileSpreadsheet size={16}/> Clienti CSV</button>
                   <input ref={fileInputRef} type="file" accept="application/json" className="hidden" onChange={handleImportBackup} />
                 </div>
               </div>
+              <div className="mt-3 text-xs text-slate-500">
+                Backup automatico: {autoBackupAt ? `ultimo salvataggio ${autoBackupAt}` : 'non disponibile'}.
+              </div>
+              {backupStatus && <p className="mt-2 text-xs text-amber-600">{backupStatus}</p>}
               {importError && <p className="mt-2 text-sm text-red-600">{importError}</p>}
+            </div>
+            <div className="bg-white rounded shadow p-4 mb-6 border border-slate-200">
+              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <p className="text-sm font-semibold text-slate-700 flex items-center gap-2"><Upload size={16}/> Import CSV Magazzino</p>
+                  <p className="text-xs text-slate-500">Carica un CSV con colonne id, name, location, qty, price, minQty. Gli ID duplicati aggiornano le quantità.</p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button onClick={handleSelectImportFile} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded hover:bg-slate-200 border">Seleziona file</button>
+                  <button onClick={handleImportExcel} className="flex items-center gap-2 px-3 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-500" disabled={isUploadingImport}>
+                    {isUploadingImport ? <RefreshCw size={16} className="animate-spin"/> : <Upload size={16}/>} Importa
+                  </button>
+                  <a href="/api/import/template" className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-800 text-white rounded hover:bg-slate-700" target="_blank" rel="noopener noreferrer">
+                    <Download size={16}/> Template CSV
+                  </a>
+                  <input ref={importFileRef} type="file" accept=".csv" className="hidden" onChange={handleImportFileChange} />
+                </div>
+              </div>
+              {uploadError && <p className="mt-2 text-xs text-red-600">{uploadError}</p>}
+              {uploadPreview.length > 0 && (
+                <div className="mt-3 text-xs text-slate-600">
+                  <p className="font-semibold mb-1">Anteprima import (prime righe)</p>
+                  <pre className="bg-slate-50 border rounded p-2 overflow-auto">{JSON.stringify(uploadPreview, null, 2)}</pre>
+                </div>
+              )}
             </div>
             {activeTab === 'dashboard' && <DashboardView />}
             {activeTab === 'calendar' && <CalendarView />}
             {activeTab === 'customers' && <CustomerListView />}
             {activeTab === 'inventory' && <InventoryView />}
+            {activeTab === 'settings' && <SettingsView />}
             
             {activeTab === 'tickets' && (
                 <div className="space-y-6">
@@ -999,7 +1505,18 @@ export default function App() {
                                         <td className="p-4"><div className="font-bold">{t.subject}</div><div className="text-xs text-slate-500">{t.description}</div></td>
                                         <td className="p-4"><span className="bg-yellow-100 text-yellow-800 text-xs px-2 py-1 rounded">{t.status}</span></td>
                                         <td className="p-4 text-right flex justify-end gap-2">
-                                            <button onClick={(e) => {e.stopPropagation(); addToGoogleCalendar(t)}} className="text-green-600 hover:bg-green-50 p-1 rounded"><CalendarIcon size={18}/></button>
+                                            <a
+                                              href={getGoogleCalendarUrl(t) || '#'}
+                                              onClick={(e) => {
+                                                if (!getGoogleCalendarUrl(t)) e.preventDefault();
+                                                e.stopPropagation();
+                                              }}
+                                              target="_blank"
+                                              rel="noopener noreferrer"
+                                              className="text-green-600 hover:bg-green-50 p-1 rounded"
+                                            >
+                                              <CalendarIcon size={18}/>
+                                            </a>
                                             <button onClick={(e) => {e.stopPropagation(); handleDelete('tickets', t.id)}} className="text-red-400 hover:text-red-600 p-1"><Trash2 size={18}/></button>
                                         </td>
                                     </tr>
@@ -1023,7 +1540,14 @@ export default function App() {
                         <div className="grid md:grid-cols-2 gap-6">
                             <div className="space-y-4">
                                 <div className="bg-slate-50 p-4 rounded border"><h4 className="font-bold text-sm text-slate-700 uppercase mb-2">Dettagli Problema</h4><p className="text-slate-700">{currentTicketForAi.description}</p></div>
-                                <button onClick={() => addToGoogleCalendar(currentTicketForAi)} className="w-full py-3 bg-white border-2 border-green-500 text-green-600 font-bold rounded hover:bg-green-50 flex items-center justify-center gap-2"><CalendarIcon/> Salva su Google Calendar</button>
+                                <a
+                                  href={getGoogleCalendarUrl(currentTicketForAi) || '#'}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="w-full py-3 bg-white border-2 border-green-500 text-green-600 font-bold rounded hover:bg-green-50 flex items-center justify-center gap-2"
+                                >
+                                  <CalendarIcon/> Salva su Google Calendar
+                                </a>
                             </div>
                             <div className="space-y-4">
                                 <div className="bg-indigo-50 p-4 rounded border border-indigo-100">
@@ -1031,45 +1555,38 @@ export default function App() {
                                     {aiError && <div className="text-sm text-red-700 bg-red-50 border border-red-200 p-2 rounded">{aiError}</div>}
                                     <div className="bg-white border border-indigo-100 p-3 rounded text-xs text-slate-600 space-y-2 mb-3">
                                       <p className="font-semibold text-slate-800 flex items-center justify-between">
-                                        <span>Chiave DeepSeek (salvata nel browser)</span>
+                                        <span>Configurazione AI</span>
                                         <span className="text-[11px] px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 font-semibold">
                                           {keyModeLabel}
                                         </span>
                                       </p>
-                                      <input
-                                        type="password"
-                                        className="w-full border rounded p-2 text-sm"
-                                        placeholder="Incolla la chiave dal tuo account DeepSeek (VITE_DEEPSEEK_API_KEY/DEEPSEEK_API_KEY)"
-                                        value={runtimeApiKey}
-                                        onChange={(e) => setRuntimeApiKey(e.target.value)}
-                                        disabled={!allowLocalOverrides}
-                                      />
-                                      <div className="flex flex-col gap-2">
-                                        <label className="text-xs font-semibold text-slate-700">Endpoint DeepSeek</label>
-                                        <input
-                                          className="w-full border rounded p-2 text-sm"
-                                          placeholder="https://api.deepseek.com"
-                                          value={runtimeApiUrl}
-                                          onChange={(e) => setRuntimeApiUrl(e.target.value)}
-                                          disabled={!allowLocalOverrides}
-                                        />
-                                      </div>
                                       {allowLocalOverrides ? (
-                                        <p className="text-[11px] leading-snug text-slate-500">
-                                          Se hai già impostato le variabili su Railway assicurati che il deploy venga ricostruito. Sono accettati sia <code className="font-mono">VITE_DEEPSEEK_API_KEY</code> sia <code className="font-mono">DEEPSEEK_API_KEY</code>. Questo campo permette un override locale per test immediati.
+                                        <p>
+                                          Configura la chiave DeepSeek nella sezione <button onClick={() => setActiveTab('settings')} className="text-indigo-600 underline">Impostazioni</button>.
                                         </p>
                                       ) : (
-                                        <p className="text-[11px] leading-snug text-slate-500">
-                                          In produzione il browser usa sempre il proxy <code className="font-mono">/api/deepseek</code>; le chiavi locali e <code className="font-mono">VITE_DEEPSEEK_*</code> lato client sono ignorate. Configura <code className="font-mono">DEEPSEEK_API_KEY</code> sul server Railway.
+                                        <p>
+                                          Il proxy backend gestisce la chiave DeepSeek. Se l'AI non risponde, verifica la configurazione server.
                                         </p>
                                       )}
                                     </div>
+                                    {!aiEnabled && (
+                                      <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 p-2 rounded">
+                                        AI non configurata: imposta la chiave nelle impostazioni o verifica il proxy backend.
+                                      </div>
+                                    )}
                                     {aiSuggestion ? (
                                       <div className="text-sm whitespace-pre-line text-slate-700">{aiSuggestion.text}</div>
                                     ) : loadingAi ? (
                                       <div className="flex items-center gap-2 text-indigo-600"><RefreshCw className="animate-spin"/> Analisi in corso...</div>
                                     ) : (
-                                      <button onClick={() => getDeepSeekAnalysis(currentTicketForAi.description, currentTicketForAi.subject)} className="bg-indigo-600 text-white px-4 py-2 rounded text-sm w-full">Avvia Analisi DeepSeek</button>
+                                      <button
+                                        onClick={() => getDeepSeekAnalysis(currentTicketForAi.description, currentTicketForAi.subject)}
+                                        className="bg-indigo-600 text-white px-4 py-2 rounded text-sm w-full disabled:bg-indigo-300"
+                                        disabled={!aiEnabled}
+                                      >
+                                        Avvia Analisi DeepSeek
+                                      </button>
                                     )}
                                 </div>
                             </div>
@@ -1080,7 +1597,66 @@ export default function App() {
           </div>
         </main>
       </div>
+
+      {toasts.length > 0 && (
+        <div className="fixed bottom-4 right-4 z-50 space-y-2">
+          {toasts.map((toast) => (
+            <div
+              key={toast.id}
+              className={`px-4 py-2 rounded shadow text-sm ${
+                toast.tone === 'error' ? 'bg-red-600 text-white' : 'bg-emerald-600 text-white'
+              }`}
+            >
+              {toast.message}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {conflictState && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white p-6 rounded-lg w-full max-w-lg">
+            <h3 className="text-lg font-bold mb-2">Conflitto dati</h3>
+            <p className="text-sm text-slate-500 mb-4">Il backend ha una versione diversa. Scegli quale mantenere.</p>
+            <div className="grid gap-3 md:grid-cols-2 text-xs">
+              <div className="border rounded p-2">
+                <p className="font-semibold mb-1">Versione locale</p>
+                <pre className="whitespace-pre-wrap">{JSON.stringify(conflictState.local, null, 2)}</pre>
+              </div>
+              <div className="border rounded p-2">
+                <p className="font-semibold mb-1">Versione server</p>
+                <pre className="whitespace-pre-wrap">{JSON.stringify(conflictState.remote, null, 2)}</pre>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 mt-4">
+              <button onClick={() => resolveConflictAction('server')} className="px-4 py-2 text-slate-600">Usa server</button>
+              <button onClick={() => resolveConflictAction('merge')} className="px-4 py-2 bg-amber-100 text-amber-700 rounded">Unisci</button>
+              <button onClick={() => resolveConflictAction('local')} className="px-4 py-2 bg-blue-600 text-white rounded">Usa locale</button>
+            </div>
+          </div>
+        </div>
+      )}
       
+      {showTokenPrompt && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white p-6 rounded-lg w-full max-w-md">
+            <h3 className="text-xl font-bold mb-2">Configura il token API</h3>
+            <p className="text-sm text-slate-500 mb-4">Inserisci il token per sbloccare la sincronizzazione con il backend.</p>
+            <input
+              type="password"
+              className="w-full border rounded p-2 text-sm mb-3"
+              placeholder="Token API"
+              value={tokenInput}
+              onChange={(e) => setTokenInput(e.target.value)}
+            />
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setShowTokenPrompt(false)} className="px-4 py-2 text-slate-500">Più tardi</button>
+              <button onClick={handleSaveToken} className="px-4 py-2 bg-blue-600 text-white rounded">Salva</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showNewTicket && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
             <div className="bg-white p-6 rounded-lg w-full max-w-md">
@@ -1097,7 +1673,12 @@ export default function App() {
                     </div>
                     <textarea className="w-full border p-2 rounded" placeholder="Descrizione dettagliata (per AI)" value={newTicket.description} onChange={e => setNewTicket({...newTicket, description: e.target.value})} />
                 </div>
-                <div className="flex justify-end gap-2 mt-4"><button onClick={() => setShowNewTicket(false)} className="px-4 py-2 text-slate-500">Annulla</button><button onClick={handleAddTicket} className="px-4 py-2 bg-blue-600 text-white rounded">Salva</button></div>
+                <div className="flex justify-end gap-2 mt-4">
+                  <button onClick={() => setShowNewTicket(false)} className="px-4 py-2 text-slate-500">Annulla</button>
+                  <button onClick={handleAddTicket} className="px-4 py-2 bg-blue-600 text-white rounded flex items-center gap-2" disabled={isSavingTicket}>
+                    {isSavingTicket && <RefreshCw size={16} className="animate-spin"/>} Salva
+                  </button>
+                </div>
             </div>
         </div>
       )}
@@ -1112,7 +1693,12 @@ export default function App() {
                     <input className="w-full border p-2 rounded" placeholder="Email" value={newCustomer.email} onChange={e => setNewCustomer({...newCustomer, email: e.target.value})} />
                     <input className="w-full border p-2 rounded" placeholder="Indirizzo" value={newCustomer.address} onChange={e => setNewCustomer({...newCustomer, address: e.target.value})} />
                 </div>
-                <div className="flex justify-end gap-2 mt-4"><button onClick={() => setShowNewCustomer(false)} className="px-4 py-2 text-slate-500">Annulla</button><button onClick={handleAddCustomer} className="px-4 py-2 bg-green-600 text-white rounded">Salva</button></div>
+                <div className="flex justify-end gap-2 mt-4">
+                  <button onClick={() => setShowNewCustomer(false)} className="px-4 py-2 text-slate-500">Annulla</button>
+                  <button onClick={handleAddCustomer} className="px-4 py-2 bg-green-600 text-white rounded flex items-center gap-2" disabled={isSavingCustomer}>
+                    {isSavingCustomer && <RefreshCw size={16} className="animate-spin"/>} Salva
+                  </button>
+                </div>
             </div>
         </div>
       )}
@@ -1130,7 +1716,12 @@ export default function App() {
                     </div>
                     <input type="number" className="w-full border p-2 rounded" placeholder="Quantità Minima (Allarme)" value={newPart.minQty} onChange={e => setNewPart({...newPart, minQty: parseInt(e.target.value)})} />
                 </div>
-                <div className="flex justify-end gap-2 mt-4"><button onClick={() => setShowNewPart(false)} className="px-4 py-2 text-slate-500">Annulla</button><button onClick={handleAddPart} className="px-4 py-2 bg-purple-600 text-white rounded">Salva</button></div>
+                <div className="flex justify-end gap-2 mt-4">
+                  <button onClick={() => setShowNewPart(false)} className="px-4 py-2 text-slate-500">Annulla</button>
+                  <button onClick={handleAddPart} className="px-4 py-2 bg-purple-600 text-white rounded flex items-center gap-2" disabled={isSavingPart}>
+                    {isSavingPart && <RefreshCw size={16} className="animate-spin"/>} Salva
+                  </button>
+                </div>
             </div>
         </div>
       )}

@@ -1,0 +1,41 @@
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import crypto from 'node:crypto'
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+
+const loadEnvFile = () => {
+  const envPath = path.join(__dirname, '.env')
+  try {
+    const content = readFileSync(envPath, 'utf-8')
+    content.split(/\r?\n/).forEach((line) => {
+      if (!line || line.trim().startsWith('#')) return
+      const [key, ...rest] = line.split('=')
+      if (!key) return
+      const value = rest.join('=').trim().replace(/^"|"$/g, '')
+      if (!(key in process.env)) {
+        process.env[key] = value
+      }
+    })
+  } catch {
+    // .env opzionale
+  }
+}
+
+loadEnvFile()
+
+const rawDeepSeekUrl = process.env.DEEPSEEK_API_URL || process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com'
+const rawRagUrl = process.env.RAG_API_URL || ''
+
+export const config = {
+  PORT: process.env.PORT || 4173,
+  NODE_ENV: process.env.NODE_ENV || 'development',
+  DEEPSEEK_API_URL: rawDeepSeekUrl.replace(/\/$/, ''),
+  DEEPSEEK_API_KEY: (process.env.DEEPSEEK_API_KEY || '').trim(),
+  RAG_API_URL: rawRagUrl ? rawRagUrl.replace(/\/$/, '') : '',
+  API_TOKEN: (process.env.API_TOKEN || '').trim(),
+  DEFAULT_TOKEN: (process.env.DEFAULT_API_TOKEN || '').trim() || crypto.randomUUID(),
+  DB_PATH: process.env.DB_PATH || path.join(__dirname, 'data', 'gestionale.db'),
+}
