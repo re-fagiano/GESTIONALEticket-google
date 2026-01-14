@@ -831,7 +831,7 @@ export default function App() {
     setExportNotice('Backup JSON scaricato con successo. Controlla la cartella Download.');
   };
 
-  const handleDownloadLatestBackup = () => {
+  const handleDownloadAutoBackup = () => {
     if (!latestBackup) {
       setBackupStatus('Nessun backup automatico disponibile.');
       return;
@@ -1332,7 +1332,7 @@ export default function App() {
     </div>
   );
 
-  const SettingsView = () => (
+  const SettingsPanel = () => (
     <div className="space-y-6">
       <div className="bg-white rounded shadow p-4 border border-slate-200">
         <h2 className="text-lg font-bold text-slate-800 mb-2">Token API</h2>
@@ -1518,7 +1518,7 @@ export default function App() {
                 </div>
                 <div className="flex flex-wrap gap-2 justify-end">
                   <button onClick={handleDownloadBackup} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-800 text-white rounded hover:bg-slate-700"><Download size={16}/> Backup JSON</button>
-                  <button onClick={handleDownloadLatestBackup} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded hover:bg-slate-200 border"><Download size={16}/> Ultimo Backup</button>
+                  <button onClick={handleDownloadAutoBackup} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded hover:bg-slate-200 border"><Download size={16}/> Ultimo Backup</button>
                   <button onClick={handleRestoreLatestBackup} className="flex items-center gap-2 px-3 py-2 text-sm bg-amber-50 text-amber-700 rounded hover:bg-amber-100 border border-amber-200">Ripristina Backup</button>
                   <button onClick={handleSelectBackupFile} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded hover:bg-slate-200 border"><Upload size={16}/> Importa Backup</button>
                   <button onClick={handlePersistStorage} className="flex items-center gap-2 px-3 py-2 text-sm bg-emerald-600 text-white rounded hover:bg-emerald-500" disabled={isPersistingStorage}>
@@ -1543,21 +1543,21 @@ export default function App() {
                   <p className="text-xs text-slate-500">Carica un CSV con colonne POSIZIONE, CODICE, DESCRIZIONE, PREZZO AL PUBBLICO, QUANTITA.</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  <button onClick={handleSelectImportFile} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded hover:bg-slate-200 border">Seleziona file</button>
-                  <button onClick={handleImportExcel} className="flex items-center gap-2 px-3 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-500" disabled={isUploadingImport}>
-                    {isUploadingImport ? <RefreshCw size={16} className="animate-spin"/> : <Upload size={16}/>} Importa
+                  <button onClick={handleSelectInventoryFile} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded hover:bg-slate-200 border" disabled={isImportingInventory}>Seleziona file</button>
+                  <button onClick={applyInventoryImport} className="flex items-center gap-2 px-3 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-500" disabled={isImportingInventory || inventoryImportPreview.length === 0}>
+                    {isImportingInventory ? <RefreshCw size={16} className="animate-spin"/> : <Upload size={16}/>} Importa
                   </button>
                   <a href="/api/import/template" className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-800 text-white rounded hover:bg-slate-700" target="_blank" rel="noopener noreferrer">
                     <Download size={16}/> Template CSV
                   </a>
-                  <input ref={importFileRef} type="file" accept=".csv" className="hidden" onChange={handleImportFileChange} />
+                  <input ref={inventoryFileInputRef} type="file" accept=".csv" className="hidden" onChange={handleInventoryFileChange} />
                 </div>
               </div>
-              {uploadError && <p className="mt-2 text-xs text-red-600">{uploadError}</p>}
-              {uploadPreview.length > 0 && (
+              {inventoryImportHeaderError && <p className="mt-2 text-xs text-red-600">{inventoryImportHeaderError}</p>}
+              {inventoryImportPreview.length > 0 && (
                 <div className="mt-3 text-xs text-slate-600">
                   <p className="font-semibold mb-1">Anteprima import (prime righe)</p>
-                  <pre className="bg-slate-50 border rounded p-2 overflow-auto">{JSON.stringify(uploadPreview, null, 2)}</pre>
+                  <pre className="bg-slate-50 border rounded p-2 overflow-auto">{JSON.stringify(inventoryImportPreview, null, 2)}</pre>
                 </div>
               )}
             </div>
@@ -1565,7 +1565,7 @@ export default function App() {
             {activeTab === 'calendar' && <CalendarView />}
             {activeTab === 'customers' && <CustomerListView />}
             {activeTab === 'inventory' && <InventoryView />}
-            {activeTab === 'settings' && <SettingsView />}
+            {activeTab === 'settings' && <SettingsPanel />}
             
             {activeTab === 'tickets' && (
                 <div className="space-y-6">
