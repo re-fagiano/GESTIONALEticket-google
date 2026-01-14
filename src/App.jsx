@@ -924,6 +924,26 @@ export default function App() {
     fileInputRef.current?.click();
   };
 
+  const handlePersistStorage = async () => {
+    if (!navigator?.storage?.persist) {
+      setStorageWarning('Il browser non supporta la richiesta di storage persistente.');
+      return;
+    }
+    setIsPersistingStorage(true);
+    try {
+      const granted = await navigator.storage.persist();
+      if (granted) {
+        setBackupStatus('Memoria persistente abilitata: i dati non verranno eliminati automaticamente.');
+      } else {
+        setBackupStatus('Memoria persistente non concessa: continua a fare backup manuali.');
+      }
+    } catch (error) {
+      setStorageWarning('Errore durante la richiesta di storage persistente.');
+    } finally {
+      setIsPersistingStorage(false);
+    }
+  };
+
   const resetInventoryImportState = () => {
     setInventoryImportPreview([]);
     setInventoryImportHeaderError('');
