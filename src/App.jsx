@@ -1301,7 +1301,7 @@ export default function App() {
       <input
         ref={inventoryFileInputRef}
         type="file"
-        accept=".csv, .xlsx, text/csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        accept=".csv, text/csv"
         className="hidden"
         onChange={handleInventoryFileChange}
       />
@@ -1570,8 +1570,8 @@ export default function App() {
             <div className="bg-white rounded shadow p-4 mb-6 border border-slate-200">
               <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <div>
-                  <p className="text-sm font-semibold text-slate-700 flex items-center gap-2"><Upload size={16}/> Import Excel/CSV Magazzino</p>
-                  <p className="text-xs text-slate-500">Carica un CSV con colonne id, name, location, qty, price, minQty. Gli ID duplicati aggiornano le quantità.</p>
+                  <p className="text-sm font-semibold text-slate-700 flex items-center gap-2"><Upload size={16}/> Import CSV Magazzino</p>
+                  <p className="text-xs text-slate-500">Carica un CSV con colonne POSIZIONE, CODICE, DESCRIZIONE, PREZZO AL PUBBLICO, QUANTITA.</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <button onClick={handleSelectImportFile} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded hover:bg-slate-200 border">Seleziona file</button>
@@ -1581,7 +1581,7 @@ export default function App() {
                   <a href="/api/import/template" className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-800 text-white rounded hover:bg-slate-700" target="_blank" rel="noopener noreferrer">
                     <Download size={16}/> Template CSV
                   </a>
-                  <input ref={importFileRef} type="file" accept=".csv,.xlsx" className="hidden" onChange={handleImportFileChange} />
+                  <input ref={importFileRef} type="file" accept=".csv" className="hidden" onChange={handleImportFileChange} />
                 </div>
               </div>
               {uploadError && <p className="mt-2 text-xs text-red-600">{uploadError}</p>}

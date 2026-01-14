@@ -1,6 +1,3 @@
-import Papa from 'papaparse';
-import * as XLSX from 'xlsx';
-
 export const INVENTORY_HEADERS = [
   'POSIZIONE',
   'CODICE',
@@ -53,6 +50,61 @@ const buildRowMap = (row) => {
 };
 
 const isRowEmpty = (rowMap) => Object.values(rowMap).every((value) => normalizeValue(value) === '');
+
+const parseCsvText = (text) => {
+  const rows = [];
+  let row = [];
+  let value = '';
+  let inQuotes = false;
+
+  const pushValue = () => {
+    row.push(value);
+    value = '';
+  };
+
+  const pushRow = () => {
+    rows.push(row);
+    row = [];
+  };
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const nextChar = text[index + 1];
+
+    if (char === '"') {
+      if (inQuotes && nextChar === '"') {
+        value += '"';
+        index += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+
+    if (!inQuotes && char === ',') {
+      pushValue();
+      continue;
+    }
+
+    if (!inQuotes && (char === '\n' || char === '\r')) {
+      if (char === '\r' && nextChar === '\n') {
+        index += 1;
+      }
+      pushValue();
+      pushRow();
+      continue;
+    }
+
+    value += char;
+  }
+
+  if (value.length > 0 || row.length > 0) {
+    pushValue();
+    pushRow();
+  }
+
+  return rows.filter((rowValues) => rowValues.some((entry) => normalizeValue(entry) !== ''));
+};
 
 export const parseInventoryRows = (rows = [], { existingCodes = new Set() } = {}) => {
   const entries = [];
@@ -111,17 +163,19 @@ export const parseInventoryFile = async (file, existingCodes = new Set()) => {
   const extension = file?.name?.split('.').pop()?.toLowerCase();
 
   if (extension === 'xlsx') {
-    const buffer = await file.arrayBuffer();
-    const workbook = XLSX.read(buffer, { type: 'array' });
-    const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-    const [headerRow, ...dataRows] = XLSX.utils.sheet_to_json(firstSheet, { header: 1, defval: '' });
-    const validation = validateInventoryHeaders(headerRow || []);
+    return { headerError: 'Formato XLSX non supportato. Usa un file CSV.', entries: [] };
+  }
+
+  if (extension === 'csv') {
+    const text = await file.text();
+    const [headerRow = [], ...dataRows] = parseCsvText(text);
+    const validation = validateInventoryHeaders(headerRow);
     if (!validation.valid) {
       return { headerError: validation.message, entries: [] };
     }
     const rows = dataRows.map((row) => {
       const rowObj = {};
-      INVENTORY_HEADERS.forEach((header, index) => {
+      headerRow.forEach((header, index) => {
         rowObj[header] = row[index] ?? '';
       });
       return rowObj;
@@ -129,21 +183,5 @@ export const parseInventoryFile = async (file, existingCodes = new Set()) => {
     return { headerError: null, entries: parseInventoryRows(rows, { existingCodes }) };
   }
 
-  if (extension === 'csv') {
-    const parsed = await new Promise((resolve, reject) => {
-      Papa.parse(file, {
-        header: true,
-        skipEmptyLines: true,
-        complete: (results) => resolve(results),
-        error: (error) => reject(error)
-      });
-    });
-    const validation = validateInventoryHeaders(parsed.meta.fields || []);
-    if (!validation.valid) {
-      return { headerError: validation.message, entries: [] };
-    }
-    return { headerError: null, entries: parseInventoryRows(parsed.data, { existingCodes }) };
-  }
-
-  return { headerError: 'Formato file non supportato. Usa CSV o XLSX.', entries: [] };
+  return { headerError: 'Formato file non supportato. Usa CSV.', entries: [] };
 };
