@@ -310,6 +310,22 @@ export default function App() {
   const [showTokenPrompt, setShowTokenPrompt] = useState(false);
   const [syncStatus, setSyncStatus] = useState(null);
   const [exportNotice, setExportNotice] = useState(null);
+  // Stato di connettività del backend (assume offline di default)
+  const [backendOnline, setBackendOnline] = useState(false);
+
+  // Stato per i messaggi di retry quando le chiamate API falliscono
+  const [retryStatus, setRetryStatus] = useState('');
+
+  // Stato per l’ultimo backup automatico e relativo timestamp
+  const [latestBackup, setLatestBackup] = useState(null);
+  const [autoBackupAt, setAutoBackupAt] = useState(null);
+
+  // Stato per la notifica dei backup manuali/automatici
+  const [backupStatus, setBackupStatus] = useState('');
+
+  // Stato che indica se la storage persistente è in fase di richiesta
+  const [isPersistingStorage, setIsPersistingStorage] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
 
   // --- CACHE LOCALE ---
   useEffect(() => {
