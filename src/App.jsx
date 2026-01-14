@@ -22,6 +22,7 @@ import {
   Upload,
   FileSpreadsheet
 } from 'lucide-react';
+import { INVENTORY_HEADERS, parseInventoryFile } from './utils/inventoryImport';
 
 const isBrowser = typeof window !== 'undefined';
 const isLocalhost = isBrowser && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
@@ -182,14 +183,25 @@ const sanitizeInventoryItem = (item, idx = 0) => {
   const parsedQty = Number.isFinite(Number(item.qty)) ? Number(item.qty) : 0;
   const parsedPrice = Number.isFinite(Number(item.price)) ? Number(item.price) : 0;
   const parsedMinQty = Number.isFinite(Number(item.minQty)) ? Number(item.minQty) : 0;
+  const safeCode =
+    typeof item.code === 'string' && item.code.trim()
+      ? item.code.trim()
+      : (typeof item.id === 'string' && item.id.trim() ? item.id.trim() : `RIC-${idx + 1}`);
+  const safeDescription =
+    typeof item.description === 'string' && item.description.trim()
+      ? item.description.trim()
+      : (typeof item.name === 'string' ? item.name.trim() : '');
 
   return {
     id: item.id || `${Date.now()}-${idx}`,
+    code: safeCode,
     name: typeof item.name === 'string' ? item.name.trim() : `Ricambio #${idx + 1}`,
+    description: safeDescription,
     location: typeof item.location === 'string' ? item.location.trim() : '',
     qty: parsedQty,
     price: parsedPrice,
     minQty: parsedMinQty,
+    pendingSync: Boolean(item.pendingSync),
     updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : nowIso(),
     version: Number.isFinite(Number(item.version)) ? Number(item.version) : 1
   };
@@ -211,9 +223,9 @@ const initialTickets = [
 ];
 
 const initialInventory = [
-  { id: 'p1', name: 'Pompa Scarico Universale', location: 'AF-01-A', qty: 3, price: 25.00, minQty: 5 },
-  { id: 'p2', name: 'Cuscinetti Cestello', location: 'BF-02-C', qty: 10, price: 15.50, minQty: 2 },
-  { id: 'p3', name: 'Scheda Elettronica Samsung', location: 'SEC-09', qty: 1, price: 120.00, minQty: 1 }
+  { id: 'p1', code: 'POM-001', name: 'Pompa Scarico Universale', description: 'Pompa Scarico Universale', location: 'AF-01-A', qty: 3, price: 25.00, minQty: 5 },
+  { id: 'p2', code: 'CUS-002', name: 'Cuscinetti Cestello', description: 'Cuscinetti Cestello', location: 'BF-02-C', qty: 10, price: 15.50, minQty: 2 },
+  { id: 'p3', code: 'SCH-003', name: 'Scheda Elettronica Samsung', description: 'Scheda Elettronica Samsung', location: 'SEC-09', qty: 1, price: 120.00, minQty: 1 }
 ];
 
 export default function App() {
@@ -231,6 +243,7 @@ export default function App() {
   const [storageWarning, setStorageWarning] = useState(null);
   const [apiToken, setApiToken] = useState(() => safeGetItem('apiToken', isLocalhost ? 'dev-token' : ''));
   const [syncStatus, setSyncStatus] = useState(null);
+  const [exportNotice, setExportNotice] = useState(null);
 
   // --- CACHE LOCALE ---
   useEffect(() => {
@@ -262,6 +275,12 @@ export default function App() {
       setStorageWarning('Impossibile salvare il token API nel browser: storage disabilitato.');
     }
   }, [apiToken]);
+
+  useEffect(() => {
+    if (!exportNotice) return;
+    const timer = setTimeout(() => setExportNotice(null), 4000);
+    return () => clearTimeout(timer);
+  }, [exportNotice]);
 
   // Modal & AI State
   const [showNewTicket, setShowNewTicket] = useState(false);
@@ -364,9 +383,14 @@ export default function App() {
     subject: '', description: '', customerId: '', status: 'aperto',
     date: new Date().toISOString().split('T')[0], time: '09:00'
   });
-  const [newPart, setNewPart] = useState({ name: '', location: '', qty: 1, price: 0, minQty: 5 });
+  const [newPart, setNewPart] = useState({ code: '', name: '', description: '', location: '', qty: 1, price: 0, minQty: 5 });
   const [importError, setImportError] = useState('');
   const fileInputRef = useRef(null);
+  const inventoryFileInputRef = useRef(null);
+  const [inventoryImportPreview, setInventoryImportPreview] = useState([]);
+  const [inventoryImportHeaderError, setInventoryImportHeaderError] = useState('');
+  const [showInventoryImportModal, setShowInventoryImportModal] = useState(false);
+  const [isImportingInventory, setIsImportingInventory] = useState(false);
 
   // --- AZIONI ---
   const handleApiError = (error, fallback) => {
@@ -413,14 +437,18 @@ export default function App() {
 
   const handleAddPart = async () => {
     if (!newPart.name) return;
-    const part = sanitizeInventoryItem({ ...newPart, id: crypto?.randomUUID?.() || Date.now().toString() }, inventory.length);
+    const part = sanitizeInventoryItem({
+      ...newPart,
+      description: newPart.description || newPart.name,
+      id: crypto?.randomUUID?.() || Date.now().toString()
+    }, inventory.length);
     try {
       const created = await apiFetch('/api/inventory', {
         method: 'POST',
         body: JSON.stringify(part)
       });
       setInventory((prev) => sanitizeInventoryList([...prev, created], initialInventory));
-      setNewPart({ name: '', location: '', qty: 1, price: 0, minQty: 5 });
+      setNewPart({ code: '', name: '', description: '', location: '', qty: 1, price: 0, minQty: 5 });
       setShowNewPart(false);
       setSyncStatus('Ricambio salvato nel backend.');
     } catch (error) {
@@ -506,6 +534,7 @@ export default function App() {
     link.href = URL.createObjectURL(blob);
     link.download = filename;
     link.click();
+    setExportNotice(`File scaricato con successo. Cerca \"${filename}\" nella cartella Download.`);
   };
 
   const handleExportTickets = () => {
@@ -517,8 +546,14 @@ export default function App() {
 
   const handleExportInventory = () => {
     exportToCsv('magazzino_export.csv',
-      ['ID', 'Prodotto', 'Posizione', 'Quantità', 'Prezzo (€)', 'Soglia Minima'],
-      inventory.map(i => [i.id, i.name, i.location, i.qty, i.price, i.minQty])
+      INVENTORY_HEADERS,
+      inventory.map(i => [
+        i.location,
+        i.code,
+        i.description || i.name,
+        i.price,
+        i.qty
+      ])
     );
   };
 
@@ -542,6 +577,7 @@ export default function App() {
     link.href = URL.createObjectURL(blob);
     link.download = 'gestionale_backup.json';
     link.click();
+    setExportNotice('Backup JSON scaricato con successo. Controlla la cartella Download.');
   };
 
   const handleImportBackup = (event) => {
@@ -599,6 +635,115 @@ export default function App() {
   const handleSelectBackupFile = () => {
     setImportError('');
     fileInputRef.current?.click();
+  };
+
+  const resetInventoryImportState = () => {
+    setInventoryImportPreview([]);
+    setInventoryImportHeaderError('');
+    setShowInventoryImportModal(false);
+    setIsImportingInventory(false);
+  };
+
+  const handleSelectInventoryFile = () => {
+    setInventoryImportHeaderError('');
+    inventoryFileInputRef.current?.click();
+  };
+
+  const handleInventoryFileChange = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setIsImportingInventory(true);
+    try {
+      const existingCodes = new Set(inventory.map((item) => item.code));
+      const { headerError, entries } = await parseInventoryFile(file, existingCodes);
+      setInventoryImportHeaderError(headerError || '');
+      setInventoryImportPreview(entries);
+      setShowInventoryImportModal(true);
+    } catch (error) {
+      setInventoryImportHeaderError(error?.message || 'Errore durante la lettura del file.');
+      setInventoryImportPreview([]);
+      setShowInventoryImportModal(true);
+    } finally {
+      setIsImportingInventory(false);
+      event.target.value = '';
+    }
+  };
+
+  const applyInventoryImport = async () => {
+    const validEntries = inventoryImportPreview.filter((entry) => entry.errors.length === 0);
+    if (validEntries.length === 0) return;
+
+    setIsImportingInventory(true);
+    const inventoryByCode = new Map(inventory.map((item) => [item.code, item]));
+    const updatedInventory = [...inventory];
+    const updates = [];
+    const creations = [];
+
+    validEntries.forEach((entry) => {
+      const existing = inventoryByCode.get(entry.code);
+      if (existing) {
+        const merged = sanitizeInventoryItem({
+          ...existing,
+          description: entry.description || existing.description,
+          name: entry.description || existing.name,
+          location: entry.location || existing.location,
+          qty: Number(existing.qty) + Number(entry.quantity),
+          price: entry.price ?? existing.price,
+          pendingSync: !apiToken || existing.pendingSync
+        });
+        const existingIndex = updatedInventory.findIndex((item) => item.id === existing.id);
+        if (existingIndex >= 0) {
+          updatedInventory.splice(existingIndex, 1, merged);
+        } else {
+          updatedInventory.push(merged);
+        }
+        updates.push(merged);
+      } else {
+        const newItem = sanitizeInventoryItem({
+          id: crypto?.randomUUID?.() || Date.now().toString(),
+          code: entry.code,
+          name: entry.description,
+          description: entry.description,
+          location: entry.location,
+          qty: entry.quantity,
+          price: entry.price,
+          minQty: 0,
+          pendingSync: !apiToken
+        }, updatedInventory.length);
+        updatedInventory.push(newItem);
+        creations.push(newItem);
+      }
+    });
+
+    setInventory(sanitizeInventoryList(updatedInventory, initialInventory));
+    setSyncStatus(`Importazione completata: ${validEntries.length} righe valide.`);
+
+    if (apiToken) {
+      try {
+        await Promise.all([
+          ...creations.map((item) => apiFetch('/api/inventory', {
+            method: 'POST',
+            body: JSON.stringify(item)
+          })),
+          ...updates.map((item) => apiFetch(`/api/inventory/${item.id}`, {
+            method: 'PUT',
+            body: JSON.stringify(item)
+          }))
+        ]);
+        setInventory((prev) => prev.map((item) => ({ ...item, pendingSync: false })));
+        setSyncStatus('Magazzino sincronizzato con il backend.');
+      } catch (error) {
+        setInventory((prev) => prev.map((item) => ({
+          ...item,
+          pendingSync: updates.some((update) => update.id === item.id) || creations.some((create) => create.id === item.id) || item.pendingSync
+        })));
+        handleApiError(error, 'Errore durante la sincronizzazione del magazzino importato.');
+      }
+    } else {
+      setSyncStatus('Import completato: articoli in attesa di sincronizzazione.');
+    }
+
+    resetInventoryImportState();
   };
 
   // --- GOOGLE CALENDAR LINK ---
@@ -821,13 +966,17 @@ export default function App() {
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-bold text-slate-800">Magazzino Ricambi</h2>
-        <button onClick={() => setShowNewPart(true)} className="bg-purple-600 text-white px-4 py-2 rounded flex gap-2"><Plus/> Aggiungi Articolo</button>
+        <div className="flex flex-wrap gap-2">
+          <button onClick={handleSelectInventoryFile} className="bg-slate-100 text-slate-700 px-4 py-2 rounded flex gap-2 items-center border disabled:opacity-60" disabled={isImportingInventory}><Upload size={18}/> {isImportingInventory ? 'Caricamento...' : 'Importa Magazzino'}</button>
+          <button onClick={() => setShowNewPart(true)} className="bg-purple-600 text-white px-4 py-2 rounded flex gap-2"><Plus/> Aggiungi Articolo</button>
+        </div>
       </div>
       <div className="bg-white rounded shadow overflow-hidden">
         <table className="w-full text-left">
           <thead className="bg-slate-100 uppercase text-sm font-semibold text-slate-600">
             <tr>
                 <th className="p-4">Prodotto</th>
+                <th className="p-4">Codice</th>
                 <th className="p-4">Posizione</th>
                 <th className="p-4">Prezzo</th>
                 <th className="p-4 text-center">Quantità</th>
@@ -838,9 +987,16 @@ export default function App() {
             {inventory.map(item => (
               <tr key={item.id} className="hover:bg-slate-50">
                 <td className="p-4 font-medium text-slate-800">
-                  {item.name}
+                  <div className="flex flex-col">
+                    <span>{item.name}</span>
+                    {item.description && item.description !== item.name && (
+                      <span className="text-xs text-slate-500">{item.description}</span>
+                    )}
+                  </div>
                   {item.qty <= item.minQty && <span className="ml-2 text-xs bg-red-100 text-red-600 px-2 py-0.5 rounded">Scorta Bassa</span>}
+                  {item.pendingSync && <span className="ml-2 text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded">Da sincronizzare</span>}
                 </td>
+                <td className="p-4 text-sm text-slate-600 font-mono">{item.code || 'N/D'}</td>
                 <td className="p-4">
                     <span className="bg-slate-200 text-slate-700 text-xs font-mono font-bold px-2 py-1 rounded border border-slate-300">
                         {item.location || 'N/D'}
@@ -860,6 +1016,13 @@ export default function App() {
           </tbody>
         </table>
       </div>
+      <input
+        ref={inventoryFileInputRef}
+        type="file"
+        accept=".csv, .xlsx, text/csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        className="hidden"
+        onChange={handleInventoryFileChange}
+      />
     </div>
   );
 
@@ -922,6 +1085,9 @@ export default function App() {
     );
   };
 
+  const validInventoryImportCount = inventoryImportPreview.filter((entry) => entry.errors.length === 0).length;
+  const hasInventoryImportErrors = Boolean(inventoryImportHeaderError) || inventoryImportPreview.some((entry) => entry.errors.length > 0);
+
   return (
     <div className="flex h-screen bg-slate-100 font-sans text-slate-900 overflow-hidden">
       <Sidebar />
@@ -935,6 +1101,11 @@ export default function App() {
             {storageWarning && (
               <div className="bg-amber-50 border border-amber-200 text-amber-800 text-sm p-3 rounded mb-4">
                 {storageWarning}
+              </div>
+            )}
+            {exportNotice && (
+              <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm p-3 rounded mb-4">
+                {exportNotice}
               </div>
             )}
             <div className="bg-white rounded shadow p-4 mb-6 border border-slate-200">
@@ -1081,6 +1252,70 @@ export default function App() {
         </main>
       </div>
       
+      {showInventoryImportModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white p-6 rounded-lg w-full max-w-4xl max-h-[80vh] overflow-hidden flex flex-col">
+            <h3 className="text-xl font-bold mb-4">Anteprima Importazione Magazzino</h3>
+            {inventoryImportHeaderError ? (
+              <div className="bg-red-50 border border-red-200 text-red-700 p-3 rounded">
+                {inventoryImportHeaderError}
+              </div>
+            ) : (
+              <div className="flex-1 overflow-auto border rounded">
+                <table className="w-full text-left text-sm">
+                  <thead className="bg-slate-100 uppercase text-xs font-semibold text-slate-600 sticky top-0">
+                    <tr>
+                      <th className="p-3">Riga</th>
+                      <th className="p-3">Codice</th>
+                      <th className="p-3">Descrizione</th>
+                      <th className="p-3">Posizione</th>
+                      <th className="p-3 text-right">Prezzo</th>
+                      <th className="p-3 text-right">Quantità</th>
+                      <th className="p-3">Stato</th>
+                      <th className="p-3">Errori</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {inventoryImportPreview.map((row) => (
+                      <tr key={`${row.code}-${row.rowIndex}`} className={row.errors.length ? 'bg-red-50' : ''}>
+                        <td className="p-3 text-slate-500">{row.rowIndex}</td>
+                        <td className="p-3 font-mono text-slate-700">{row.code || '-'}</td>
+                        <td className="p-3 text-slate-700">{row.description || '-'}</td>
+                        <td className="p-3 text-slate-700">{row.location || 'N/D'}</td>
+                        <td className="p-3 text-right">{row.price ?? '-'}</td>
+                        <td className="p-3 text-right">{row.quantity ?? '-'}</td>
+                        <td className="p-3">
+                          <span className={`text-xs px-2 py-0.5 rounded ${row.status === 'update' ? 'bg-blue-100 text-blue-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                            {row.status === 'update' ? 'Aggiorna' : 'Nuovo'}
+                          </span>
+                        </td>
+                        <td className="p-3 text-xs text-red-700">{row.errors.join(', ')}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <div className="flex items-center justify-between mt-4 text-sm text-slate-500">
+              <span>{validInventoryImportCount} righe valide</span>
+              {hasInventoryImportErrors && !inventoryImportHeaderError && (
+                <span className="text-red-600">Correggi le righe evidenziate prima di importare.</span>
+              )}
+            </div>
+            <div className="flex justify-end gap-2 mt-4">
+              <button onClick={resetInventoryImportState} className="px-4 py-2 text-slate-500" disabled={isImportingInventory}>Annulla</button>
+              <button
+                onClick={applyInventoryImport}
+                className="px-4 py-2 bg-purple-600 text-white rounded disabled:opacity-60"
+                disabled={isImportingInventory || Boolean(inventoryImportHeaderError) || validInventoryImportCount === 0 || hasInventoryImportErrors}
+              >
+                {isImportingInventory ? 'Importazione...' : 'Conferma Importazione'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showNewTicket && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
             <div className="bg-white p-6 rounded-lg w-full max-w-md">
@@ -1122,7 +1357,9 @@ export default function App() {
             <div className="bg-white p-6 rounded-lg w-full max-w-md">
                 <h3 className="text-xl font-bold mb-4">Nuovo Articolo Magazzino</h3>
                 <div className="space-y-3">
+                    <input className="w-full border p-2 rounded" placeholder="Codice Articolo (es. RIC-001)" value={newPart.code} onChange={e => setNewPart({...newPart, code: e.target.value})} />
                     <input className="w-full border p-2 rounded" placeholder="Nome Prodotto (es. Cuscinetti)" value={newPart.name} onChange={e => setNewPart({...newPart, name: e.target.value})} />
+                    <input className="w-full border p-2 rounded" placeholder="Descrizione (opzionale)" value={newPart.description} onChange={e => setNewPart({...newPart, description: e.target.value})} />
                     <input className="w-full border p-2 rounded" placeholder="Codice Posizione (es. af00021)" value={newPart.location} onChange={e => setNewPart({...newPart, location: e.target.value})} />
                     <div className="flex gap-2">
                         <input type="number" className="w-full border p-2 rounded" placeholder="Quantità" value={newPart.qty} onChange={e => setNewPart({...newPart, qty: parseInt(e.target.value)})} />
