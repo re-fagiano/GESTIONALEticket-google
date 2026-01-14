@@ -367,18 +367,16 @@ const parseMultipart = async (req) => {
   const boundaryMatch = contentType.match(/boundary=([^;]+)/)
   if (!boundaryMatch) return { fields: {}, files: [] }
   const boundary = `--${boundaryMatch[1]}`
-  const chunks = []
+  let body = ''
   for await (const chunk of req) {
-    chunks.push(chunk)
+    body += chunk
   }
-  const bodyBuffer = Buffer.concat(chunks)
-  const body = bodyBuffer.toString('binary')
   const parts = body.split(boundary).filter((part) => part.trim() && part.trim() !== '--')
   const fields = {}
   const files = []
   parts.forEach((part) => {
     const [rawHeaders, ...rest] = part.split('\r\n\r\n')
-    const content = rest.join('\r\n\r\n').replace(/\r\n--$/, '')
+    const content = rest.join('\r\n\r\n').replace(/\r\n--$/, '').trim()
     const headerLines = rawHeaders.split('\r\n').filter(Boolean)
     const disposition = headerLines.find((line) => line.toLowerCase().startsWith('content-disposition'))
     if (!disposition) return
@@ -387,21 +385,16 @@ const parseMultipart = async (req) => {
     const fieldName = nameMatch ? nameMatch[1] : null
     if (!fieldName) return
     if (fileMatch) {
-      const contentBuffer = Buffer.from(content, 'binary')
-      files.push({ fieldName, filename: fileMatch[1], content: contentBuffer })
+      files.push({ fieldName, filename: fileMatch[1], content })
     } else {
-      fields[fieldName] = content.trim()
+      fields[fieldName] = content
     }
   })
   return { fields, files }
 }
 
 const readCsvFile = (file) => {
-  const content = Buffer.isBuffer(file?.content)
-    ? file.content.toString('utf-8')
-    : typeof file?.content === 'string'
-      ? file.content
-      : ''
+  const content = typeof file?.content === 'string' ? file.content : ''
   return parseCsv(content)
 }
 
