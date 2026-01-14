@@ -1536,31 +1536,6 @@ export default function App() {
               {backupStatus && <p className="mt-2 text-xs text-amber-600">{backupStatus}</p>}
               {importError && <p className="mt-2 text-sm text-red-600">{importError}</p>}
             </div>
-            <div className="bg-white rounded shadow p-4 mb-6 border border-slate-200">
-              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                <div>
-                  <p className="text-sm font-semibold text-slate-700 flex items-center gap-2"><Upload size={16}/> Import CSV Magazzino</p>
-                  <p className="text-xs text-slate-500">Carica un CSV con colonne POSIZIONE, CODICE, DESCRIZIONE, PREZZO AL PUBBLICO, QUANTITA.</p>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <button onClick={handleSelectImportFile} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded hover:bg-slate-200 border">Seleziona file</button>
-                  <button onClick={handleImportExcel} className="flex items-center gap-2 px-3 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-500" disabled={isUploadingImport}>
-                    {isUploadingImport ? <RefreshCw size={16} className="animate-spin"/> : <Upload size={16}/>} Importa
-                  </button>
-                  <a href="/api/import/template" className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-800 text-white rounded hover:bg-slate-700" target="_blank" rel="noopener noreferrer">
-                    <Download size={16}/> Template CSV
-                  </a>
-                  <input ref={importFileRef} type="file" accept=".csv" className="hidden" onChange={handleImportFileChange} />
-                </div>
-              </div>
-              {uploadError && <p className="mt-2 text-xs text-red-600">{uploadError}</p>}
-              {uploadPreview.length > 0 && (
-                <div className="mt-3 text-xs text-slate-600">
-                  <p className="font-semibold mb-1">Anteprima import (prime righe)</p>
-                  <pre className="bg-slate-50 border rounded p-2 overflow-auto">{JSON.stringify(uploadPreview, null, 2)}</pre>
-                </div>
-              )}
-            </div>
             {activeTab === 'dashboard' && <DashboardView />}
             {activeTab === 'calendar' && <CalendarView />}
             {activeTab === 'customers' && <CustomerListView />}
