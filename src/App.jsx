@@ -327,6 +327,18 @@ export default function App() {
   const [isPersistingStorage, setIsPersistingStorage] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
 
+  // Stato per le notifiche toast
+  const [toasts, setToasts] = useState([]);
+
+  // Funzione per aggiungere notifiche toast
+  const addToast = (message, tone = 'success') => {
+    const id = Date.now();
+    setToasts((prev) => [...prev, { id, message, tone }]);
+    setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, 3000); // Rimuove il toast dopo 3 secondi
+  };
+
   // --- CACHE LOCALE ---
   useEffect(() => {
     if (!saveCache('customers', customers)) {
