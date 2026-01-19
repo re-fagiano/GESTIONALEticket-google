@@ -843,7 +843,7 @@ export default function App() {
     setExportNotice('Backup JSON scaricato con successo. Controlla la cartella Download.');
   };
 
-  const handleDownloadLatestBackup = () => {
+  const handleDownloadAutoBackup = () => {
     if (!latestBackup) {
       setBackupStatus('Nessun backup automatico disponibile.');
       return;
@@ -1344,7 +1344,7 @@ export default function App() {
     </div>
   );
 
-  const SettingsView = () => (
+  const SettingsPanel = () => (
     <div className="space-y-6">
       <div className="bg-white rounded shadow p-4 border border-slate-200">
         <h2 className="text-lg font-bold text-slate-800 mb-2">Token API</h2>
@@ -1530,7 +1530,7 @@ export default function App() {
                 </div>
                 <div className="flex flex-wrap gap-2 justify-end">
                   <button onClick={handleDownloadBackup} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-800 text-white rounded hover:bg-slate-700"><Download size={16}/> Backup JSON</button>
-                  <button onClick={handleDownloadLatestBackup} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded hover:bg-slate-200 border"><Download size={16}/> Ultimo Backup</button>
+                  <button onClick={handleDownloadAutoBackup} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded hover:bg-slate-200 border"><Download size={16}/> Ultimo Backup</button>
                   <button onClick={handleRestoreLatestBackup} className="flex items-center gap-2 px-3 py-2 text-sm bg-amber-50 text-amber-700 rounded hover:bg-amber-100 border border-amber-200">Ripristina Backup</button>
                   <button onClick={handleSelectBackupFile} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded hover:bg-slate-200 border"><Upload size={16}/> Importa Backup</button>
                   <button onClick={handlePersistStorage} className="flex items-center gap-2 px-3 py-2 text-sm bg-emerald-600 text-white rounded hover:bg-emerald-500" disabled={isPersistingStorage}>
@@ -1552,7 +1552,7 @@ export default function App() {
             {activeTab === 'calendar' && <CalendarView />}
             {activeTab === 'customers' && <CustomerListView />}
             {activeTab === 'inventory' && <InventoryView />}
-            {activeTab === 'settings' && <SettingsView />}
+            {activeTab === 'settings' && <SettingsPanel />}
             
             {activeTab === 'tickets' && (
                 <div className="space-y-6">
