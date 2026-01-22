@@ -659,4 +659,337 @@ export default function App() {
     }
   };
 
-  const handleAddCustomer = async
+  const handleAddCustomer = async () => {
+    const payload = {
+      name: newCustomer.name?.trim() || '',
+      email: newCustomer.email?.trim() || '',
+      phone: newCustomer.phone?.trim() || '',
+      address: newCustomer.address?.trim() || ''
+    };
+
+    if (!payload.name) {
+      addToast('Inserisci il nome del cliente.', 'error');
+      return;
+    }
+
+    try {
+      setIsSavingCustomer(true);
+      const saved = await apiFetch('/api/customers', {
+        method: 'POST',
+        body: JSON.stringify(payload)
+      });
+      setCustomers((prev) => [...prev, sanitizeCustomer(saved, prev.length)]);
+      setNewCustomer({ name: '', email: '', phone: '', address: '' });
+      addToast('Cliente salvato.', 'success');
+    } catch (error) {
+      if (error?.status === 401) {
+        handleApiError(error, 'Impossibile salvare il cliente.');
+        return;
+      }
+      handleApiError(error, 'Salvataggio cliente fallito, salvo in locale.');
+      const fallbackCustomer = sanitizeCustomer({ ...payload, id: `${Date.now()}` }, customers.length);
+      setCustomers((prev) => [...prev, fallbackCustomer]);
+      addToast('Cliente salvato localmente.', 'warning');
+    } finally {
+      setIsSavingCustomer(false);
+    }
+  };
+
+  const handleDeleteCustomer = async (id) => {
+    setCustomers((prev) => prev.filter((customer) => customer.id !== id));
+    try {
+      await apiFetch(`/api/customers/${id}`, { method: 'DELETE' });
+      addToast('Cliente eliminato.', 'success');
+    } catch (error) {
+      handleApiError(error, 'Impossibile eliminare il cliente.');
+    }
+  };
+
+  const handleAddTicket = async () => {
+    const payload = {
+      subject: newTicket.subject?.trim() || '',
+      description: newTicket.description?.trim() || '',
+      customerId: newTicket.customerId || '',
+      status: newTicket.status || 'aperto',
+      date: newTicket.date || '',
+      time: newTicket.time || '09:00'
+    };
+
+    if (!payload.subject) {
+      addToast('Inserisci l\'oggetto del ticket.', 'error');
+      return;
+    }
+
+    try {
+      setIsSavingTicket(true);
+      const saved = await apiFetch('/api/tickets', {
+        method: 'POST',
+        body: JSON.stringify(payload)
+      });
+      setTickets((prev) => [...prev, sanitizeTicket(saved, prev.length)]);
+      setNewTicket({
+        subject: '',
+        description: '',
+        customerId: '',
+        status: 'aperto',
+        date: new Date().toISOString().split('T')[0],
+        time: '09:00'
+      });
+      addToast('Ticket salvato.', 'success');
+    } catch (error) {
+      if (error?.status === 401) {
+        handleApiError(error, 'Impossibile salvare il ticket.');
+        return;
+      }
+      handleApiError(error, 'Salvataggio ticket fallito, salvo in locale.');
+      const fallbackTicket = sanitizeTicket({ ...payload, id: `${Date.now()}` }, tickets.length);
+      setTickets((prev) => [...prev, fallbackTicket]);
+      addToast('Ticket salvato localmente.', 'warning');
+    } finally {
+      setIsSavingTicket(false);
+    }
+  };
+
+  const handleDeleteTicket = async (id) => {
+    setTickets((prev) => prev.filter((ticketItem) => ticketItem.id !== id));
+    try {
+      await apiFetch(`/api/tickets/${id}`, { method: 'DELETE' });
+      addToast('Ticket eliminato.', 'success');
+    } catch (error) {
+      handleApiError(error, 'Impossibile eliminare il ticket.');
+    }
+  };
+
+  const handleAddPart = async () => {
+    const payload = {
+      code: newPart.code?.trim() || '',
+      name: newPart.name?.trim() || '',
+      description: newPart.description?.trim() || '',
+      location: newPart.location?.trim() || '',
+      qty: Number(newPart.qty) || 0,
+      price: Number(newPart.price) || 0,
+      minQty: Number(newPart.minQty) || 0
+    };
+
+    if (!payload.name) {
+      addToast('Inserisci il nome del ricambio.', 'error');
+      return;
+    }
+
+    try {
+      setIsSavingPart(true);
+      const saved = await apiFetch('/api/inventory', {
+        method: 'POST',
+        body: JSON.stringify(payload)
+      });
+      setInventory((prev) => [...prev, sanitizeInventoryItem(saved, prev.length)]);
+      setNewPart({ code: '', name: '', description: '', location: '', qty: 1, price: 0, minQty: 5 });
+      addToast('Ricambio salvato.', 'success');
+    } catch (error) {
+      if (error?.status === 401) {
+        handleApiError(error, 'Impossibile salvare il ricambio.');
+        return;
+      }
+      handleApiError(error, 'Salvataggio ricambio fallito, salvo in locale.');
+      const fallbackPart = sanitizeInventoryItem({ ...payload, id: `${Date.now()}` }, inventory.length);
+      setInventory((prev) => [...prev, fallbackPart]);
+      addToast('Ricambio salvato localmente.', 'warning');
+    } finally {
+      setIsSavingPart(false);
+    }
+  };
+
+  const handleDeletePart = async (id) => {
+    setInventory((prev) => prev.filter((item) => item.id !== id));
+    try {
+      await apiFetch(`/api/inventory/${id}`, { method: 'DELETE' });
+      addToast('Ricambio eliminato.', 'success');
+    } catch (error) {
+      handleApiError(error, 'Impossibile eliminare il ricambio.');
+    }
+  };
+
+  return (
+    <div className="app">
+      <header className="app-header">
+        <div>
+          <h1>Gestionale Ticket</h1>
+          <p>Gestione clienti, ticket e magazzino</p>
+        </div>
+        <div>
+          <span className={backendOnline ? 'status-online' : 'status-offline'}>
+            {backendOnline ? 'Backend online' : 'Backend offline'}
+          </span>
+        </div>
+      </header>
+
+      {storageWarning && <div className="warning-banner">{storageWarning}</div>}
+      {syncStatus && <div className="info-banner">{syncStatus}</div>}
+      {retryStatus && (
+        <div className="info-banner">
+          Retry {retryStatus.attempt}/{retryStatus.maxAttempts} su {retryStatus.path}
+        </div>
+      )}
+      {conflictState && (
+        <div className="warning-banner">
+          Conflitto rilevato. Aggiorna i dati e riprova.
+        </div>
+      )}
+
+      {showTokenPrompt && (
+        <section className="token-panel">
+          <h2>Token API</h2>
+          <p>Inserisci il token per sincronizzare i dati con il backend.</p>
+          <div className="token-actions">
+            <input
+              type="text"
+              placeholder="Token API"
+              value={tokenInput}
+              onChange={(event) => setTokenInput(event.target.value)}
+            />
+            <button type="button" onClick={handleSaveToken}>Salva token</button>
+            <button type="button" onClick={handleRequestNewToken}>Richiedi token</button>
+          </div>
+        </section>
+      )}
+
+      {!showTokenPrompt && maskedToken && (
+        <section className="token-panel">
+          <h2>Token attivo</h2>
+          <p>{maskedToken}</p>
+        </section>
+      )}
+
+      <main className="main-grid">
+        <section className="panel">
+          <h2>Clienti</h2>
+          <div className="form-grid">
+            <input
+              type="text"
+              placeholder="Nome cliente"
+              value={newCustomer.name}
+              onChange={(event) => setNewCustomer((prev) => ({ ...prev, name: event.target.value }))}
+            />
+            <input
+              type="email"
+              placeholder="Email"
+              value={newCustomer.email}
+              onChange={(event) => setNewCustomer((prev) => ({ ...prev, email: event.target.value }))}
+            />
+            <input
+              type="text"
+              placeholder="Telefono"
+              value={newCustomer.phone}
+              onChange={(event) => setNewCustomer((prev) => ({ ...prev, phone: event.target.value }))}
+            />
+            <input
+              type="text"
+              placeholder="Indirizzo"
+              value={newCustomer.address}
+              onChange={(event) => setNewCustomer((prev) => ({ ...prev, address: event.target.value }))}
+            />
+            <button type="button" onClick={handleAddCustomer} disabled={isSavingCustomer}>
+              {isSavingCustomer ? 'Salvo...' : 'Aggiungi cliente'}
+            </button>
+          </div>
+          <ul className="list">
+            {customers.map((customer) => (
+              <li key={customer.id} className="list-item">
+                <div>
+                  <strong>{customer.name}</strong>
+                  <div>{customer.email}</div>
+                  <div>{customer.phone}</div>
+                </div>
+                <button type="button" onClick={() => handleDeleteCustomer(customer.id)}>Elimina</button>
+              </li>
+            ))}
+          </ul>
+        </section>
+
+        <section className="panel">
+          <h2>Ticket</h2>
+          <div className="form-grid">
+            <input
+              type="text"
+              placeholder="Oggetto"
+              value={newTicket.subject}
+              onChange={(event) => setNewTicket((prev) => ({ ...prev, subject: event.target.value }))}
+            />
+            <textarea
+              placeholder="Descrizione"
+              value={newTicket.description}
+              onChange={(event) => setNewTicket((prev) => ({ ...prev, description: event.target.value }))}
+            />
+            <select
+              value={newTicket.customerId}
+              onChange={(event) => setNewTicket((prev) => ({ ...prev, customerId: event.target.value }))}
+            >
+              <option value="">Seleziona cliente</option>
+              {customers.map((customer) => (
+                <option key={customer.id} value={customer.id}>{customer.name}</option>
+              ))}
+            </select>
+            <button type="button" onClick={handleAddTicket} disabled={isSavingTicket}>
+              {isSavingTicket ? 'Salvo...' : 'Aggiungi ticket'}
+            </button>
+          </div>
+          <ul className="list">
+            {tickets.map((ticketItem) => (
+              <li key={ticketItem.id} className="list-item">
+                <div>
+                  <strong>{ticketItem.subject}</strong>
+                  <div>{ticketItem.status}</div>
+                </div>
+                <button type="button" onClick={() => handleDeleteTicket(ticketItem.id)}>Elimina</button>
+              </li>
+            ))}
+          </ul>
+        </section>
+
+        <section className="panel">
+          <h2>Magazzino</h2>
+          <div className="form-grid">
+            <input
+              type="text"
+              placeholder="Codice"
+              value={newPart.code}
+              onChange={(event) => setNewPart((prev) => ({ ...prev, code: event.target.value }))}
+            />
+            <input
+              type="text"
+              placeholder="Nome ricambio"
+              value={newPart.name}
+              onChange={(event) => setNewPart((prev) => ({ ...prev, name: event.target.value }))}
+            />
+            <input
+              type="number"
+              placeholder="Quantità"
+              value={newPart.qty}
+              onChange={(event) => setNewPart((prev) => ({ ...prev, qty: event.target.value }))}
+            />
+            <button type="button" onClick={handleAddPart} disabled={isSavingPart}>
+              {isSavingPart ? 'Salvo...' : 'Aggiungi ricambio'}
+            </button>
+          </div>
+          <ul className="list">
+            {inventory.map((item) => (
+              <li key={item.id} className="list-item">
+                <div>
+                  <strong>{item.name}</strong>
+                  <div>Qta: {item.qty}</div>
+                </div>
+                <button type="button" onClick={() => handleDeletePart(item.id)}>Elimina</button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      </main>
+
+      <div className="toast-container">
+        {toasts.map((toast) => (
+          <div key={toast.id} className={`toast ${toast.tone}`}>{toast.message}</div>
+        ))}
+      </div>
+    </div>
+  );
+}
