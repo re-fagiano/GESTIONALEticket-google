@@ -40,6 +40,7 @@ const storageAvailable = typeof window !== 'undefined' && typeof window.localSto
 const storageFallbackState = { active: false };
 const IDB_DB_NAME = 'gestionale_storage';
 const IDB_STORE = 'keyval';
+const [conflictState, setConflictState] = useState(null);
 
 const openIdb = () => {
   if (!isBrowser) return Promise.reject(new Error('IDB non disponibile'));
