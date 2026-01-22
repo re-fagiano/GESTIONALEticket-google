@@ -671,7 +671,35 @@ export default function App() {
 
     setAiError(null);
     setAiSuggestion(null);
-    setCurrentTicketForAi(safeTicket);
+    setCurrentTicketForAi((prev) => (prev?.id === safeTicket.id ? null : safeTicket));
+  };
+
+  const handleTicketStatusChange = async (ticket, status) => {
+    if (!ticket || ticket.status === status) return;
+    const updated = {
+      ...ticket,
+      status,
+      updatedAt: nowIso(),
+      version: Number(ticket.version || 1)
+    };
+    try {
+      const saved = await apiFetchWithRetry(`/api/tickets/${ticket.id}`, {
+        method: 'PUT',
+        body: JSON.stringify(updated)
+      });
+      setTickets((prev) => prev.map((entry) => (entry.id === ticket.id ? sanitizeTicket(saved) : entry)));
+      setSyncStatus('Ticket aggiornato.');
+      addToast('Stato ticket aggiornato.', 'success');
+    } catch (error) {
+      handleApiError(error, 'Impossibile aggiornare lo stato del ticket.');
+      setTickets((prev) => prev.map((entry) => (entry.id === ticket.id ? sanitizeTicket(updated) : entry)));
+    }
+  };
+
+  const getStatusStyles = (status) => {
+    if (status === 'chiuso') return 'bg-emerald-50 text-emerald-700 border-emerald-200';
+    if (status === 'in lavorazione') return 'bg-amber-50 text-amber-700 border-amber-200';
+    return 'bg-red-50 text-red-600 border-red-200';
   };
 
   const updateStock = async (id, delta) => {
@@ -1407,8 +1435,8 @@ export default function App() {
       </div>
       <nav className="p-4 space-y-2 flex-1">
         <button onClick={() => setActiveTab('dashboard')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'dashboard' ? 'bg-slate-800 text-yellow-400' : ''}`}><LayoutDashboard size={20}/> Dashboard</button>
-        <button onClick={() => setActiveTab('calendar')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'calendar' ? 'bg-slate-800 text-yellow-400' : ''}`}><CalendarIcon size={20}/> Calendario</button>
-        <button onClick={() => setActiveTab('tickets')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'tickets' ? 'bg-slate-800 text-yellow-400' : ''}`}><Ticket size={20}/> Lista Ticket</button>
+        <button onClick={() => setActiveTab('tickets')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'tickets' ? 'bg-slate-800 text-yellow-400' : ''}`}><Ticket size={20}/> Ticket</button>
+        <button onClick={() => setActiveTab('calendar')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'calendar' ? 'bg-slate-800 text-yellow-400' : ''}`}><Wrench size={20}/> Riparazioni</button>
         <button onClick={() => setActiveTab('customers')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'customers' ? 'bg-slate-800 text-yellow-400' : ''}`}><Users size={20}/> Clienti</button>
         <button onClick={() => setActiveTab('inventory')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'inventory' ? 'bg-slate-800 text-yellow-400' : ''}`}><Package size={20}/> Magazzino</button>
         <button onClick={() => setActiveTab('settings')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'settings' ? 'bg-slate-800 text-yellow-400' : ''}`}><Bot size={20}/> Impostazioni</button>
@@ -1555,106 +1583,117 @@ export default function App() {
             {activeTab === 'settings' && <SettingsPanel />}
             
             {activeTab === 'tickets' && (
-                <div className="space-y-6">
-                    <div className="flex justify-between"><h2 className="text-2xl font-bold">Tutti i Ticket</h2><button onClick={() => setShowNewTicket(true)} className="bg-blue-600 text-white px-4 py-2 rounded flex gap-2"><Plus/> Nuovo</button></div>
-                    <div className="bg-white rounded shadow overflow-x-auto">
-                        <table className="w-full text-left">
-                            <thead className="bg-slate-100"><tr><th className="p-4">Data</th><th className="p-4">Problema</th><th className="p-4">Stato</th><th className="p-4 text-right">Azioni</th></tr></thead>
-                            <tbody>
-                                {tickets.map(t => (
-                                    <tr key={t.id} className="border-b hover:bg-slate-50 cursor-pointer" onClick={() => openTicketModal(t)}>
-                                        <td className="p-4 text-sm"><div className="font-bold">{t.date}</div><div className="text-slate-500">{t.time}</div></td>
-                                        <td className="p-4"><div className="font-bold">{t.subject}</div><div className="text-xs text-slate-500">{t.description}</div></td>
-                                        <td className="p-4"><span className="bg-yellow-100 text-yellow-800 text-xs px-2 py-1 rounded">{t.status}</span></td>
-                                        <td className="p-4 text-right flex justify-end gap-2">
-                                            <a
-                                              href={getGoogleCalendarUrl(t) || '#'}
-                                              onClick={(e) => {
-                                                if (!getGoogleCalendarUrl(t)) e.preventDefault();
-                                                e.stopPropagation();
-                                              }}
-                                              target="_blank"
-                                              rel="noopener noreferrer"
-                                              className="text-green-600 hover:bg-green-50 p-1 rounded"
-                                            >
-                                              <CalendarIcon size={18}/>
-                                            </a>
-                                            <button onClick={(e) => {e.stopPropagation(); handleDelete('tickets', t.id)}} className="text-red-400 hover:text-red-600 p-1"><Trash2 size={18}/></button>
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
+              <div className="space-y-6">
+                <div className="flex flex-wrap items-center justify-between gap-4">
+                  <div>
+                    <h2 className="text-3xl font-bold text-slate-800">Gestione Ticket</h2>
+                    <p className="text-sm text-slate-500">Visualizza i problemi segnalati, aggiorna lo stato e avvia la diagnosi AI.</p>
+                  </div>
+                  <button onClick={() => setShowNewTicket(true)} className="bg-blue-600 text-white px-4 py-2 rounded flex gap-2 items-center shadow">
+                    <Plus/> Nuovo Ticket
+                  </button>
                 </div>
-            )}
-            
-            {currentTicketForAi && (
-                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-                    <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto p-6">
-                        <div className="flex justify-between items-start mb-6">
+                <div className="bg-white rounded-xl shadow border border-slate-200 overflow-hidden">
+                  <div className="grid grid-cols-1 md:grid-cols-[2fr,1fr,1fr,1fr] gap-4 px-6 py-4 text-xs font-semibold text-slate-500 uppercase bg-slate-50">
+                    <div>Elettrodomestico / Problema</div>
+                    <div>Cliente</div>
+                    <div>Stato</div>
+                    <div className="text-right">Diagnosi AI</div>
+                  </div>
+                  <div className="divide-y divide-slate-100">
+                    {tickets.map((ticket) => {
+                      const customer = customers.find((c) => c.id === ticket.customerId);
+                      const isActive = currentTicketForAi?.id === ticket.id;
+                      return (
+                        <div key={ticket.id} className={isActive ? 'bg-indigo-50/60' : 'bg-white'}>
+                          <div
+                            className="grid grid-cols-1 md:grid-cols-[2fr,1fr,1fr,1fr] gap-4 px-6 py-5 items-center cursor-pointer hover:bg-slate-50"
+                            onClick={() => openTicketModal(ticket)}
+                          >
+                            <div className="flex items-start gap-3">
+                              <Zap size={16} className="text-yellow-500 mt-1" />
+                              <div>
+                                <div className="font-semibold text-slate-800">{ticket.subject}</div>
+                                <div className="text-sm text-slate-500">{ticket.description}</div>
+                              </div>
+                            </div>
+                            <div className="text-slate-600">{customer?.name || 'Cliente non assegnato'}</div>
                             <div>
-                                <h3 className="text-2xl font-bold flex items-center gap-2"><Wrench className="text-blue-600"/> {currentTicketForAi.subject}</h3>
-                                <p className="text-slate-500 text-sm">Intervento del {currentTicketForAi.date || 'data non disponibile'} alle {currentTicketForAi.time || '--:--'}</p>
+                              <select
+                                value={ticket.status}
+                                onChange={(event) => {
+                                  event.stopPropagation();
+                                  handleTicketStatusChange(ticket, event.target.value);
+                                }}
+                                className={`text-sm rounded border px-3 py-1 ${getStatusStyles(ticket.status)}`}
+                              >
+                                <option value="aperto">Aperto</option>
+                                <option value="in lavorazione">In lavorazione</option>
+                                <option value="chiuso">Chiuso</option>
+                              </select>
                             </div>
-                            <button onClick={() => setCurrentTicketForAi(null)} className="text-slate-400 hover:text-slate-600"><X size={24}/></button>
-                        </div>
-                        <div className="grid md:grid-cols-2 gap-6">
-                            <div className="space-y-4">
-                                <div className="bg-slate-50 p-4 rounded border"><h4 className="font-bold text-sm text-slate-700 uppercase mb-2">Dettagli Problema</h4><p className="text-slate-700">{currentTicketForAi.description}</p></div>
-                                <a
-                                  href={getGoogleCalendarUrl(currentTicketForAi) || '#'}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="w-full py-3 bg-white border-2 border-green-500 text-green-600 font-bold rounded hover:bg-green-50 flex items-center justify-center gap-2"
-                                >
-                                  <CalendarIcon/> Salva su Google Calendar
-                                </a>
+                            <div className="flex items-center justify-end gap-3">
+                              <button
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  openTicketModal(ticket);
+                                }}
+                                className="text-indigo-600 flex items-center gap-2 hover:text-indigo-800"
+                              >
+                                <Bot size={16}/> Diagnosi
+                              </button>
+                              <button
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  handleDelete('tickets', ticket.id);
+                                }}
+                                className="text-red-400 hover:text-red-600"
+                              >
+                                <Trash2 size={18}/>
+                              </button>
                             </div>
-                            <div className="space-y-4">
-                                <div className="bg-indigo-50 p-4 rounded border border-indigo-100">
-                                    <h4 className="font-bold text-sm text-indigo-800 uppercase mb-2 flex items-center gap-2"><Bot size={16}/> Diagnosi AI</h4>
-                                    {aiError && <div className="text-sm text-red-700 bg-red-50 border border-red-200 p-2 rounded">{aiError}</div>}
-                                    <div className="bg-white border border-indigo-100 p-3 rounded text-xs text-slate-600 space-y-2 mb-3">
-                                      <p className="font-semibold text-slate-800 flex items-center justify-between">
-                                        <span>Configurazione AI</span>
-                                        <span className="text-[11px] px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 font-semibold">
-                                          {keyModeLabel}
-                                        </span>
-                                      </p>
-                                      {allowLocalOverrides ? (
-                                        <p>
-                                          Configura la chiave DeepSeek nella sezione <button onClick={() => setActiveTab('settings')} className="text-indigo-600 underline">Impostazioni</button>.
-                                        </p>
-                                      ) : (
-                                        <p>
-                                          Il proxy backend gestisce la chiave DeepSeek. Se l'AI non risponde, verifica la configurazione server.
-                                        </p>
-                                      )}
-                                    </div>
-                                    {!aiEnabled && (
-                                      <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 p-2 rounded">
-                                        AI non configurata: imposta la chiave nelle impostazioni o verifica il proxy backend.
-                                      </div>
-                                    )}
-                                    {aiSuggestion ? (
-                                      <div className="text-sm whitespace-pre-line text-slate-700">{aiSuggestion.text}</div>
-                                    ) : loadingAi ? (
-                                      <div className="flex items-center gap-2 text-indigo-600"><RefreshCw className="animate-spin"/> Analisi in corso...</div>
-                                    ) : (
-                                      <button
-                                        onClick={() => getDeepSeekAnalysis(currentTicketForAi.description, currentTicketForAi.subject)}
-                                        className="bg-indigo-600 text-white px-4 py-2 rounded text-sm w-full disabled:bg-indigo-300"
-                                        disabled={!aiEnabled}
-                                      >
-                                        Avvia Analisi DeepSeek
-                                      </button>
-                                    )}
+                          </div>
+                          {isActive && (
+                            <div className="border-t border-indigo-100 px-6 py-4 bg-indigo-50/60">
+                              <div className="flex items-center gap-2 text-indigo-800 font-semibold mb-3">
+                                <Bot size={18}/> DeepSeek AI - Diagnosi Preliminare
+                              </div>
+                              <div className="bg-white border border-indigo-100 rounded px-4 py-3 text-sm text-slate-600">
+                                <span className="font-semibold text-slate-700">Problema segnalato:</span> {ticket.subject}
+                              </div>
+                              {aiError && (
+                                <div className="mt-3 text-sm text-red-700 bg-red-50 border border-red-200 p-3 rounded flex items-center gap-2">
+                                  <AlertTriangle size={16}/> {aiError}
                                 </div>
+                              )}
+                              {!aiEnabled && (
+                                <div className="mt-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 p-2 rounded">
+                                  AI non configurata: imposta la chiave nelle impostazioni o verifica il proxy backend.
+                                </div>
+                              )}
+                              <div className="mt-4">
+                                {aiSuggestion ? (
+                                  <div className="text-sm whitespace-pre-line text-slate-700">{aiSuggestion.text}</div>
+                                ) : loadingAi ? (
+                                  <div className="flex items-center gap-2 text-indigo-600"><RefreshCw className="animate-spin"/> Analisi in corso...</div>
+                                ) : (
+                                  <button
+                                    onClick={() => getDeepSeekAnalysis(ticket.description, ticket.subject)}
+                                    className="bg-indigo-600 text-white px-4 py-2 rounded text-sm disabled:bg-indigo-300"
+                                    disabled={!aiEnabled}
+                                  >
+                                    Avvia Analisi DeepSeek
+                                  </button>
+                                )}
+                              </div>
                             </div>
+                          )}
                         </div>
-                    </div>
+                      );
+                    })}
+                  </div>
                 </div>
+              </div>
             )}
           </div>
         </main>
