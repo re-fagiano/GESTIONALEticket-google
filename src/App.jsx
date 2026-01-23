@@ -1487,337 +1487,391 @@ export default function App() {
     );
   };
 
-  const handleAddCustomer = async () => {
-    const payload = {
-      name: newCustomer.name?.trim() || '',
-      email: newCustomer.email?.trim() || '',
-      phone: newCustomer.phone?.trim() || '',
-      address: newCustomer.address?.trim() || ''
-    };
-
-    if (!payload.name) {
-      addToast('Inserisci il nome del cliente.', 'error');
-      return;
-    }
-
-    try {
-      setIsSavingCustomer(true);
-      const saved = await apiFetch('/api/customers', {
-        method: 'POST',
-        body: JSON.stringify(payload)
-      });
-      setCustomers((prev) => [...prev, sanitizeCustomer(saved, prev.length)]);
-      setNewCustomer({ name: '', email: '', phone: '', address: '' });
-      addToast('Cliente salvato.', 'success');
-    } catch (error) {
-      if (error?.status === 401) {
-        handleApiError(error, 'Impossibile salvare il cliente.');
-        return;
-      }
-      handleApiError(error, 'Salvataggio cliente fallito, salvo in locale.');
-      const fallbackCustomer = sanitizeCustomer({ ...payload, id: `${Date.now()}` }, customers.length);
-      setCustomers((prev) => [...prev, fallbackCustomer]);
-      addToast('Cliente salvato localmente.', 'warning');
-    } finally {
-      setIsSavingCustomer(false);
-    }
-  };
-
-  const handleDeleteCustomer = async (id) => {
-    setCustomers((prev) => prev.filter((customer) => customer.id !== id));
-    try {
-      await apiFetch(`/api/customers/${id}`, { method: 'DELETE' });
-      addToast('Cliente eliminato.', 'success');
-    } catch (error) {
-      handleApiError(error, 'Impossibile eliminare il cliente.');
-    }
-  };
-
-  const handleAddTicket = async () => {
-    const payload = {
-      subject: newTicket.subject?.trim() || '',
-      description: newTicket.description?.trim() || '',
-      customerId: newTicket.customerId || '',
-      status: newTicket.status || 'aperto',
-      date: newTicket.date || '',
-      time: newTicket.time || '09:00'
-    };
-
-    if (!payload.subject) {
-      addToast('Inserisci l\'oggetto del ticket.', 'error');
-      return;
-    }
-
-    try {
-      setIsSavingTicket(true);
-      const saved = await apiFetch('/api/tickets', {
-        method: 'POST',
-        body: JSON.stringify(payload)
-      });
-      setTickets((prev) => [...prev, sanitizeTicket(saved, prev.length)]);
-      setNewTicket({
-        subject: '',
-        description: '',
-        customerId: '',
-        status: 'aperto',
-        date: new Date().toISOString().split('T')[0],
-        time: '09:00'
-      });
-      addToast('Ticket salvato.', 'success');
-    } catch (error) {
-      if (error?.status === 401) {
-        handleApiError(error, 'Impossibile salvare il ticket.');
-        return;
-      }
-      handleApiError(error, 'Salvataggio ticket fallito, salvo in locale.');
-      const fallbackTicket = sanitizeTicket({ ...payload, id: `${Date.now()}` }, tickets.length);
-      setTickets((prev) => [...prev, fallbackTicket]);
-      addToast('Ticket salvato localmente.', 'warning');
-    } finally {
-      setIsSavingTicket(false);
-    }
-  };
-
-  const handleDeleteTicket = async (id) => {
-    setTickets((prev) => prev.filter((ticketItem) => ticketItem.id !== id));
-    try {
-      await apiFetch(`/api/tickets/${id}`, { method: 'DELETE' });
-      addToast('Ticket eliminato.', 'success');
-    } catch (error) {
-      handleApiError(error, 'Impossibile eliminare il ticket.');
-    }
-  };
-
-  const handleAddPart = async () => {
-    const payload = {
-      code: newPart.code?.trim() || '',
-      name: newPart.name?.trim() || '',
-      description: newPart.description?.trim() || '',
-      location: newPart.location?.trim() || '',
-      qty: Number(newPart.qty) || 0,
-      price: Number(newPart.price) || 0,
-      minQty: Number(newPart.minQty) || 0
-    };
-
-    if (!payload.name) {
-      addToast('Inserisci il nome del ricambio.', 'error');
-      return;
-    }
-
-    try {
-      setIsSavingPart(true);
-      const saved = await apiFetch('/api/inventory', {
-        method: 'POST',
-        body: JSON.stringify(payload)
-      });
-      setInventory((prev) => [...prev, sanitizeInventoryItem(saved, prev.length)]);
-      setNewPart({ code: '', name: '', description: '', location: '', qty: 1, price: 0, minQty: 5 });
-      addToast('Ricambio salvato.', 'success');
-    } catch (error) {
-      if (error?.status === 401) {
-        handleApiError(error, 'Impossibile salvare il ricambio.');
-        return;
-      }
-      handleApiError(error, 'Salvataggio ricambio fallito, salvo in locale.');
-      const fallbackPart = sanitizeInventoryItem({ ...payload, id: `${Date.now()}` }, inventory.length);
-      setInventory((prev) => [...prev, fallbackPart]);
-      addToast('Ricambio salvato localmente.', 'warning');
-    } finally {
-      setIsSavingPart(false);
-    }
-  };
-
-  const handleDeletePart = async (id) => {
-    setInventory((prev) => prev.filter((item) => item.id !== id));
-    try {
-      await apiFetch(`/api/inventory/${id}`, { method: 'DELETE' });
-      addToast('Ricambio eliminato.', 'success');
-    } catch (error) {
-      handleApiError(error, 'Impossibile eliminare il ricambio.');
-    }
-  };
+  const validInventoryImportCount = inventoryImportPreview.filter((entry) => entry.errors.length === 0).length;
+  const hasInventoryImportErrors = Boolean(inventoryImportHeaderError) || inventoryImportPreview.some((entry) => entry.errors.length > 0);
 
   return (
-    <div className="app">
-      <header className="app-header">
-        <div>
-          <h1>Gestionale Ticket</h1>
-          <p>Gestione clienti, ticket e magazzino</p>
-        </div>
-        <div>
-          <span className={backendOnline ? 'status-online' : 'status-offline'}>
-            {backendOnline ? 'Backend online' : 'Backend offline'}
-          </span>
-        </div>
-      </header>
-
-      {storageWarning && <div className="warning-banner">{storageWarning}</div>}
-      {syncStatus && <div className="info-banner">{syncStatus}</div>}
-      {retryStatus && (
-        <div className="info-banner">
-          Retry {retryStatus.attempt}/{retryStatus.maxAttempts} su {retryStatus.path}
-        </div>
-      )}
-      {conflictState && (
-        <div className="warning-banner">
-          Conflitto rilevato. Aggiorna i dati e riprova.
-        </div>
-      )}
-
-      {showTokenPrompt && (
-        <section className="token-panel">
-          <h2>Token API</h2>
-          <p>Inserisci il token per sincronizzare i dati con il backend.</p>
-          <div className="token-actions">
-            <input
-              type="text"
-              placeholder="Token API"
-              value={tokenInput}
-              onChange={(event) => setTokenInput(event.target.value)}
-            />
-            <button type="button" onClick={handleSaveToken}>Salva token</button>
-            <button type="button" onClick={handleRequestNewToken}>Richiedi token</button>
-          </div>
-        </section>
-      )}
-
-      {!showTokenPrompt && maskedToken && (
-        <section className="token-panel">
-          <h2>Token attivo</h2>
-          <p>{maskedToken}</p>
-        </section>
-      )}
-
-      <main className="main-grid">
-        <section className="panel">
-          <h2>Clienti</h2>
-          <div className="form-grid">
-            <input
-              type="text"
-              placeholder="Nome cliente"
-              value={newCustomer.name}
-              onChange={(event) => setNewCustomer((prev) => ({ ...prev, name: event.target.value }))}
-            />
-            <input
-              type="email"
-              placeholder="Email"
-              value={newCustomer.email}
-              onChange={(event) => setNewCustomer((prev) => ({ ...prev, email: event.target.value }))}
-            />
-            <input
-              type="text"
-              placeholder="Telefono"
-              value={newCustomer.phone}
-              onChange={(event) => setNewCustomer((prev) => ({ ...prev, phone: event.target.value }))}
-            />
-            <input
-              type="text"
-              placeholder="Indirizzo"
-              value={newCustomer.address}
-              onChange={(event) => setNewCustomer((prev) => ({ ...prev, address: event.target.value }))}
-            />
-            <button type="button" onClick={handleAddCustomer} disabled={isSavingCustomer}>
-              {isSavingCustomer ? 'Salvo...' : 'Aggiungi cliente'}
-            </button>
-          </div>
-          <ul className="list">
-            {customers.map((customer) => (
-              <li key={customer.id} className="list-item">
-                <div>
-                  <strong>{customer.name}</strong>
-                  <div>{customer.email}</div>
-                  <div>{customer.phone}</div>
+    <div className="flex h-screen bg-slate-100 font-sans text-slate-900 overflow-hidden">
+      <Sidebar />
+      <div className="flex-1 flex flex-col overflow-hidden">
+        <header className="bg-white shadow-sm z-30 p-4 flex justify-between items-center md:hidden">
+           <span className="font-bold text-slate-700 flex items-center gap-2"><Zap className="text-yellow-500 w-5 h-5"/> FIXLAB</span>
+           <button onClick={() => setIsSidebarOpen(!isSidebarOpen)}><Menu className="w-6 h-6 text-slate-600" /></button>
+        </header>
+        <main className="flex-1 overflow-y-auto p-4 md:p-8">
+          <div className="max-w-6xl mx-auto pb-20">
+            {storageWarning && (
+              <div className="bg-amber-50 border border-amber-200 text-amber-800 text-sm p-3 rounded mb-4">
+                {storageWarning}
+              </div>
+            )}
+            {exportNotice && (
+              <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm p-3 rounded mb-4">
+                {exportNotice}
+              </div>
+            )}
+            <div className="bg-white rounded shadow p-4 mb-6 border border-slate-200">
+              <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                <div className="space-y-1">
+                  <p className="text-sm font-semibold text-slate-700 flex items-center gap-2"><Zap size={16}/> Backend &amp; sincronizzazione</p>
+                  <p className="text-xs text-slate-500">Imposta il token per accedere alle API e aggiorna il database con i dati locali quando necessario.</p>
+                  <p className={`text-xs ${backendOnline ? 'text-emerald-600' : 'text-red-600'}`}>
+                    {backendOnline ? 'Backend online' : 'Backend offline: modalità locale attiva'}
+                  </p>
                 </div>
-                <button type="button" onClick={() => handleDeleteCustomer(customer.id)}>Elimina</button>
-              </li>
-            ))}
-          </ul>
-        </section>
-
-        <section className="panel">
-          <h2>Ticket</h2>
-          <div className="form-grid">
-            <input
-              type="text"
-              placeholder="Oggetto"
-              value={newTicket.subject}
-              onChange={(event) => setNewTicket((prev) => ({ ...prev, subject: event.target.value }))}
-            />
-            <textarea
-              placeholder="Descrizione"
-              value={newTicket.description}
-              onChange={(event) => setNewTicket((prev) => ({ ...prev, description: event.target.value }))}
-            />
-            <select
-              value={newTicket.customerId}
-              onChange={(event) => setNewTicket((prev) => ({ ...prev, customerId: event.target.value }))}
-            >
-              <option value="">Seleziona cliente</option>
-              {customers.map((customer) => (
-                <option key={customer.id} value={customer.id}>{customer.name}</option>
-              ))}
-            </select>
-            <button type="button" onClick={handleAddTicket} disabled={isSavingTicket}>
-              {isSavingTicket ? 'Salvo...' : 'Aggiungi ticket'}
-            </button>
-          </div>
-          <ul className="list">
-            {tickets.map((ticketItem) => (
-              <li key={ticketItem.id} className="list-item">
-                <div>
-                  <strong>{ticketItem.subject}</strong>
-                  <div>{ticketItem.status}</div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button onClick={refreshFromBackend} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded hover:bg-slate-200 border" disabled={isSyncing}>
+                    <RefreshCw size={16} className={isSyncing ? 'animate-spin' : ''}/> Aggiorna da backend
+                  </button>
+                  <button onClick={handleImportLocalData} className="flex items-center gap-2 px-3 py-2 text-sm bg-emerald-50 text-emerald-700 rounded hover:bg-emerald-100 border border-emerald-200"><Upload size={16}/> Importa dati locali</button>
                 </div>
-                <button type="button" onClick={() => handleDeleteTicket(ticketItem.id)}>Elimina</button>
-              </li>
-            ))}
-          </ul>
-        </section>
-
-        <section className="panel">
-          <h2>Magazzino</h2>
-          <div className="form-grid">
-            <input
-              type="text"
-              placeholder="Codice"
-              value={newPart.code}
-              onChange={(event) => setNewPart((prev) => ({ ...prev, code: event.target.value }))}
-            />
-            <input
-              type="text"
-              placeholder="Nome ricambio"
-              value={newPart.name}
-              onChange={(event) => setNewPart((prev) => ({ ...prev, name: event.target.value }))}
-            />
-            <input
-              type="number"
-              placeholder="Quantità"
-              value={newPart.qty}
-              onChange={(event) => setNewPart((prev) => ({ ...prev, qty: event.target.value }))}
-            />
-            <button type="button" onClick={handleAddPart} disabled={isSavingPart}>
-              {isSavingPart ? 'Salvo...' : 'Aggiungi ricambio'}
-            </button>
-          </div>
-          <ul className="list">
-            {inventory.map((item) => (
-              <li key={item.id} className="list-item">
-                <div>
-                  <strong>{item.name}</strong>
-                  <div>Qta: {item.qty}</div>
+              </div>
+              {retryStatus && (
+                <div className="mt-3 text-xs text-slate-500">
+                  Retry in corso ({retryStatus.attempt}/{retryStatus.maxAttempts}) per {retryStatus.path}.
+                  <div className="mt-1 h-1 bg-slate-200 rounded">
+                    <div
+                      className="h-1 bg-blue-500 rounded"
+                      style={{ width: `${Math.round((retryStatus.attempt / retryStatus.maxAttempts) * 100)}%` }}
+                    />
+                  </div>
                 </div>
-                <button type="button" onClick={() => handleDeletePart(item.id)}>Elimina</button>
-              </li>
-            ))}
-          </ul>
-        </section>
-      </main>
-
-      <div className="toast-container">
-        {toasts.map((toast) => (
-          <div key={toast.id} className={`toast ${toast.tone}`}>{toast.message}</div>
-        ))}
+              )}
+              <div className="mt-4 grid gap-2 md:grid-cols-2">
+                <div className="flex flex-col gap-2">
+                  <label className="text-xs font-semibold text-slate-700">Token API</label>
+                  <div className="text-sm text-slate-600">
+                    {maskedToken ? `Token configurato: ${maskedToken}` : 'Token non configurato.'}
+                  </div>
+                  <button onClick={() => setActiveTab('settings')} className="text-xs text-blue-600 underline w-fit">Gestisci token</button>
+                </div>
+                <div className="text-xs text-slate-500 flex items-center">
+                  {syncStatus || 'Sincronizzazione pronta.'}
+                </div>
+              </div>
+            </div>
+            <div className="bg-white rounded shadow p-4 mb-6 border border-slate-200">
+              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <p className="text-sm font-semibold text-slate-700 flex items-center gap-2"><FileSpreadsheet size={16}/> Backup e Export</p>
+                  <p className="text-xs text-slate-500">Scarica un JSON di backup per conservarlo su Drive/Cloud, oppure esporta CSV apribili in Excel per storico o assenza di connessione.</p>
+                </div>
+                <div className="flex flex-wrap gap-2 justify-end">
+                  <button onClick={handleDownloadBackup} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-800 text-white rounded hover:bg-slate-700"><Download size={16}/> Backup JSON</button>
+                  <button onClick={handleDownloadAutoBackup} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded hover:bg-slate-200 border"><Download size={16}/> Ultimo Backup</button>
+                  <button onClick={handleRestoreLatestBackup} className="flex items-center gap-2 px-3 py-2 text-sm bg-amber-50 text-amber-700 rounded hover:bg-amber-100 border border-amber-200">Ripristina Backup</button>
+                  <button onClick={handleSelectBackupFile} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded hover:bg-slate-200 border"><Upload size={16}/> Importa Backup</button>
+                  <button onClick={handlePersistStorage} className="flex items-center gap-2 px-3 py-2 text-sm bg-emerald-600 text-white rounded hover:bg-emerald-500" disabled={isPersistingStorage}>
+                    {isPersistingStorage ? <RefreshCw size={16} className="animate-spin"/> : <Download size={16}/>} Blocca dati nel browser
+                  </button>
+                  <button onClick={handleExportTickets} className="flex items-center gap-2 px-3 py-2 text-sm bg-blue-50 text-blue-700 rounded hover:bg-blue-100 border border-blue-200"><FileSpreadsheet size={16}/> Ticket CSV</button>
+                  <button onClick={handleExportInventory} className="flex items-center gap-2 px-3 py-2 text-sm bg-purple-50 text-purple-700 rounded hover:bg-purple-100 border border-purple-200"><FileSpreadsheet size={16}/> Magazzino CSV</button>
+                  <button onClick={handleExportCustomers} className="flex items-center gap-2 px-3 py-2 text-sm bg-green-50 text-green-700 rounded hover:bg-green-100 border border-green-200"><FileSpreadsheet size={16}/> Clienti CSV</button>
+                  <input ref={fileInputRef} type="file" accept="application/json" className="hidden" onChange={handleImportBackup} />
+                </div>
+              </div>
+              <div className="mt-3 text-xs text-slate-500">
+                Backup automatico: {autoBackupAt ? `ultimo salvataggio ${autoBackupAt}` : 'non disponibile'}.
+              </div>
+              {backupStatus && <p className="mt-2 text-xs text-amber-600">{backupStatus}</p>}
+              {importError && <p className="mt-2 text-sm text-red-600">{importError}</p>}
+            </div>
+            {activeTab === 'dashboard' && <DashboardView />}
+            {activeTab === 'calendar' && <CalendarView />}
+            {activeTab === 'customers' && <CustomerListView />}
+            {activeTab === 'inventory' && <InventoryView />}
+            {activeTab === 'settings' && <SettingsPanel />}
+            
+            {activeTab === 'tickets' && (
+              <div className="space-y-6">
+                <div className="flex flex-wrap items-center justify-between gap-4">
+                  <div>
+                    <h2 className="text-3xl font-bold text-slate-800">Gestione Ticket</h2>
+                    <p className="text-sm text-slate-500">Visualizza i problemi segnalati, aggiorna lo stato e avvia la diagnosi AI.</p>
+                  </div>
+                  <button onClick={() => setShowNewTicket(true)} className="bg-blue-600 text-white px-4 py-2 rounded flex gap-2 items-center shadow">
+                    <Plus/> Nuovo Ticket
+                  </button>
+                </div>
+                <div className="bg-white rounded-xl shadow border border-slate-200 overflow-hidden">
+                  <div className="grid grid-cols-1 md:grid-cols-[2fr,1fr,1fr,1fr] gap-4 px-6 py-4 text-xs font-semibold text-slate-500 uppercase bg-slate-50">
+                    <div>Elettrodomestico / Problema</div>
+                    <div>Cliente</div>
+                    <div>Stato</div>
+                    <div className="text-right">Diagnosi AI</div>
+                  </div>
+                  <div className="divide-y divide-slate-100">
+                    {tickets.map((ticket) => {
+                      const customer = customers.find((c) => c.id === ticket.customerId);
+                      const isActive = currentTicketForAi?.id === ticket.id;
+                      return (
+                        <div key={ticket.id} className={isActive ? 'bg-indigo-50/60' : 'bg-white'}>
+                          <div
+                            className="grid grid-cols-1 md:grid-cols-[2fr,1fr,1fr,1fr] gap-4 px-6 py-5 items-center cursor-pointer hover:bg-slate-50"
+                            onClick={() => openTicketModal(ticket)}
+                          >
+                            <div className="flex items-start gap-3">
+                              <Zap size={16} className="text-yellow-500 mt-1" />
+                              <div>
+                                <div className="font-semibold text-slate-800">{ticket.subject}</div>
+                                <div className="text-sm text-slate-500">{ticket.description}</div>
+                              </div>
+                            </div>
+                            <div className="text-slate-600">{customer?.name || 'Cliente non assegnato'}</div>
+                            <div>
+                              <select
+                                value={ticket.status}
+                                onChange={(event) => {
+                                  event.stopPropagation();
+                                  handleTicketStatusChange(ticket, event.target.value);
+                                }}
+                                className={`text-sm rounded border px-3 py-1 ${getStatusStyles(ticket.status)}`}
+                              >
+                                <option value="aperto">Aperto</option>
+                                <option value="in lavorazione">In lavorazione</option>
+                                <option value="chiuso">Chiuso</option>
+                              </select>
+                            </div>
+                            <div className="flex items-center justify-end gap-3">
+                              <button
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  openTicketModal(ticket);
+                                }}
+                                className="text-indigo-600 flex items-center gap-2 hover:text-indigo-800"
+                              >
+                                <Bot size={16}/> Diagnosi
+                              </button>
+                              <button
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  handleDelete('tickets', ticket.id);
+                                }}
+                                className="text-red-400 hover:text-red-600"
+                              >
+                                <Trash2 size={18}/>
+                              </button>
+                            </div>
+                          </div>
+                          {isActive && (
+                            <div className="border-t border-indigo-100 px-6 py-4 bg-indigo-50/60">
+                              <div className="flex items-center gap-2 text-indigo-800 font-semibold mb-3">
+                                <Bot size={18}/> DeepSeek AI - Diagnosi Preliminare
+                              </div>
+                              <div className="bg-white border border-indigo-100 rounded px-4 py-3 text-sm text-slate-600">
+                                <span className="font-semibold text-slate-700">Problema segnalato:</span> {ticket.subject}
+                              </div>
+                              {aiError && (
+                                <div className="mt-3 text-sm text-red-700 bg-red-50 border border-red-200 p-3 rounded flex items-center gap-2">
+                                  <AlertTriangle size={16}/> {aiError}
+                                </div>
+                              )}
+                              {!aiEnabled && (
+                                <div className="mt-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 p-2 rounded">
+                                  AI non configurata: imposta la chiave nelle impostazioni o verifica il proxy backend.
+                                </div>
+                              )}
+                              <div className="mt-4">
+                                {aiSuggestion ? (
+                                  <div className="text-sm whitespace-pre-line text-slate-700">{aiSuggestion.text}</div>
+                                ) : loadingAi ? (
+                                  <div className="flex items-center gap-2 text-indigo-600"><RefreshCw className="animate-spin"/> Analisi in corso...</div>
+                                ) : (
+                                  <button
+                                    onClick={() => getDeepSeekAnalysis(ticket.description, ticket.subject)}
+                                    className="bg-indigo-600 text-white px-4 py-2 rounded text-sm disabled:bg-indigo-300"
+                                    disabled={!aiEnabled}
+                                  >
+                                    Avvia Analisi DeepSeek
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </main>
       </div>
+
+      {toasts.length > 0 && (
+        <div className="fixed bottom-4 right-4 z-50 space-y-2">
+          {toasts.map((toast) => (
+            <div
+              key={toast.id}
+              className={`px-4 py-2 rounded shadow text-sm ${
+                toast.tone === 'error' ? 'bg-red-600 text-white' : 'bg-emerald-600 text-white'
+              }`}
+            >
+              {toast.message}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {conflictState && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white p-6 rounded-lg w-full max-w-lg">
+            <h3 className="text-lg font-bold mb-2">Conflitto dati</h3>
+            <p className="text-sm text-slate-500 mb-4">Il backend ha una versione diversa. Scegli quale mantenere.</p>
+            <div className="grid gap-3 md:grid-cols-2 text-xs">
+              <div className="border rounded p-2">
+                <p className="font-semibold mb-1">Versione locale</p>
+                <pre className="whitespace-pre-wrap">{JSON.stringify(conflictState.local, null, 2)}</pre>
+              </div>
+              <div className="border rounded p-2">
+                <p className="font-semibold mb-1">Versione server</p>
+                <pre className="whitespace-pre-wrap">{JSON.stringify(conflictState.remote, null, 2)}</pre>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 mt-4">
+              <button onClick={() => resolveConflictAction('server')} className="px-4 py-2 text-slate-600">Usa server</button>
+              <button onClick={() => resolveConflictAction('merge')} className="px-4 py-2 bg-amber-100 text-amber-700 rounded">Unisci</button>
+              <button onClick={() => resolveConflictAction('local')} className="px-4 py-2 bg-blue-600 text-white rounded">Usa locale</button>
+            </div>
+          </div>
+        </div>
+      )}
+      
+      {showInventoryImportModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white p-6 rounded-lg w-full max-w-4xl max-h-[80vh] overflow-hidden flex flex-col">
+            <h3 className="text-xl font-bold mb-4">Anteprima Importazione Magazzino</h3>
+            {inventoryImportHeaderError ? (
+              <div className="bg-red-50 border border-red-200 text-red-700 p-3 rounded">
+                {inventoryImportHeaderError}
+              </div>
+            ) : (
+              <div className="flex-1 overflow-auto border rounded">
+                <table className="w-full text-left text-sm">
+                  <thead className="bg-slate-100 uppercase text-xs font-semibold text-slate-600 sticky top-0">
+                    <tr>
+                      <th className="p-3">Riga</th>
+                      <th className="p-3">Codice</th>
+                      <th className="p-3">Descrizione</th>
+                      <th className="p-3">Posizione</th>
+                      <th className="p-3 text-right">Prezzo</th>
+                      <th className="p-3 text-right">Quantità</th>
+                      <th className="p-3">Stato</th>
+                      <th className="p-3">Errori</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {inventoryImportPreview.map((row) => (
+                      <tr key={`${row.code}-${row.rowIndex}`} className={row.errors.length ? 'bg-red-50' : ''}>
+                        <td className="p-3 text-slate-500">{row.rowIndex}</td>
+                        <td className="p-3 font-mono text-slate-700">{row.code || '-'}</td>
+                        <td className="p-3 text-slate-700">{row.description || '-'}</td>
+                        <td className="p-3 text-slate-700">{row.location || 'N/D'}</td>
+                        <td className="p-3 text-right">{row.price ?? '-'}</td>
+                        <td className="p-3 text-right">{row.quantity ?? '-'}</td>
+                        <td className="p-3">
+                          <span className={`text-xs px-2 py-0.5 rounded ${row.status === 'update' ? 'bg-blue-100 text-blue-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                            {row.status === 'update' ? 'Aggiorna' : 'Nuovo'}
+                          </span>
+                        </td>
+                        <td className="p-3 text-xs text-red-700">{row.errors.join(', ')}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <div className="flex items-center justify-between mt-4 text-sm text-slate-500">
+              <span>{validInventoryImportCount} righe valide</span>
+              {hasInventoryImportErrors && !inventoryImportHeaderError && (
+                <span className="text-red-600">Correggi le righe evidenziate prima di importare.</span>
+              )}
+            </div>
+            <div className="flex justify-end gap-2 mt-4">
+              <button onClick={resetInventoryImportState} className="px-4 py-2 text-slate-500" disabled={isImportingInventory}>Annulla</button>
+              <button
+                onClick={applyInventoryImport}
+                className="px-4 py-2 bg-purple-600 text-white rounded disabled:opacity-60"
+                disabled={isImportingInventory || Boolean(inventoryImportHeaderError) || validInventoryImportCount === 0 || hasInventoryImportErrors}
+              >
+                {isImportingInventory ? 'Importazione...' : 'Conferma Importazione'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showNewTicket && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div className="bg-white p-6 rounded-lg w-full max-w-md">
+                <h3 className="text-xl font-bold mb-4">Nuovo Intervento</h3>
+                <div className="space-y-3">
+                    <select className="w-full border p-2 rounded" value={newTicket.customerId} onChange={e => setNewTicket({...newTicket, customerId: e.target.value})}>
+                        <option value="">Seleziona Cliente...</option>
+                        {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    </select>
+                    <input className="w-full border p-2 rounded" placeholder="Elettrodomestico / Problema" value={newTicket.subject} onChange={e => setNewTicket({...newTicket, subject: e.target.value})} />
+                    <div className="flex gap-2">
+                        <input type="date" className="w-full border p-2 rounded" value={newTicket.date} onChange={e => setNewTicket({...newTicket, date: e.target.value})} />
+                        <input type="time" className="w-full border p-2 rounded" value={newTicket.time} onChange={e => setNewTicket({...newTicket, time: e.target.value})} />
+                    </div>
+                    <textarea className="w-full border p-2 rounded" placeholder="Descrizione dettagliata (per AI)" value={newTicket.description} onChange={e => setNewTicket({...newTicket, description: e.target.value})} />
+                </div>
+                <div className="flex justify-end gap-2 mt-4">
+                  <button onClick={() => setShowNewTicket(false)} className="px-4 py-2 text-slate-500">Annulla</button>
+                  <button onClick={handleAddTicket} className="px-4 py-2 bg-blue-600 text-white rounded flex items-center gap-2" disabled={isSavingTicket}>
+                    {isSavingTicket && <RefreshCw size={16} className="animate-spin"/>} Salva
+                  </button>
+                </div>
+            </div>
+        </div>
+      )}
+
+      {showNewCustomer && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div className="bg-white p-6 rounded-lg w-full max-w-md">
+                <h3 className="text-xl font-bold mb-4">Nuovo Cliente</h3>
+                <div className="space-y-3">
+                    <input className="w-full border p-2 rounded" placeholder="Nome Completo" value={newCustomer.name} onChange={e => setNewCustomer({...newCustomer, name: e.target.value})} />
+                    <input className="w-full border p-2 rounded" placeholder="Telefono" value={newCustomer.phone} onChange={e => setNewCustomer({...newCustomer, phone: e.target.value})} />
+                    <input className="w-full border p-2 rounded" placeholder="Email" value={newCustomer.email} onChange={e => setNewCustomer({...newCustomer, email: e.target.value})} />
+                    <input className="w-full border p-2 rounded" placeholder="Indirizzo" value={newCustomer.address} onChange={e => setNewCustomer({...newCustomer, address: e.target.value})} />
+                </div>
+                <div className="flex justify-end gap-2 mt-4">
+                  <button onClick={() => setShowNewCustomer(false)} className="px-4 py-2 text-slate-500">Annulla</button>
+                  <button onClick={handleAddCustomer} className="px-4 py-2 bg-green-600 text-white rounded flex items-center gap-2" disabled={isSavingCustomer}>
+                    {isSavingCustomer && <RefreshCw size={16} className="animate-spin"/>} Salva
+                  </button>
+                </div>
+            </div>
+        </div>
+      )}
+
+      {showNewPart && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div className="bg-white p-6 rounded-lg w-full max-w-md">
+                <h3 className="text-xl font-bold mb-4">Nuovo Articolo Magazzino</h3>
+                <div className="space-y-3">
+                    <input className="w-full border p-2 rounded" placeholder="Codice Articolo (es. RIC-001)" value={newPart.code} onChange={e => setNewPart({...newPart, code: e.target.value})} />
+                    <input className="w-full border p-2 rounded" placeholder="Nome Prodotto (es. Cuscinetti)" value={newPart.name} onChange={e => setNewPart({...newPart, name: e.target.value})} />
+                    <input className="w-full border p-2 rounded" placeholder="Descrizione (opzionale)" value={newPart.description} onChange={e => setNewPart({...newPart, description: e.target.value})} />
+                    <input className="w-full border p-2 rounded" placeholder="Codice Posizione (es. af00021)" value={newPart.location} onChange={e => setNewPart({...newPart, location: e.target.value})} />
+                    <div className="flex gap-2">
+                        <input type="number" className="w-full border p-2 rounded" placeholder="Quantità" value={newPart.qty} onChange={e => setNewPart({...newPart, qty: parseInt(e.target.value)})} />
+                        <input type="number" className="w-full border p-2 rounded" placeholder="Prezzo (€)" value={newPart.price} onChange={e => setNewPart({...newPart, price: parseFloat(e.target.value)})} />
+                    </div>
+                    <input type="number" className="w-full border p-2 rounded" placeholder="Quantità Minima (Allarme)" value={newPart.minQty} onChange={e => setNewPart({...newPart, minQty: parseInt(e.target.value)})} />
+                </div>
+                <div className="flex justify-end gap-2 mt-4">
+                  <button onClick={() => setShowNewPart(false)} className="px-4 py-2 text-slate-500">Annulla</button>
+                  <button onClick={handleAddPart} className="px-4 py-2 bg-purple-600 text-white rounded flex items-center gap-2" disabled={isSavingPart}>
+                    {isSavingPart && <RefreshCw size={16} className="animate-spin"/>} Salva
+                  </button>
+                </div>
+            </div>
+        </div>
+      )}
     </div>
   );
 }
