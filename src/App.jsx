@@ -305,9 +305,6 @@ export default function App() {
   const [settings, setSettings] = useState(() => loadCache('settings', []));
   const [storageWarning, setStorageWarning] = useState(null);
   const [conflictState, setConflictState] = useState(null);
-  const [isSavingTicket, setIsSavingTicket] = useState(false);
-  const [isSavingCustomer, setIsSavingCustomer] = useState(false);
-  const [isSavingPart, setIsSavingPart] = useState(false);
   const [apiToken, setApiToken] = useState('');
   const [tokenInput, setTokenInput] = useState('');
   const [maskedToken, setMaskedToken] = useState('');
