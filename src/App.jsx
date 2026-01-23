@@ -595,6 +595,58 @@ export default function App() {
     addToast(message, 'error');
   };
 
+  const handleSaveToken = async () => {
+    const trimmedToken = tokenInput.trim();
+    if (!trimmedToken) {
+      addToast('Inserisci un token valido.', 'error');
+      return;
+    }
+    try {
+      setSyncStatus('Salvataggio token...');
+      const response = await fetch('/api/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ token: trimmedToken })
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(data?.error || 'Impossibile salvare il token.');
+      }
+      setApiToken(trimmedToken);
+      setMaskedToken(data?.maskedToken || '');
+      setTokenInput('');
+      setShowTokenPrompt(false);
+      setStorageWarning(null);
+      setSyncStatus('Token salvato.');
+      addToast('Token salvato con successo.', 'success');
+    } catch (error) {
+      setSyncStatus(null);
+      handleApiError(error, 'Impossibile salvare il token.');
+    }
+  };
+
+  const handleRequestNewToken = async () => {
+    try {
+      setSyncStatus('Richiesta nuovo token...');
+      const response = await fetch('/api/token', { credentials: 'include' });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(data?.error || 'Impossibile richiedere un nuovo token.');
+      }
+      setApiToken(data?.token || '');
+      setMaskedToken(data?.maskedToken || '');
+      setTokenInput(data?.token || '');
+      setShowTokenPrompt(false);
+      setStorageWarning(null);
+      setSyncStatus('Nuovo token generato.');
+      addToast('Nuovo token generato. Copialo e salvalo al sicuro.', 'success');
+    } catch (error) {
+      setSyncStatus(null);
+      handleApiError(error, 'Impossibile richiedere un nuovo token.');
+    }
+  };
+
   const handleAddCustomer = async () => {
     if (!newCustomer.name) return;
     const customer = sanitizeCustomer({ ...newCustomer, id: crypto?.randomUUID?.() || Date.now().toString() }, customers.length);
