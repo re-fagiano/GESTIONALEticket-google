@@ -348,14 +348,32 @@ export default function App() {
   }, [customers]);
 
   useEffect(() => {
+    if (!Array.isArray(customers)) {
+      setCustomers(sanitizeCustomers(initialCustomers, initialCustomers));
+    }
+  }, [customers]);
+
+  useEffect(() => {
     if (!saveCache('tickets', sanitizeTickets(tickets))) {
       setStorageWarning('Impossibile salvare i ticket nel browser: storage disabilitato.');
     }
   }, [tickets]);
 
   useEffect(() => {
+    if (!Array.isArray(tickets)) {
+      setTickets(sanitizeTickets(initialTickets, initialTickets));
+    }
+  }, [tickets]);
+
+  useEffect(() => {
     if (!saveCache('inventory', inventory)) {
       setStorageWarning('Impossibile salvare il magazzino nel browser: storage disabilitato.');
+    }
+  }, [inventory]);
+
+  useEffect(() => {
+    if (!Array.isArray(inventory)) {
+      setInventory(sanitizeInventoryList(initialInventory, initialInventory));
     }
   }, [inventory]);
 
@@ -890,19 +908,27 @@ export default function App() {
   const handleExportTickets = () => {
     exportToCsv('tickets_export.csv',
       ['ID', 'Oggetto', 'Descrizione', 'Cliente', 'Stato', 'Data', 'Ora'],
-      tickets.map(t => [t.id, t.subject, t.description, customers.find(c => c.id === t.customerId)?.name || '', t.status, t.date, t.time])
+      safeTickets.map((ticket) => [
+        ticket.id,
+        ticket.subject,
+        ticket.description,
+        safeCustomers.find((customer) => customer.id === ticket.customerId)?.name || '',
+        ticket.status,
+        ticket.date,
+        ticket.time
+      ])
     );
   };
 
   const handleExportInventory = () => {
     exportToCsv('magazzino_export.csv',
       INVENTORY_HEADERS,
-      inventory.map(i => [
-        i.location,
-        i.code,
-        i.description || i.name,
-        i.price,
-        i.qty
+      safeInventory.map((item) => [
+        item.location,
+        item.code,
+        item.description || item.name,
+        item.price,
+        item.qty
       ])
     );
   };
@@ -910,7 +936,7 @@ export default function App() {
   const handleExportCustomers = () => {
     exportToCsv('clienti_export.csv',
       ['ID', 'Nome', 'Telefono', 'Email', 'Indirizzo'],
-      customers.map(c => [c.id, c.name, c.phone, c.email, c.address])
+      safeCustomers.map((customer) => [customer.id, customer.name, customer.phone, customer.email, customer.address])
     );
   };
 
@@ -1054,7 +1080,7 @@ export default function App() {
     if (!file) return;
     setIsImportingInventory(true);
     try {
-      const existingCodes = new Set(inventory.map((item) => item.code));
+      const existingCodes = new Set(safeInventory.map((item) => item.code));
       const { headerError, entries } = await parseInventoryFile(file, existingCodes);
       setInventoryImportHeaderError(headerError || '');
       setInventoryImportPreview(entries);
@@ -1074,8 +1100,8 @@ export default function App() {
     if (validEntries.length === 0) return;
 
     setIsImportingInventory(true);
-    const inventoryByCode = new Map(inventory.map((item) => [item.code, item]));
-    const updatedInventory = [...inventory];
+    const inventoryByCode = new Map(safeInventory.map((item) => [item.code, item]));
+    const updatedInventory = [...safeInventory];
     const updates = [];
     const creations = [];
 
@@ -1292,25 +1318,29 @@ export default function App() {
     });
   };
 
+  const safeCustomers = Array.isArray(customers) ? customers : [];
+  const safeTickets = Array.isArray(tickets) ? tickets : [];
+  const safeInventory = Array.isArray(inventory) ? inventory : [];
+
   // --- VISTE AGGIUNTIVE ---
   
   const DashboardView = () => {
-    const lowStock = inventory.filter(i => i.qty <= i.minQty);
+    const lowStock = safeInventory.filter((item) => item.qty <= item.minQty);
     return (
       <div className="space-y-6">
         <h2 className="text-2xl font-bold text-slate-800">Dashboard Laboratorio</h2>
         <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
           <div className="bg-white p-6 rounded shadow border-l-4 border-blue-500">
             <p className="text-slate-500">Ticket Aperti</p>
-            <p className="text-3xl font-bold">{tickets.filter(t => t.status === 'aperto').length}</p>
+            <p className="text-3xl font-bold">{safeTickets.filter((ticket) => ticket.status === 'aperto').length}</p>
           </div>
           <div className="bg-white p-6 rounded shadow border-l-4 border-yellow-500">
             <p className="text-slate-500">In Lavorazione</p>
-            <p className="text-3xl font-bold">{tickets.filter(t => t.status === 'in lavorazione').length}</p>
+            <p className="text-3xl font-bold">{safeTickets.filter((ticket) => ticket.status === 'in lavorazione').length}</p>
           </div>
           <div className="bg-white p-6 rounded shadow border-l-4 border-purple-500">
             <p className="text-slate-500">Ricambi Totali</p>
-            <p className="text-3xl font-bold">{inventory.reduce((acc, item) => acc + parseInt(item.qty), 0)}</p>
+            <p className="text-3xl font-bold">{safeInventory.reduce((acc, item) => acc + parseInt(item.qty), 0)}</p>
           </div>
           <div className="bg-white p-6 rounded shadow border-l-4 border-red-500">
             <p className="text-slate-500">Scorte Basse</p>
@@ -1344,15 +1374,15 @@ export default function App() {
             <tr><th className="p-4">Nome</th><th className="p-4">Contatti</th><th className="p-4">Indirizzo</th><th className="p-4 text-right">Azioni</th></tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {customers.map(c => (
-              <tr key={c.id} className="hover:bg-slate-50">
-                <td className="p-4 font-bold text-slate-800">{c.name}</td>
+            {safeCustomers.map((customer) => (
+              <tr key={customer.id} className="hover:bg-slate-50">
+                <td className="p-4 font-bold text-slate-800">{customer.name}</td>
                 <td className="p-4">
-                  <div className="flex items-center gap-2 text-sm text-slate-600"><Phone size={14}/> {c.phone}</div>
-                  <div className="text-xs text-slate-400">{c.email}</div>
+                  <div className="flex items-center gap-2 text-sm text-slate-600"><Phone size={14}/> {customer.phone}</div>
+                  <div className="text-xs text-slate-400">{customer.email}</div>
                 </td>
-                <td className="p-4 text-sm text-slate-600"><MapPin size={14} className="inline mr-1"/>{c.address}</td>
-                <td className="p-4 text-right"><button onClick={() => handleDelete('customers', c.id)} className="text-red-400 hover:text-red-600 p-2"><Trash2 size={18}/></button></td>
+                <td className="p-4 text-sm text-slate-600"><MapPin size={14} className="inline mr-1"/>{customer.address}</td>
+                <td className="p-4 text-right"><button onClick={() => handleDelete('customers', customer.id)} className="text-red-400 hover:text-red-600 p-2"><Trash2 size={18}/></button></td>
               </tr>
             ))}
           </tbody>
@@ -1383,7 +1413,7 @@ export default function App() {
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {inventory.map(item => (
+            {safeInventory.map((item) => (
               <tr key={item.id} className="hover:bg-slate-50">
                 <td className="p-4 font-medium text-slate-800">
                   <div className="flex flex-col">
@@ -1521,7 +1551,7 @@ export default function App() {
             {days.map((day, idx) => {
               if (!day || !isValidDate(day)) return <div key={idx} className="bg-slate-50 h-32 rounded"></div>;
               const dayString = day.toISOString().split('T')[0];
-              const dayTickets = tickets.filter(t => t.date === dayString);
+              const dayTickets = safeTickets.filter((ticket) => ticket.date === dayString);
               const isToday = dayString === new Date().toISOString().split('T')[0];
               return (
                 <div key={idx} className={`h-32 border rounded p-2 flex flex-col gap-1 overflow-y-auto ${isToday ? 'border-blue-500 bg-blue-50' : 'border-slate-200 hover:bg-slate-50'}`}>
@@ -1654,8 +1684,8 @@ export default function App() {
                     <div className="text-right">Diagnosi AI</div>
                   </div>
                   <div className="divide-y divide-slate-100">
-                    {tickets.map((ticket) => {
-                      const customer = customers.find((c) => c.id === ticket.customerId);
+                    {safeTickets.map((ticket) => {
+                      const customer = safeCustomers.find((c) => c.id === ticket.customerId);
                       const isActive = currentTicketForAi?.id === ticket.id;
                       return (
                         <div key={ticket.id} className={isActive ? 'bg-indigo-50/60' : 'bg-white'}>
@@ -1862,7 +1892,7 @@ export default function App() {
                 <div className="space-y-3">
                     <select className="w-full border p-2 rounded" value={newTicket.customerId} onChange={e => setNewTicket({...newTicket, customerId: e.target.value})}>
                         <option value="">Seleziona Cliente...</option>
-                        {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                        {safeCustomers.map((customer) => <option key={customer.id} value={customer.id}>{customer.name}</option>)}
                     </select>
                     <input className="w-full border p-2 rounded" placeholder="Elettrodomestico / Problema" value={newTicket.subject} onChange={e => setNewTicket({...newTicket, subject: e.target.value})} />
                     <div className="flex gap-2">
