@@ -304,6 +304,7 @@ export default function App() {
   const [inventory, setInventory] = useState(() => sanitizeInventoryList(loadCache('inventory', initialInventory), initialInventory));
   const [settings, setSettings] = useState(() => loadCache('settings', []));
   const [storageWarning, setStorageWarning] = useState(null);
+  const [conflictState, setConflictState] = useState(null);
   const [apiToken, setApiToken] = useState('');
   const [tokenInput, setTokenInput] = useState('');
   const [maskedToken, setMaskedToken] = useState('');
