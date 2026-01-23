@@ -304,6 +304,10 @@ export default function App() {
   const [inventory, setInventory] = useState(() => sanitizeInventoryList(loadCache('inventory', initialInventory), initialInventory));
   const [settings, setSettings] = useState(() => loadCache('settings', []));
   const [storageWarning, setStorageWarning] = useState(null);
+  const [conflictState, setConflictState] = useState(null);
+  const [isSavingTicket, setIsSavingTicket] = useState(false);
+  const [isSavingCustomer, setIsSavingCustomer] = useState(false);
+  const [isSavingPart, setIsSavingPart] = useState(false);
   const [apiToken, setApiToken] = useState('');
   const [tokenInput, setTokenInput] = useState('');
   const [maskedToken, setMaskedToken] = useState('');
@@ -592,6 +596,58 @@ export default function App() {
     const causes = ['Backend offline', 'Token errato', 'Problemi di rete'];
     setStorageWarning(`${message} Possibili cause: ${causes.join(', ')}.`);
     addToast(message, 'error');
+  };
+
+  const handleSaveToken = async () => {
+    const trimmedToken = tokenInput.trim();
+    if (!trimmedToken) {
+      addToast('Inserisci un token valido.', 'error');
+      return;
+    }
+    try {
+      setSyncStatus('Salvataggio token...');
+      const response = await fetch('/api/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ token: trimmedToken })
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(data?.error || 'Impossibile salvare il token.');
+      }
+      setApiToken(trimmedToken);
+      setMaskedToken(data?.maskedToken || '');
+      setTokenInput('');
+      setShowTokenPrompt(false);
+      setStorageWarning(null);
+      setSyncStatus('Token salvato.');
+      addToast('Token salvato con successo.', 'success');
+    } catch (error) {
+      setSyncStatus(null);
+      handleApiError(error, 'Impossibile salvare il token.');
+    }
+  };
+
+  const handleRequestNewToken = async () => {
+    try {
+      setSyncStatus('Richiesta nuovo token...');
+      const response = await fetch('/api/token', { credentials: 'include' });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(data?.error || 'Impossibile richiedere un nuovo token.');
+      }
+      setApiToken(data?.token || '');
+      setMaskedToken(data?.maskedToken || '');
+      setTokenInput(data?.token || '');
+      setShowTokenPrompt(false);
+      setStorageWarning(null);
+      setSyncStatus('Nuovo token generato.');
+      addToast('Nuovo token generato. Copialo e salvalo al sicuro.', 'success');
+    } catch (error) {
+      setSyncStatus(null);
+      handleApiError(error, 'Impossibile richiedere un nuovo token.');
+    }
   };
 
   const handleAddCustomer = async () => {
