@@ -81,6 +81,12 @@ const idbSet = async (key, value) => {
   });
 };
 const nowIso = () => new Date().toISOString();
+const toLocalDateTimeInput = (value) => {
+  const date = value ? new Date(value) : new Date();
+  if (Number.isNaN(date.getTime())) return '';
+  const offsetMs = date.getTimezoneOffset() * 60_000;
+  return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
+};
 
 const safeGetItem = (key, fallback = null) => {
   if (!storageAvailable) return fallback;
@@ -163,6 +169,9 @@ const loadData = (key, defaultData) => {
 const cacheKeys = {
   customers: 'cache_customers',
   tickets: 'cache_tickets',
+  interventions: 'cache_interventions',
+  sparePartsOrders: 'cache_spare_parts_orders',
+  quotes: 'cache_quotes',
   inventory: 'cache_inventory',
   settings: 'cache_settings'
 };
@@ -262,6 +271,33 @@ const sanitizeInventoryList = (list, fallback = []) => {
   return source.map((item, idx) => sanitizeInventoryItem(item, idx)).filter(Boolean);
 };
 
+const interventionTypes = ['chiamata', 'riparazione', 'ordine_ricambi', 'preventivo'];
+const interventionStatuses = ['pendente', 'preso_in_carico', 'diagnosticato', 'ordine_ricambi', 'preventivato', 'saldato', 'chiuso'];
+
+const sanitizeIntervention = (item, idx = 0) => {
+  if (!item || typeof item !== 'object') return null;
+  return {
+    id: item.id || `${Date.now()}-${idx}`,
+    clientId: typeof item.clientId === 'string' ? item.clientId : '',
+    type: interventionTypes.includes(item.type) ? item.type : 'chiamata',
+    status: interventionStatuses.includes(item.status) ? item.status : 'pendente',
+    urgency: [1, 2, 3].includes(Number(item.urgency)) ? Number(item.urgency) : 2,
+    openedAt: typeof item.openedAt === 'string' ? item.openedAt : nowIso(),
+    closedAt: typeof item.closedAt === 'string' ? item.closedAt : null,
+    description: typeof item.description === 'string' ? item.description : '',
+    parentInterventionId: typeof item.parentInterventionId === 'string' ? item.parentInterventionId : null,
+    additionalData: item.additionalData && typeof item.additionalData === 'object' ? item.additionalData : {},
+    durationDays: Number.isFinite(Number(item.durationDays)) ? Number(item.durationDays) : 0,
+    updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : nowIso(),
+    version: Number.isFinite(Number(item.version)) ? Number(item.version) : 1
+  };
+};
+
+const sanitizeInterventions = (list, fallback = []) => {
+  const source = Array.isArray(list) ? list : fallback;
+  return source.map((entry, idx) => sanitizeIntervention(entry, idx)).filter(Boolean);
+};
+
 const parseCsvRows = (text = '') => {
   const lines = text.split(/\r?\n/).filter(Boolean);
   const delimiter = lines[0]?.includes(';') && !lines[0]?.includes(',') ? ';' : ',';
@@ -291,6 +327,19 @@ const initialInventory = [
   { id: 'p3', code: 'SCH-003', name: 'Scheda Elettronica Samsung', description: 'Scheda Elettronica Samsung', location: 'SEC-09', qty: 1, price: 120.00, minQty: 1 }
 ];
 
+const initialInterventions = [
+  {
+    id: 'int-101',
+    clientId: '1',
+    type: 'chiamata',
+    status: 'pendente',
+    urgency: 2,
+    openedAt: new Date().toISOString(),
+    description: 'Richiesta sopralluogo per lavatrice rumorosa',
+    additionalData: {}
+  }
+];
+
 export default function App() {
   const [activeTab, setActiveTab] = useState('calendar'); 
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
@@ -301,6 +350,7 @@ export default function App() {
   // --- STATO APP ---
   const [customers, setCustomers] = useState(() => sanitizeCustomers(loadCache('customers', initialCustomers), initialCustomers));
   const [tickets, setTickets] = useState(() => sanitizeTickets(loadCache('tickets', initialTickets), initialTickets));
+  const [interventions, setInterventions] = useState(() => sanitizeInterventions(loadCache('interventions', initialInterventions), initialInterventions));
   const [inventory, setInventory] = useState(() => sanitizeInventoryList(loadCache('inventory', initialInventory), initialInventory));
   const [settings, setSettings] = useState(() => loadCache('settings', []));
   const [storageWarning, setStorageWarning] = useState(null);
@@ -354,6 +404,12 @@ export default function App() {
   }, [tickets]);
 
   useEffect(() => {
+    if (!saveCache('interventions', sanitizeInterventions(interventions, initialInterventions))) {
+      setStorageWarning('Impossibile salvare gli interventi nel browser: storage disabilitato.');
+    }
+  }, [interventions]);
+
+  useEffect(() => {
     if (!saveCache('inventory', inventory)) {
       setStorageWarning('Impossibile salvare il magazzino nel browser: storage disabilitato.');
     }
@@ -369,9 +425,10 @@ export default function App() {
     if (!storageAvailable || storageFallbackState.active) {
       const loadFallback = async () => {
         try {
-          const [customersRaw, ticketsRaw, inventoryRaw, settingsRaw, backupRaw, backupAt] = await Promise.all([
+          const [customersRaw, ticketsRaw, interventionsRaw, inventoryRaw, settingsRaw, backupRaw, backupAt] = await Promise.all([
             idbGet(cacheKeys.customers),
             idbGet(cacheKeys.tickets),
+            idbGet(cacheKeys.interventions),
             idbGet(cacheKeys.inventory),
             idbGet(cacheKeys.settings),
             idbGet('lastBackup'),
@@ -379,6 +436,7 @@ export default function App() {
           ]);
           if (customersRaw) setCustomers(sanitizeCustomers(JSON.parse(customersRaw), initialCustomers));
           if (ticketsRaw) setTickets(sanitizeTickets(JSON.parse(ticketsRaw), initialTickets));
+          if (interventionsRaw) setInterventions(sanitizeInterventions(JSON.parse(interventionsRaw), initialInterventions));
           if (inventoryRaw) setInventory(sanitizeInventoryList(JSON.parse(inventoryRaw), initialInventory));
           if (settingsRaw) setSettings(JSON.parse(settingsRaw));
           if (backupRaw) setLatestBackup(JSON.parse(backupRaw));
@@ -515,6 +573,7 @@ export default function App() {
       const data = await apiFetchWithRetry('/api/bootstrap');
       setCustomers(sanitizeCustomers(data.customers, initialCustomers));
       setTickets(sanitizeTickets(data.tickets, initialTickets));
+      setInterventions(sanitizeInterventions(data.interventions, initialInterventions));
       setInventory(sanitizeInventoryList(data.inventory, initialInventory));
       setSettings(Array.isArray(data.settings) ? data.settings : []);
       setStorageWarning(null);
@@ -573,14 +632,53 @@ export default function App() {
     subject: '', description: '', customerId: '', status: 'aperto',
     date: new Date().toISOString().split('T')[0], time: '09:00'
   });
+  const [newIntervention, setNewIntervention] = useState({
+    clientId: '',
+    type: 'chiamata',
+    status: 'pendente',
+    urgency: 2,
+    scheduledAt: toLocalDateTimeInput(nowIso()),
+    description: '',
+    parentInterventionId: '',
+    applianceBrand: '',
+    applianceModel: '',
+    serialNumber: '',
+    defect: '',
+    sparePartCode: '',
+    sparePartQty: 1,
+    supplier: '',
+    quoteItems: '',
+    quoteTotal: 0,
+    quoteValidUntil: ''
+  });
   const [newPart, setNewPart] = useState({ code: '', name: '', description: '', location: '', qty: 1, price: 0, minQty: 5 });
   const [importError, setImportError] = useState('');
   const fileInputRef = useRef(null);
   const inventoryFileInputRef = useRef(null);
+  const [isSavingCustomer, setIsSavingCustomer] = useState(false);
+  const [isSavingTicket, setIsSavingTicket] = useState(false);
+  const [isSavingPart, setIsSavingPart] = useState(false);
   const [inventoryImportPreview, setInventoryImportPreview] = useState([]);
   const [inventoryImportHeaderError, setInventoryImportHeaderError] = useState('');
   const [showInventoryImportModal, setShowInventoryImportModal] = useState(false);
   const [isImportingInventory, setIsImportingInventory] = useState(false);
+  const [interventionSearch, setInterventionSearch] = useState('');
+  const [interventionFilters, setInterventionFilters] = useState({ clientId: '', type: '', status: '', urgency: '' });
+  const [draggingInterventionId, setDraggingInterventionId] = useState(null);
+  const [calendarEditorItem, setCalendarEditorItem] = useState(null);
+  // Runtime-safe calendar editor state access to tolerate older/mixed bundles on live deployments.
+  const calendarEditorState = typeof calendarEditorItem !== 'undefined'
+    ? calendarEditorItem
+    : (typeof calendarEditorltem !== 'undefined' ? calendarEditorltem : null);
+  const setCalendarEditorState = (valueOrUpdater) => {
+    if (typeof setCalendarEditorItem === 'function') {
+      setCalendarEditorItem(valueOrUpdater);
+      return;
+    }
+    if (typeof setCalendarEditorltem === 'function') {
+      setCalendarEditorltem(valueOrUpdater);
+    }
+  };
 
   // --- AZIONI ---
   const handleApiError = (error, fallback) => {
@@ -686,6 +784,97 @@ export default function App() {
       handleApiError(error, 'Impossibile salvare il ticket.');
     } finally {
       setIsSavingTicket(false);
+    }
+  };
+
+  const handleAddIntervention = async () => {
+    if (!newIntervention.clientId || !newIntervention.type) return;
+    const additionalData = {};
+    if (newIntervention.type === 'riparazione') {
+      additionalData.applianceBrand = newIntervention.applianceBrand;
+      additionalData.applianceModel = newIntervention.applianceModel;
+      additionalData.serialNumber = newIntervention.serialNumber;
+      additionalData.defect = newIntervention.defect;
+    }
+    if (newIntervention.type === 'ordine_ricambi') {
+      additionalData.sparePartCode = newIntervention.sparePartCode;
+      additionalData.quantity = Number(newIntervention.sparePartQty || 1);
+      additionalData.supplier = newIntervention.supplier;
+    }
+    if (newIntervention.type === 'preventivo') {
+      additionalData.quoteItems = newIntervention.quoteItems;
+      additionalData.quoteTotal = Number(newIntervention.quoteTotal || 0);
+      additionalData.quoteValidUntil = newIntervention.quoteValidUntil;
+    }
+
+    const payload = sanitizeIntervention({
+      id: crypto?.randomUUID?.() || Date.now().toString(),
+      clientId: newIntervention.clientId,
+      type: newIntervention.type,
+      status: newIntervention.status,
+      urgency: Number(newIntervention.urgency || 2),
+      openedAt: newIntervention.scheduledAt ? new Date(newIntervention.scheduledAt).toISOString() : nowIso(),
+      description: newIntervention.description,
+      parentInterventionId: newIntervention.parentInterventionId || null,
+      additionalData,
+      updatedAt: nowIso(),
+      version: 1
+    });
+
+    try {
+      const created = await apiFetch('/api/interventions', {
+        method: 'POST',
+        body: JSON.stringify(payload)
+      });
+      setInterventions((prev) => sanitizeInterventions([created, ...prev], initialInterventions));
+      setNewIntervention({
+        clientId: '', type: 'chiamata', status: 'pendente', urgency: 2, scheduledAt: toLocalDateTimeInput(nowIso()), description: '', parentInterventionId: '',
+        applianceBrand: '', applianceModel: '', serialNumber: '', defect: '',
+        sparePartCode: '', sparePartQty: 1, supplier: '', quoteItems: '', quoteTotal: 0, quoteValidUntil: ''
+      });
+      setSyncStatus('Intervento creato nel backend.');
+      addToast('Intervento creato con successo.', 'success');
+    } catch (error) {
+      handleApiError(error, 'Impossibile creare l\'intervento.');
+    }
+  };
+
+  const handleInterventionStatusChange = async (intervention, status) => {
+    if (!intervention || intervention.status === status) return;
+    const updated = {
+      ...intervention,
+      status,
+      updatedAt: nowIso(),
+      closedAt: status === 'chiuso' ? nowIso() : intervention.closedAt
+    };
+    try {
+      const saved = await apiFetchWithRetry(`/api/interventions/${intervention.id}`, {
+        method: 'PUT',
+        body: JSON.stringify(updated)
+      });
+      setInterventions((prev) => prev.map((entry) => (entry.id === intervention.id ? sanitizeIntervention(saved) : entry)));
+      setSyncStatus('Intervento aggiornato.');
+    } catch (error) {
+      handleApiError(error, 'Impossibile aggiornare lo stato intervento.');
+    }
+  };
+
+  const handleInterventionScheduleChange = async (intervention, newDateIso) => {
+    if (!intervention || !newDateIso) return;
+    const updated = {
+      ...intervention,
+      openedAt: newDateIso,
+      updatedAt: nowIso(),
+    };
+    try {
+      const saved = await apiFetchWithRetry(`/api/interventions/${intervention.id}`, {
+        method: 'PUT',
+        body: JSON.stringify(updated)
+      });
+      setInterventions((prev) => prev.map((entry) => (entry.id === intervention.id ? sanitizeIntervention(saved) : entry)));
+      setSyncStatus('Data intervento aggiornata.');
+    } catch (error) {
+      handleApiError(error, 'Impossibile aggiornare data/ora intervento.');
     }
   };
 
@@ -858,13 +1047,14 @@ export default function App() {
     setExportNotice(`File scaricato con successo. Cerca \"${filename}\" nella cartella Download.`);
   };
 
-  const buildBackup = () => ({
-    exportedAt: new Date().toISOString(),
-    customers,
-    tickets,
-    inventory,
-    settings
-  });
+const buildBackup = () => ({
+  exportedAt: new Date().toISOString(),
+  customers,
+  tickets,
+  interventions,
+  inventory,
+  settings
+});
 
   const saveAutoBackup = () => {
     const backup = buildBackup();
@@ -914,6 +1104,22 @@ export default function App() {
     );
   };
 
+  const handleExportInterventions = () => {
+    exportToCsv('interventi_export.csv',
+      ['ID', 'Cliente', 'Tipo', 'Stato', 'Urgenza', 'Apertura', 'Durata (giorni)', 'Descrizione'],
+      interventions.map((i) => [
+        i.id,
+        customers.find((c) => c.id === i.clientId)?.name || '',
+        i.type,
+        i.status,
+        i.urgency,
+        i.openedAt,
+        i.durationDays,
+        i.description
+      ])
+    );
+  };
+
   const handleDownloadBackup = () => {
     const backup = buildBackup();
     const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
@@ -951,6 +1157,7 @@ export default function App() {
           body: JSON.stringify({
             customers: parsed.customers,
             tickets: parsed.tickets,
+            interventions: parsed.interventions || [],
             inventory: parsed.inventory,
             settings: parsed.settings || []
           })
@@ -980,6 +1187,7 @@ export default function App() {
         body: JSON.stringify({
           customers: latestBackup.customers,
           tickets: latestBackup.tickets,
+          interventions: latestBackup.interventions || [],
           inventory: latestBackup.inventory,
           settings: latestBackup.settings || []
         })
@@ -999,6 +1207,7 @@ export default function App() {
         body: JSON.stringify({
           customers,
           tickets,
+          interventions,
           inventory,
           settings
         })
@@ -1332,6 +1541,124 @@ export default function App() {
     )
   };
 
+  const InterventionsView = ({ typeFilter = '', title = 'Interventi', description = 'Gestione chiamate, riparazioni, ordini ricambi e preventivi.' }) => {
+    const filtered = interventions.filter((item) => {
+      if (typeFilter && item.type !== typeFilter) return false;
+      const customerName = customers.find((c) => c.id === item.clientId)?.name || '';
+      const query = interventionSearch.trim().toLowerCase();
+      const matchesSearch = !query
+        || item.id.toLowerCase().includes(query)
+        || item.description.toLowerCase().includes(query)
+        || customerName.toLowerCase().includes(query);
+      const matchesClient = !interventionFilters.clientId || item.clientId === interventionFilters.clientId;
+      const matchesType = !interventionFilters.type || item.type === interventionFilters.type;
+      const matchesStatus = !interventionFilters.status || item.status === interventionFilters.status;
+      const matchesUrgency = !interventionFilters.urgency || Number(item.urgency) === Number(interventionFilters.urgency);
+      return matchesSearch && matchesClient && matchesType && matchesStatus && matchesUrgency;
+    });
+
+    return (
+      <div className="space-y-6">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <h2 className="text-3xl font-bold text-slate-800">{title}</h2>
+            <p className="text-sm text-slate-500">{description}</p>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-xl shadow border border-slate-200 p-4 grid md:grid-cols-5 gap-3">
+          <input className="border rounded p-2 md:col-span-2" placeholder="Ricerca globale per codice, cliente o descrizione" value={interventionSearch} onChange={(e) => setInterventionSearch(e.target.value)} />
+          <select className="border rounded p-2" value={interventionFilters.clientId} onChange={(e) => setInterventionFilters((p) => ({ ...p, clientId: e.target.value }))}>
+            <option value="">Tutti i clienti</option>
+            {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+          <select className="border rounded p-2" value={typeFilter || interventionFilters.type} onChange={(e) => setInterventionFilters((p) => ({ ...p, type: e.target.value }))} disabled={Boolean(typeFilter)}>
+            <option value="">Tutti i tipi</option>
+            {interventionTypes.map((t) => <option key={t} value={t}>{t}</option>)}
+          </select>
+          <select className="border rounded p-2" value={interventionFilters.status} onChange={(e) => setInterventionFilters((p) => ({ ...p, status: e.target.value }))}>
+            <option value="">Tutti gli stati</option>
+            {interventionStatuses.map((s) => <option key={s} value={s}>{s}</option>)}
+          </select>
+          <select className="border rounded p-2" value={interventionFilters.urgency} onChange={(e) => setInterventionFilters((p) => ({ ...p, urgency: e.target.value }))}>
+            <option value="">Tutte le urgenze</option>
+            <option value="1">Bassa</option>
+            <option value="2">Media</option>
+            <option value="3">Alta</option>
+          </select>
+          <button onClick={handleExportInterventions} className="bg-indigo-50 text-indigo-700 border border-indigo-200 rounded px-3 py-2">Esporta CSV</button>
+        </div>
+
+        <div className="bg-white rounded-xl shadow border border-slate-200 p-4 space-y-3">
+          <h3 className="font-semibold text-slate-700">Nuovo intervento</h3>
+          <div className="grid md:grid-cols-4 gap-3">
+            <select className="border rounded p-2" value={newIntervention.clientId} onChange={(e) => setNewIntervention((p) => ({ ...p, clientId: e.target.value }))}>
+              <option value="">Cliente...</option>
+              {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+            <select className="border rounded p-2" value={newIntervention.type} onChange={(e) => setNewIntervention((p) => ({ ...p, type: e.target.value }))}>
+              {interventionTypes.map((t) => <option key={t} value={t}>{t}</option>)}
+            </select>
+            <select className="border rounded p-2" value={newIntervention.status} onChange={(e) => setNewIntervention((p) => ({ ...p, status: e.target.value }))}>
+              {interventionStatuses.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+            <select className="border rounded p-2" value={newIntervention.urgency} onChange={(e) => setNewIntervention((p) => ({ ...p, urgency: Number(e.target.value) }))}>
+              <option value={1}>Bassa</option><option value={2}>Media</option><option value={3}>Alta</option>
+            </select>
+            <input type="datetime-local" className="border rounded p-2" value={newIntervention.scheduledAt} onChange={(e) => setNewIntervention((p) => ({ ...p, scheduledAt: e.target.value }))} />
+          </div>
+          <textarea className="w-full border rounded p-2" placeholder="Descrizione" value={newIntervention.description} onChange={(e) => setNewIntervention((p) => ({ ...p, description: e.target.value }))} />
+          {newIntervention.type === 'riparazione' && (
+            <div className="grid md:grid-cols-4 gap-3">
+              <input className="border rounded p-2" placeholder="Marca" value={newIntervention.applianceBrand} onChange={(e) => setNewIntervention((p) => ({ ...p, applianceBrand: e.target.value }))} />
+              <input className="border rounded p-2" placeholder="Modello" value={newIntervention.applianceModel} onChange={(e) => setNewIntervention((p) => ({ ...p, applianceModel: e.target.value }))} />
+              <input className="border rounded p-2" placeholder="Seriale" value={newIntervention.serialNumber} onChange={(e) => setNewIntervention((p) => ({ ...p, serialNumber: e.target.value }))} />
+              <input className="border rounded p-2" placeholder="Difetto" value={newIntervention.defect} onChange={(e) => setNewIntervention((p) => ({ ...p, defect: e.target.value }))} />
+            </div>
+          )}
+          {newIntervention.type === 'ordine_ricambi' && (
+            <div className="grid md:grid-cols-3 gap-3">
+              <input className="border rounded p-2" placeholder="Codice ricambio" value={newIntervention.sparePartCode} onChange={(e) => setNewIntervention((p) => ({ ...p, sparePartCode: e.target.value }))} />
+              <input type="number" className="border rounded p-2" placeholder="Quantità" value={newIntervention.sparePartQty} onChange={(e) => setNewIntervention((p) => ({ ...p, sparePartQty: Number(e.target.value) }))} />
+              <input className="border rounded p-2" placeholder="Fornitore" value={newIntervention.supplier} onChange={(e) => setNewIntervention((p) => ({ ...p, supplier: e.target.value }))} />
+            </div>
+          )}
+          {newIntervention.type === 'preventivo' && (
+            <div className="grid md:grid-cols-3 gap-3">
+              <input className="border rounded p-2" placeholder="Modelli/prodotti proposti" value={newIntervention.quoteItems} onChange={(e) => setNewIntervention((p) => ({ ...p, quoteItems: e.target.value }))} />
+              <input type="number" className="border rounded p-2" placeholder="Importo" value={newIntervention.quoteTotal} onChange={(e) => setNewIntervention((p) => ({ ...p, quoteTotal: Number(e.target.value) }))} />
+              <input type="date" className="border rounded p-2" value={newIntervention.quoteValidUntil} onChange={(e) => setNewIntervention((p) => ({ ...p, quoteValidUntil: e.target.value }))} />
+            </div>
+          )}
+          <button onClick={handleAddIntervention} className="bg-indigo-600 text-white px-4 py-2 rounded">Salva intervento</button>
+        </div>
+
+        <div className="bg-white rounded-xl shadow border border-slate-200 overflow-hidden">
+          <div className="grid grid-cols-1 md:grid-cols-[1.2fr,1fr,1fr,1fr,1fr,1fr,0.8fr] gap-3 px-4 py-3 bg-slate-50 text-xs uppercase font-semibold text-slate-500">
+            <div>Codice</div><div>Cliente</div><div>Tipo</div><div>Stato</div><div>Urgenza</div><div>Data apertura</div><div>Durata</div>
+          </div>
+          <div className="divide-y divide-slate-100">
+            {filtered.map((item) => (
+              <div key={item.id} className="grid grid-cols-1 md:grid-cols-[1.2fr,1fr,1fr,1fr,1fr,1fr,0.8fr] gap-3 px-4 py-3 items-center">
+                <div className="font-mono text-xs">{item.id}</div>
+                <div>{customers.find((c) => c.id === item.clientId)?.name || 'N/D'}</div>
+                <div>{item.type}</div>
+                <div>
+                  <select className="border rounded p-1 text-sm" value={item.status} onChange={(e) => handleInterventionStatusChange(item, e.target.value)}>
+                    {interventionStatuses.map((s) => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                </div>
+                <div>{item.urgency === 3 ? 'Alta' : item.urgency === 2 ? 'Media' : 'Bassa'}</div>
+                <div>{new Date(item.openedAt).toLocaleString('it-IT')}</div>
+                <div>{item.durationDays}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const CustomerListView = () => (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
@@ -1357,6 +1684,22 @@ export default function App() {
             ))}
           </tbody>
         </table>
+      </div>
+      <div className="bg-white rounded shadow overflow-hidden">
+        <div className="px-4 py-3 border-b text-sm font-semibold text-slate-700">Storico interventi cliente</div>
+        <div className="divide-y">
+          {customers.map((c) => {
+            const customerInterventions = interventions.filter((i) => i.clientId === c.id);
+            return (
+              <div key={`history-${c.id}`} className="p-4">
+                <p className="font-semibold text-slate-700">{c.name} <span className="text-xs text-slate-400">({customerInterventions.length})</span></p>
+                <div className="text-xs text-slate-500 mt-1">
+                  {customerInterventions.slice(0, 5).map((i) => `${i.id} • ${i.type} • ${i.status}`).join(' | ') || 'Nessun intervento'}
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );
@@ -1488,9 +1831,12 @@ export default function App() {
       </div>
       <nav className="p-4 space-y-2 flex-1">
         <button onClick={() => setActiveTab('dashboard')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'dashboard' ? 'bg-slate-800 text-yellow-400' : ''}`}><LayoutDashboard size={20}/> Dashboard</button>
-        <button onClick={() => setActiveTab('tickets')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'tickets' ? 'bg-slate-800 text-yellow-400' : ''}`}><Ticket size={20}/> Ticket</button>
-        <button onClick={() => setActiveTab('calendar')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'calendar' ? 'bg-slate-800 text-yellow-400' : ''}`}><Wrench size={20}/> Riparazioni</button>
         <button onClick={() => setActiveTab('customers')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'customers' ? 'bg-slate-800 text-yellow-400' : ''}`}><Users size={20}/> Clienti</button>
+        <button onClick={() => setActiveTab('chiamate')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'chiamate' ? 'bg-slate-800 text-yellow-400' : ''}`}><Phone size={20}/> Chiamate</button>
+        <button onClick={() => setActiveTab('riparazioni')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'riparazioni' ? 'bg-slate-800 text-yellow-400' : ''}`}><Wrench size={20}/> Riparazioni</button>
+        <button onClick={() => setActiveTab('ordine-ricambi')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'ordine-ricambi' ? 'bg-slate-800 text-yellow-400' : ''}`}><Package size={20}/> Ordine Ricambi</button>
+        <button onClick={() => setActiveTab('preventivi-nuovi')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'preventivi-nuovi' ? 'bg-slate-800 text-yellow-400' : ''}`}><Ticket size={20}/> Preventivi Nuovi</button>
+        <button onClick={() => setActiveTab('calendar')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'calendar' ? 'bg-slate-800 text-yellow-400' : ''}`}><CalendarIcon size={20}/> Calendario</button>
         <button onClick={() => setActiveTab('inventory')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'inventory' ? 'bg-slate-800 text-yellow-400' : ''}`}><Package size={20}/> Magazzino</button>
         <button onClick={() => setActiveTab('settings')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'settings' ? 'bg-slate-800 text-yellow-400' : ''}`}><Bot size={20}/> Impostazioni</button>
       </nav>
@@ -1509,7 +1855,7 @@ export default function App() {
           <div className="flex gap-2">
             <button onClick={() => changeMonth(-1)} className="p-2 hover:bg-slate-100 rounded"><ChevronLeft/></button>
             <button onClick={() => changeMonth(1)} className="p-2 hover:bg-slate-100 rounded"><ChevronRight/></button>
-            <button onClick={() => setShowNewTicket(true)} className="bg-blue-600 text-white px-4 py-2 rounded flex gap-2"><Plus/> Nuovo Intervento</button>
+            <button onClick={() => setActiveTab('chiamate')} className="bg-blue-600 text-white px-4 py-2 rounded flex gap-2"><Plus/> Nuovo Intervento</button>
           </div>
         </div>
 
@@ -1521,21 +1867,85 @@ export default function App() {
             {days.map((day, idx) => {
               if (!day || !isValidDate(day)) return <div key={idx} className="bg-slate-50 h-32 rounded"></div>;
               const dayString = day.toISOString().split('T')[0];
-              const dayTickets = tickets.filter(t => t.date === dayString);
+              const dayInterventions = interventions.filter((i) => {
+                const dateString = new Date(i.openedAt).toISOString().split('T')[0];
+                return dateString === dayString;
+              });
               const isToday = dayString === new Date().toISOString().split('T')[0];
               return (
-                <div key={idx} className={`h-32 border rounded p-2 flex flex-col gap-1 overflow-y-auto ${isToday ? 'border-blue-500 bg-blue-50' : 'border-slate-200 hover:bg-slate-50'}`}>
+                <div
+                  key={idx}
+                  className={`h-32 border rounded p-2 flex flex-col gap-1 overflow-y-auto ${isToday ? 'border-blue-500 bg-blue-50' : 'border-slate-200 hover:bg-slate-50'}`}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    const interventionId = e.dataTransfer.getData('text/intervention-id') || draggingInterventionId;
+                    if (!interventionId) return;
+                    const intervention = interventions.find((entry) => entry.id === interventionId);
+                    if (!intervention) return;
+                    const currentTime = new Date(intervention.openedAt);
+                    const [year, month, dayNum] = dayString.split('-').map(Number);
+                    const newDate = new Date(year, month - 1, dayNum, currentTime.getHours(), currentTime.getMinutes(), 0, 0);
+                    handleInterventionScheduleChange(intervention, newDate.toISOString());
+                    setDraggingInterventionId(null);
+                  }}
+                >
                   <div className="text-right text-sm font-semibold text-slate-400">{day.getDate()}</div>
-                  {dayTickets.map(t => (
-                    <div key={t.id} onClick={() => openTicketModal(t)} className="text-xs bg-white border-l-4 border-yellow-500 p-1 rounded shadow-sm cursor-pointer hover:bg-yellow-50 truncate">
-                      <span className="font-bold">{t.time}</span> {t.subject}
-                    </div>
-                  ))}
+                  {dayInterventions.map((item) => {
+                    const openedDate = new Date(item.openedAt);
+                    const customerName = customers.find((c) => c.id === item.clientId)?.name || 'Cliente non assegnato';
+                    return (
+                      <div
+                        key={item.id}
+                        draggable
+                        onDragStart={(e) => {
+                          e.dataTransfer.setData('text/intervention-id', item.id);
+                          setDraggingInterventionId(item.id);
+                        }}
+                        onDragEnd={() => setDraggingInterventionId(null)}
+                        onClick={() => setCalendarEditorState(item)}
+                        className="text-xs bg-white border-l-4 border-indigo-500 p-1 rounded shadow-sm cursor-move hover:bg-indigo-50"
+                      >
+                        <div className="font-bold">{openedDate.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' })} • {item.type}</div>
+                        <div className="truncate">{customerName}</div>
+                      </div>
+                    );
+                  })}
                 </div>
               );
             })}
           </div>
         </div>
+
+        {calendarEditorState && (
+          <div className="bg-white rounded shadow p-4 border border-slate-200">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="font-semibold text-slate-800">Modifica data/ora intervento</h3>
+              <button className="text-sm text-slate-500" onClick={() => setCalendarEditorState(null)}>Chiudi</button>
+            </div>
+            <p className="text-sm text-slate-600 mb-3">{calendarEditorState.id} • {calendarEditorState.type}</p>
+            <div className="flex gap-3 items-end">
+              <div>
+                <label className="block text-xs text-slate-500 mb-1">Nuova data e ora</label>
+                <input
+                  type="datetime-local"
+                  className="border rounded p-2"
+                  defaultValue={toLocalDateTimeInput(calendarEditorState.openedAt)}
+                  onChange={(e) => setCalendarEditorState((prev) => ({ ...prev, openedAt: new Date(e.target.value).toISOString() }))}
+                />
+              </div>
+              <button
+                className="bg-indigo-600 text-white px-3 py-2 rounded"
+                onClick={() => {
+                  handleInterventionScheduleChange(calendarEditorState, calendarEditorState.openedAt);
+                  setCalendarEditorState(null);
+                }}
+              >
+                Salva spostamento
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     );
   };
@@ -1632,6 +2042,11 @@ export default function App() {
             {activeTab === 'dashboard' && <DashboardView />}
             {activeTab === 'calendar' && <CalendarView />}
             {activeTab === 'customers' && <CustomerListView />}
+            {activeTab === 'interventions' && <InterventionsView />}
+            {activeTab === 'chiamate' && <InterventionsView typeFilter="chiamata" title="Chiamate" description="Interventi a domicilio e richieste telefoniche." />}
+            {activeTab === 'riparazioni' && <InterventionsView typeFilter="riparazione" title="Riparazioni" description="Interventi di riparazione in laboratorio o da ritiro." />}
+            {activeTab === 'ordine-ricambi' && <InterventionsView typeFilter="ordine_ricambi" title="Ordine Ricambi" description="Ordini ricambi collegati a chiamate o riparazioni." />}
+            {activeTab === 'preventivi-nuovi' && <InterventionsView typeFilter="preventivo" title="Preventivi Nuovi" description="Preventivi per nuovi elettrodomestici." />}
             {activeTab === 'inventory' && <InventoryView />}
             {activeTab === 'settings' && <SettingsPanel />}
             
