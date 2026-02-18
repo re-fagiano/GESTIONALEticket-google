@@ -104,6 +104,12 @@ const sanitizeNumber = (value, fallback = 0) => {
   return Number.isFinite(parsed) ? parsed : fallback
 }
 
+const INTERVENTION_TYPES = new Set(['chiamata', 'riparazione', 'ordine_ricambi', 'preventivo'])
+const INTERVENTION_STATUSES = new Set(['pendente', 'preso_in_carico', 'diagnosticato', 'ordine_ricambi', 'preventivato', 'saldato', 'chiuso'])
+const URGENCY_LEVELS = new Set([1, 2, 3])
+const SPARE_PART_ORDER_STATUSES = new Set(['ordinato', 'in_arrivo', 'arrivato', 'consegnato'])
+const QUOTE_STATUSES = new Set(['proposto', 'accettato', 'rifiutato'])
+
 const isEmpty = (value) => value === null || value === undefined || value === ''
 
 const validateCustomerPayload = (payload) => {
@@ -157,6 +163,80 @@ const validateInventoryPayload = (payload) => {
   }
 }
 
+const validateInterventionPayload = (payload) => {
+  const clientId = sanitizeString(payload?.clientId || payload?.customerId)
+  if (!clientId) return { error: 'Il client_id è obbligatorio.' }
+  const type = sanitizeString(payload?.type)
+  if (!INTERVENTION_TYPES.has(type)) return { error: 'Tipo intervento non valido.' }
+
+  const status = sanitizeString(payload?.status, 'pendente')
+  if (!INTERVENTION_STATUSES.has(status)) return { error: 'Stato intervento non valido.' }
+
+  const urgency = sanitizeNumber(payload?.urgency, 2)
+  if (!URGENCY_LEVELS.has(urgency)) return { error: 'Urgenza non valida (1, 2, 3).' }
+
+  const parsedAdditionalData = payload?.additionalData && typeof payload.additionalData === 'object'
+    ? payload.additionalData
+    : {}
+
+  return {
+    value: {
+      id: ensureId(payload?.id),
+      clientId,
+      type,
+      status,
+      urgency,
+      openedAt: normalizeIso(payload?.openedAt) || nowIso(),
+      closedAt: normalizeIso(payload?.closedAt),
+      description: sanitizeString(payload?.description),
+      parentInterventionId: sanitizeString(payload?.parentInterventionId) || null,
+      additionalData: JSON.stringify(parsedAdditionalData),
+      updatedAt: ensureUpdatedAt(payload?.updatedAt),
+      version: sanitizeNumber(payload?.version, 1),
+    },
+  }
+}
+
+const validateSparePartOrderPayload = (payload) => {
+  const interventionId = sanitizeString(payload?.interventionId)
+  if (!interventionId) return { error: 'intervention_id obbligatorio.' }
+  const status = sanitizeString(payload?.status, 'ordinato')
+  if (!SPARE_PART_ORDER_STATUSES.has(status)) return { error: 'Stato ordine ricambi non valido.' }
+  return {
+    value: {
+      id: ensureId(payload?.id),
+      interventionId,
+      parts: JSON.stringify(Array.isArray(payload?.parts) ? payload.parts : []),
+      status,
+      supplier: sanitizeString(payload?.supplier),
+      notes: sanitizeString(payload?.notes),
+      updatedAt: ensureUpdatedAt(payload?.updatedAt),
+      version: sanitizeNumber(payload?.version, 1),
+    },
+  }
+}
+
+const validateQuotePayload = (payload) => {
+  const interventionId = sanitizeString(payload?.interventionId)
+  if (!interventionId) return { error: 'intervention_id obbligatorio.' }
+  const status = sanitizeString(payload?.status, 'proposto')
+  if (!QUOTE_STATUSES.has(status)) return { error: 'Stato preventivo non valido.' }
+  return {
+    value: {
+      id: ensureId(payload?.id),
+      interventionId,
+      items: JSON.stringify(Array.isArray(payload?.items) ? payload.items : []),
+      totalAmount: sanitizeNumber(payload?.totalAmount, 0),
+      discount: sanitizeNumber(payload?.discount, 0),
+      validUntil: normalizeIso(payload?.validUntil),
+      status,
+      notes: sanitizeString(payload?.notes),
+      updatedAt: ensureUpdatedAt(payload?.updatedAt),
+      version: sanitizeNumber(payload?.version, 1),
+    },
+  }
+}
+
 const mapCustomerRow = (row) => (row ? ({
   id: row.id,
   name: row.name,
@@ -202,6 +282,75 @@ const mapSettingRow = (row) => (row ? ({
       return row.value
     }
   })(),
+  createdAt: row.created_at,
+  updatedAt: row.updated_at,
+  version: row.version,
+}) : null)
+
+const mapInterventionRow = (row) => {
+  if (!row) return null
+  const openedTime = row.opened_at ? new Date(row.opened_at).getTime() : null
+  const closedTime = row.closed_at ? new Date(row.closed_at).getTime() : Date.now()
+  const durationDays = (openedTime && Number.isFinite(closedTime))
+    ? Math.max(0, Math.ceil((closedTime - openedTime) / 86_400_000))
+    : 0
+  return {
+    id: row.id,
+    clientId: row.client_id,
+    type: row.type,
+    status: row.status,
+    urgency: row.urgency,
+    openedAt: row.opened_at,
+    closedAt: row.closed_at,
+    description: row.description,
+    parentInterventionId: row.parent_intervention_id,
+    additionalData: (() => {
+      try {
+        return row.additional_data ? JSON.parse(row.additional_data) : {}
+      } catch {
+        return {}
+      }
+    })(),
+    durationDays,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    version: row.version,
+  }
+}
+
+const mapSparePartOrderRow = (row) => (row ? ({
+  id: row.id,
+  interventionId: row.intervention_id,
+  parts: (() => {
+    try {
+      return row.parts ? JSON.parse(row.parts) : []
+    } catch {
+      return []
+    }
+  })(),
+  status: row.status,
+  supplier: row.supplier,
+  notes: row.notes,
+  createdAt: row.created_at,
+  updatedAt: row.updated_at,
+  version: row.version,
+}) : null)
+
+const mapQuoteRow = (row) => (row ? ({
+  id: row.id,
+  interventionId: row.intervention_id,
+  items: (() => {
+    try {
+      return row.items ? JSON.parse(row.items) : []
+    } catch {
+      return []
+    }
+  })(),
+  totalAmount: row.total_amount,
+  discount: row.discount,
+  validUntil: row.valid_until,
+  status: row.status,
+  notes: row.notes,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
   version: row.version,
@@ -310,11 +459,79 @@ db.exec(`
     updated_at TEXT NOT NULL,
     version INTEGER NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS interventions (
+    id TEXT PRIMARY KEY,
+    client_id TEXT NOT NULL,
+    type TEXT NOT NULL,
+    status TEXT NOT NULL,
+    urgency INTEGER NOT NULL,
+    opened_at TEXT NOT NULL,
+    closed_at TEXT,
+    description TEXT,
+    parent_intervention_id TEXT,
+    additional_data TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    FOREIGN KEY(client_id) REFERENCES customers(id)
+  );
+  CREATE TABLE IF NOT EXISTS spare_parts_orders (
+    id TEXT PRIMARY KEY,
+    intervention_id TEXT NOT NULL,
+    parts TEXT,
+    status TEXT NOT NULL,
+    supplier TEXT,
+    notes TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    FOREIGN KEY(intervention_id) REFERENCES interventions(id)
+  );
+  CREATE TABLE IF NOT EXISTS quotes (
+    id TEXT PRIMARY KEY,
+    intervention_id TEXT NOT NULL,
+    items TEXT,
+    total_amount REAL,
+    discount REAL,
+    valid_until TEXT,
+    status TEXT NOT NULL,
+    notes TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    FOREIGN KEY(intervention_id) REFERENCES interventions(id)
+  );
 `)
 
 const getRow = (sql, params = []) => db.prepare(sql).get(...params)
 const getAll = (sql, params = []) => db.prepare(sql).all(...params)
 const runQuery = (sql, params = []) => db.prepare(sql).run(...params)
+
+const ticketsCount = getRow('SELECT COUNT(*) AS total FROM tickets')?.total || 0
+const interventionsCount = getRow('SELECT COUNT(*) AS total FROM interventions')?.total || 0
+if (ticketsCount > 0 && interventionsCount === 0) {
+  const legacyTickets = getAll('SELECT * FROM tickets')
+  legacyTickets.forEach((ticket) => {
+    runQuery(
+      'INSERT INTO interventions (id, client_id, type, status, urgency, opened_at, closed_at, description, parent_intervention_id, additional_data, created_at, updated_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [
+        ensureId(ticket.id),
+        ticket.customer_id || '',
+        'chiamata',
+        INTERVENTION_STATUSES.has(ticket.status) ? ticket.status : 'pendente',
+        2,
+        ticket.date ? `${ticket.date}T${ticket.time || '09:00'}:00.000Z` : nowIso(),
+        ticket.status === 'chiuso' ? nowIso() : null,
+        ticket.description || ticket.subject || '',
+        null,
+        JSON.stringify({ legacyTicketId: ticket.id, subject: ticket.subject }),
+        ticket.created_at || nowIso(),
+        ticket.updated_at || nowIso(),
+        ticket.version || 1,
+      ],
+    )
+  })
+}
 
 const parseVersion = (value) => {
   const parsed = Number(value)
@@ -461,6 +678,9 @@ const handleApiRequest = async (req, res, url) => {
     return respond(res, 200, {
       customers: getAll('SELECT * FROM customers').map(mapCustomerRow),
       tickets: getAll('SELECT * FROM tickets').map(mapTicketRow),
+      interventions: getAll('SELECT * FROM interventions').map(mapInterventionRow),
+      sparePartsOrders: getAll('SELECT * FROM spare_parts_orders').map(mapSparePartOrderRow),
+      quotes: getAll('SELECT * FROM quotes').map(mapQuoteRow),
       inventory: getAll('SELECT * FROM inventory').map(mapInventoryRow),
       settings: getAll('SELECT * FROM settings').map(mapSettingRow),
     })
@@ -471,11 +691,17 @@ const handleApiRequest = async (req, res, url) => {
       const payload = await readJsonBody(req)
       const customers = Array.isArray(payload?.customers) ? payload.customers : []
       const tickets = Array.isArray(payload?.tickets) ? payload.tickets : []
+      const interventions = Array.isArray(payload?.interventions) ? payload.interventions : []
+      const sparePartsOrders = Array.isArray(payload?.sparePartsOrders) ? payload.sparePartsOrders : []
+      const quotes = Array.isArray(payload?.quotes) ? payload.quotes : []
       const inventory = Array.isArray(payload?.inventory) ? payload.inventory : []
       const settings = Array.isArray(payload?.settings) ? payload.settings : []
       db.exec('BEGIN')
       runQuery('DELETE FROM customers')
       runQuery('DELETE FROM tickets')
+      runQuery('DELETE FROM interventions')
+      runQuery('DELETE FROM spare_parts_orders')
+      runQuery('DELETE FROM quotes')
       runQuery('DELETE FROM inventory')
       runQuery('DELETE FROM settings')
       customers.forEach((customer, idx) => {
@@ -492,6 +718,30 @@ const handleApiRequest = async (req, res, url) => {
         runQuery(
           'INSERT INTO tickets (id, subject, description, customer_id, status, date, time, created_at, updated_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
           [value.id, value.subject, value.description, value.customerId, value.status, value.date, value.time, nowIso(), value.updatedAt, value.version || 1],
+        )
+      })
+      interventions.forEach((intervention) => {
+        const { error, value } = validateInterventionPayload(intervention)
+        if (error) throw new Error(error)
+        runQuery(
+          'INSERT INTO interventions (id, client_id, type, status, urgency, opened_at, closed_at, description, parent_intervention_id, additional_data, created_at, updated_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          [value.id, value.clientId, value.type, value.status, value.urgency, value.openedAt, value.closedAt, value.description, value.parentInterventionId, value.additionalData, nowIso(), value.updatedAt, value.version || 1],
+        )
+      })
+      sparePartsOrders.forEach((order) => {
+        const { error, value } = validateSparePartOrderPayload(order)
+        if (error) throw new Error(error)
+        runQuery(
+          'INSERT INTO spare_parts_orders (id, intervention_id, parts, status, supplier, notes, created_at, updated_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          [value.id, value.interventionId, value.parts, value.status, value.supplier, value.notes, nowIso(), value.updatedAt, value.version || 1],
+        )
+      })
+      quotes.forEach((quote) => {
+        const { error, value } = validateQuotePayload(quote)
+        if (error) throw new Error(error)
+        runQuery(
+          'INSERT INTO quotes (id, intervention_id, items, total_amount, discount, valid_until, status, notes, created_at, updated_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          [value.id, value.interventionId, value.items, value.totalAmount, value.discount, value.validUntil, value.status, value.notes, nowIso(), value.updatedAt, value.version || 1],
         )
       })
       inventory.forEach((item) => {
@@ -701,6 +951,164 @@ const handleApiRequest = async (req, res, url) => {
     const id = match(/^\/api\/inventory\/(.+)$/)
     if (!id) return respond(res, 404, { error: 'Ricambio non trovato.' })
     runQuery('DELETE FROM inventory WHERE id = ?', [id])
+    return respond(res, 204, '')
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/interventions') {
+    const filters = []
+    const params = []
+    const type = sanitizeString(url.searchParams.get('type'))
+    const status = sanitizeString(url.searchParams.get('status'))
+    const clientId = sanitizeString(url.searchParams.get('clientId'))
+    const urgency = sanitizeNumber(url.searchParams.get('urgency'), null)
+    const from = normalizeIso(url.searchParams.get('from'))
+    const to = normalizeIso(url.searchParams.get('to'))
+    if (type) {
+      filters.push('type = ?')
+      params.push(type)
+    }
+    if (status) {
+      filters.push('status = ?')
+      params.push(status)
+    }
+    if (clientId) {
+      filters.push('client_id = ?')
+      params.push(clientId)
+    }
+    if (Number.isFinite(urgency)) {
+      filters.push('urgency = ?')
+      params.push(urgency)
+    }
+    if (from) {
+      filters.push('opened_at >= ?')
+      params.push(from)
+    }
+    if (to) {
+      filters.push('opened_at <= ?')
+      params.push(to)
+    }
+    const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : ''
+    const orderBy = sanitizeString(url.searchParams.get('orderBy'), 'opened_at')
+    const direction = sanitizeString(url.searchParams.get('direction'), 'DESC').toUpperCase() === 'ASC' ? 'ASC' : 'DESC'
+    const allowedOrderBy = new Set(['opened_at', 'urgency', 'status', 'type'])
+    const sortColumn = allowedOrderBy.has(orderBy) ? orderBy : 'opened_at'
+    const page = Math.max(1, sanitizeNumber(url.searchParams.get('page'), 1))
+    const pageSize = Math.min(100, Math.max(1, sanitizeNumber(url.searchParams.get('pageSize'), 25)))
+    const offset = (page - 1) * pageSize
+    const rows = getAll(
+      `SELECT * FROM interventions ${whereClause} ORDER BY ${sortColumn} ${direction} LIMIT ? OFFSET ?`,
+      [...params, pageSize, offset],
+    )
+    return respond(res, 200, rows.map(mapInterventionRow))
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/interventions') {
+    const payload = await readJsonBody(req)
+    const { error, value } = validateInterventionPayload(payload)
+    if (error) return respond(res, 400, { error })
+    runQuery(
+      'INSERT INTO interventions (id, client_id, type, status, urgency, opened_at, closed_at, description, parent_intervention_id, additional_data, created_at, updated_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [value.id, value.clientId, value.type, value.status, value.urgency, value.openedAt, value.closedAt, value.description, value.parentInterventionId, value.additionalData, nowIso(), value.updatedAt, 1],
+    )
+    return respond(res, 201, mapInterventionRow(getRow('SELECT * FROM interventions WHERE id = ?', [value.id])))
+  }
+
+  if (req.method === 'PUT' && url.pathname.startsWith('/api/interventions/')) {
+    const id = match(/^\/api\/interventions\/(.+)$/)
+    if (!id) return respond(res, 404, { error: 'Intervento non trovato.' })
+    const payload = await readJsonBody(req)
+    const { error, value } = validateInterventionPayload({ ...payload, id })
+    if (error) return respond(res, 400, { error })
+    const existing = getRow('SELECT * FROM interventions WHERE id = ?', [id])
+    if (!existing) return respond(res, 404, { error: 'Intervento non trovato.' })
+    const conflictReason = resolveConflict(existing, value)
+    if (conflictReason) {
+      return sendConflict(res, 'Conflitto intervento: aggiorna i dati.', mapInterventionRow(existing))
+    }
+    runQuery(
+      'UPDATE interventions SET client_id = ?, type = ?, status = ?, urgency = ?, opened_at = ?, closed_at = ?, description = ?, parent_intervention_id = ?, additional_data = ?, updated_at = ?, version = ? WHERE id = ?',
+      [value.clientId, value.type, value.status, value.urgency, value.openedAt, value.closedAt, value.description, value.parentInterventionId, value.additionalData, value.updatedAt, existing.version + 1, id],
+    )
+    return respond(res, 200, mapInterventionRow(getRow('SELECT * FROM interventions WHERE id = ?', [id])))
+  }
+
+  if (req.method === 'DELETE' && url.pathname.startsWith('/api/interventions/')) {
+    const id = match(/^\/api\/interventions\/(.+)$/)
+    if (!id) return respond(res, 404, { error: 'Intervento non trovato.' })
+    runQuery('DELETE FROM interventions WHERE id = ?', [id])
+    return respond(res, 204, '')
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/spare-parts-orders') {
+    return respond(res, 200, getAll('SELECT * FROM spare_parts_orders').map(mapSparePartOrderRow))
+  }
+  if (req.method === 'POST' && url.pathname === '/api/spare-parts-orders') {
+    const payload = await readJsonBody(req)
+    const { error, value } = validateSparePartOrderPayload(payload)
+    if (error) return respond(res, 400, { error })
+    runQuery(
+      'INSERT INTO spare_parts_orders (id, intervention_id, parts, status, supplier, notes, created_at, updated_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [value.id, value.interventionId, value.parts, value.status, value.supplier, value.notes, nowIso(), value.updatedAt, 1],
+    )
+    runQuery('UPDATE interventions SET status = ?, updated_at = ?, version = version + 1 WHERE id = ?', ['ordine_ricambi', nowIso(), value.interventionId])
+    return respond(res, 201, mapSparePartOrderRow(getRow('SELECT * FROM spare_parts_orders WHERE id = ?', [value.id])))
+  }
+  if (req.method === 'PUT' && url.pathname.startsWith('/api/spare-parts-orders/')) {
+    const id = match(/^\/api\/spare-parts-orders\/(.+)$/)
+    if (!id) return respond(res, 404, { error: 'Ordine ricambi non trovato.' })
+    const payload = await readJsonBody(req)
+    const { error, value } = validateSparePartOrderPayload({ ...payload, id })
+    if (error) return respond(res, 400, { error })
+    const existing = getRow('SELECT * FROM spare_parts_orders WHERE id = ?', [id])
+    if (!existing) return respond(res, 404, { error: 'Ordine ricambi non trovato.' })
+    runQuery(
+      'UPDATE spare_parts_orders SET intervention_id = ?, parts = ?, status = ?, supplier = ?, notes = ?, updated_at = ?, version = ? WHERE id = ?',
+      [value.interventionId, value.parts, value.status, value.supplier, value.notes, value.updatedAt, existing.version + 1, id],
+    )
+    return respond(res, 200, mapSparePartOrderRow(getRow('SELECT * FROM spare_parts_orders WHERE id = ?', [id])))
+  }
+  if (req.method === 'DELETE' && url.pathname.startsWith('/api/spare-parts-orders/')) {
+    const id = match(/^\/api\/spare-parts-orders\/(.+)$/)
+    if (!id) return respond(res, 404, { error: 'Ordine ricambi non trovato.' })
+    runQuery('DELETE FROM spare_parts_orders WHERE id = ?', [id])
+    return respond(res, 204, '')
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/quotes') {
+    return respond(res, 200, getAll('SELECT * FROM quotes').map(mapQuoteRow))
+  }
+  if (req.method === 'POST' && url.pathname === '/api/quotes') {
+    const payload = await readJsonBody(req)
+    const { error, value } = validateQuotePayload(payload)
+    if (error) return respond(res, 400, { error })
+    runQuery(
+      'INSERT INTO quotes (id, intervention_id, items, total_amount, discount, valid_until, status, notes, created_at, updated_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [value.id, value.interventionId, value.items, value.totalAmount, value.discount, value.validUntil, value.status, value.notes, nowIso(), value.updatedAt, 1],
+    )
+    runQuery('UPDATE interventions SET status = ?, updated_at = ?, version = version + 1 WHERE id = ?', ['preventivato', nowIso(), value.interventionId])
+    return respond(res, 201, mapQuoteRow(getRow('SELECT * FROM quotes WHERE id = ?', [value.id])))
+  }
+  if (req.method === 'PUT' && url.pathname.startsWith('/api/quotes/')) {
+    const id = match(/^\/api\/quotes\/(.+)$/)
+    if (!id) return respond(res, 404, { error: 'Preventivo non trovato.' })
+    const payload = await readJsonBody(req)
+    const { error, value } = validateQuotePayload({ ...payload, id })
+    if (error) return respond(res, 400, { error })
+    const existing = getRow('SELECT * FROM quotes WHERE id = ?', [id])
+    if (!existing) return respond(res, 404, { error: 'Preventivo non trovato.' })
+    runQuery(
+      'UPDATE quotes SET intervention_id = ?, items = ?, total_amount = ?, discount = ?, valid_until = ?, status = ?, notes = ?, updated_at = ?, version = ? WHERE id = ?',
+      [value.interventionId, value.items, value.totalAmount, value.discount, value.validUntil, value.status, value.notes, value.updatedAt, existing.version + 1, id],
+    )
+    if (value.status === 'accettato') {
+      runQuery('UPDATE interventions SET status = ?, updated_at = ?, version = version + 1 WHERE id = ?', ['saldato', nowIso(), value.interventionId])
+    }
+    return respond(res, 200, mapQuoteRow(getRow('SELECT * FROM quotes WHERE id = ?', [id])))
+  }
+  if (req.method === 'DELETE' && url.pathname.startsWith('/api/quotes/')) {
+    const id = match(/^\/api\/quotes\/(.+)$/)
+    if (!id) return respond(res, 404, { error: 'Preventivo non trovato.' })
+    runQuery('DELETE FROM quotes WHERE id = ?', [id])
     return respond(res, 204, '')
   }
 
