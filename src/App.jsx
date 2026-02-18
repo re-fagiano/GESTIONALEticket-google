@@ -81,6 +81,12 @@ const idbSet = async (key, value) => {
   });
 };
 const nowIso = () => new Date().toISOString();
+const toLocalDateTimeInput = (value) => {
+  const date = value ? new Date(value) : new Date();
+  if (Number.isNaN(date.getTime())) return '';
+  const offsetMs = date.getTimezoneOffset() * 60_000;
+  return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
+};
 
 const safeGetItem = (key, fallback = null) => {
   if (!storageAvailable) return fallback;
@@ -1792,6 +1798,11 @@ const buildBackup = () => ({
         <button onClick={() => setActiveTab('interventions')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'interventions' ? 'bg-slate-800 text-yellow-400' : ''}`}><Wrench size={20}/> Interventi</button>
         <button onClick={() => setActiveTab('calendar')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'calendar' ? 'bg-slate-800 text-yellow-400' : ''}`}><Wrench size={20}/> Riparazioni</button>
         <button onClick={() => setActiveTab('customers')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'customers' ? 'bg-slate-800 text-yellow-400' : ''}`}><Users size={20}/> Clienti</button>
+        <button onClick={() => setActiveTab('chiamate')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'chiamate' ? 'bg-slate-800 text-yellow-400' : ''}`}><Phone size={20}/> Chiamate</button>
+        <button onClick={() => setActiveTab('riparazioni')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'riparazioni' ? 'bg-slate-800 text-yellow-400' : ''}`}><Wrench size={20}/> Riparazioni</button>
+        <button onClick={() => setActiveTab('ordine-ricambi')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'ordine-ricambi' ? 'bg-slate-800 text-yellow-400' : ''}`}><Package size={20}/> Ordine Ricambi</button>
+        <button onClick={() => setActiveTab('preventivi-nuovi')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'preventivi-nuovi' ? 'bg-slate-800 text-yellow-400' : ''}`}><Ticket size={20}/> Preventivi Nuovi</button>
+        <button onClick={() => setActiveTab('calendar')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'calendar' ? 'bg-slate-800 text-yellow-400' : ''}`}><CalendarIcon size={20}/> Calendario</button>
         <button onClick={() => setActiveTab('inventory')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'inventory' ? 'bg-slate-800 text-yellow-400' : ''}`}><Package size={20}/> Magazzino</button>
         <button onClick={() => setActiveTab('settings')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'settings' ? 'bg-slate-800 text-yellow-400' : ''}`}><Bot size={20}/> Impostazioni</button>
       </nav>
@@ -1810,7 +1821,7 @@ const buildBackup = () => ({
           <div className="flex gap-2">
             <button onClick={() => changeMonth(-1)} className="p-2 hover:bg-slate-100 rounded"><ChevronLeft/></button>
             <button onClick={() => changeMonth(1)} className="p-2 hover:bg-slate-100 rounded"><ChevronRight/></button>
-            <button onClick={() => setShowNewTicket(true)} className="bg-blue-600 text-white px-4 py-2 rounded flex gap-2"><Plus/> Nuovo Intervento</button>
+            <button onClick={() => setActiveTab('chiamate')} className="bg-blue-600 text-white px-4 py-2 rounded flex gap-2"><Plus/> Nuovo Intervento</button>
           </div>
         </div>
 
@@ -1822,21 +1833,85 @@ const buildBackup = () => ({
             {days.map((day, idx) => {
               if (!day || !isValidDate(day)) return <div key={idx} className="bg-slate-50 h-32 rounded"></div>;
               const dayString = day.toISOString().split('T')[0];
-              const dayTickets = tickets.filter(t => t.date === dayString);
+              const dayInterventions = interventions.filter((i) => {
+                const dateString = new Date(i.openedAt).toISOString().split('T')[0];
+                return dateString === dayString;
+              });
               const isToday = dayString === new Date().toISOString().split('T')[0];
               return (
-                <div key={idx} className={`h-32 border rounded p-2 flex flex-col gap-1 overflow-y-auto ${isToday ? 'border-blue-500 bg-blue-50' : 'border-slate-200 hover:bg-slate-50'}`}>
+                <div
+                  key={idx}
+                  className={`h-32 border rounded p-2 flex flex-col gap-1 overflow-y-auto ${isToday ? 'border-blue-500 bg-blue-50' : 'border-slate-200 hover:bg-slate-50'}`}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    const interventionId = e.dataTransfer.getData('text/intervention-id') || draggingInterventionId;
+                    if (!interventionId) return;
+                    const intervention = interventions.find((entry) => entry.id === interventionId);
+                    if (!intervention) return;
+                    const currentTime = new Date(intervention.openedAt);
+                    const [year, month, dayNum] = dayString.split('-').map(Number);
+                    const newDate = new Date(year, month - 1, dayNum, currentTime.getHours(), currentTime.getMinutes(), 0, 0);
+                    handleInterventionScheduleChange(intervention, newDate.toISOString());
+                    setDraggingInterventionId(null);
+                  }}
+                >
                   <div className="text-right text-sm font-semibold text-slate-400">{day.getDate()}</div>
-                  {dayTickets.map(t => (
-                    <div key={t.id} onClick={() => openTicketModal(t)} className="text-xs bg-white border-l-4 border-yellow-500 p-1 rounded shadow-sm cursor-pointer hover:bg-yellow-50 truncate">
-                      <span className="font-bold">{t.time}</span> {t.subject}
-                    </div>
-                  ))}
+                  {dayInterventions.map((item) => {
+                    const openedDate = new Date(item.openedAt);
+                    const customerName = customers.find((c) => c.id === item.clientId)?.name || 'Cliente non assegnato';
+                    return (
+                      <div
+                        key={item.id}
+                        draggable
+                        onDragStart={(e) => {
+                          e.dataTransfer.setData('text/intervention-id', item.id);
+                          setDraggingInterventionId(item.id);
+                        }}
+                        onDragEnd={() => setDraggingInterventionId(null)}
+                        onClick={() => setCalendarEditorItem(item)}
+                        className="text-xs bg-white border-l-4 border-indigo-500 p-1 rounded shadow-sm cursor-move hover:bg-indigo-50"
+                      >
+                        <div className="font-bold">{openedDate.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' })} • {item.type}</div>
+                        <div className="truncate">{customerName}</div>
+                      </div>
+                    );
+                  })}
                 </div>
               );
             })}
           </div>
         </div>
+
+        {calendarEditorItem && (
+          <div className="bg-white rounded shadow p-4 border border-slate-200">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="font-semibold text-slate-800">Modifica data/ora intervento</h3>
+              <button className="text-sm text-slate-500" onClick={() => setCalendarEditorItem(null)}>Chiudi</button>
+            </div>
+            <p className="text-sm text-slate-600 mb-3">{calendarEditorItem.id} • {calendarEditorItem.type}</p>
+            <div className="flex gap-3 items-end">
+              <div>
+                <label className="block text-xs text-slate-500 mb-1">Nuova data e ora</label>
+                <input
+                  type="datetime-local"
+                  className="border rounded p-2"
+                  defaultValue={toLocalDateTimeInput(calendarEditorItem.openedAt)}
+                  onChange={(e) => setCalendarEditorItem((prev) => ({ ...prev, openedAt: new Date(e.target.value).toISOString() }))}
+                />
+              </div>
+              <button
+                className="bg-indigo-600 text-white px-3 py-2 rounded"
+                onClick={() => {
+                  handleInterventionScheduleChange(calendarEditorItem, calendarEditorItem.openedAt);
+                  setCalendarEditorItem(null);
+                }}
+              >
+                Salva spostamento
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     );
   };
