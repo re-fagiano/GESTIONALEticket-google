@@ -637,7 +637,6 @@ export default function App() {
     type: 'chiamata',
     status: 'pendente',
     urgency: 2,
-    scheduledAt: toLocalDateTimeInput(nowIso()),
     description: '',
     parentInterventionId: '',
     applianceBrand: '',
@@ -664,8 +663,6 @@ export default function App() {
   const [isImportingInventory, setIsImportingInventory] = useState(false);
   const [interventionSearch, setInterventionSearch] = useState('');
   const [interventionFilters, setInterventionFilters] = useState({ clientId: '', type: '', status: '', urgency: '' });
-  const [draggingInterventionId, setDraggingInterventionId] = useState(null);
-  const [calendarEditorItem, setCalendarEditorItem] = useState(null);
 
   // --- AZIONI ---
   const handleApiError = (error, fallback) => {
@@ -800,7 +797,7 @@ export default function App() {
       type: newIntervention.type,
       status: newIntervention.status,
       urgency: Number(newIntervention.urgency || 2),
-      openedAt: newIntervention.scheduledAt ? new Date(newIntervention.scheduledAt).toISOString() : nowIso(),
+      openedAt: nowIso(),
       description: newIntervention.description,
       parentInterventionId: newIntervention.parentInterventionId || null,
       additionalData,
@@ -815,7 +812,7 @@ export default function App() {
       });
       setInterventions((prev) => sanitizeInterventions([created, ...prev], initialInterventions));
       setNewIntervention({
-        clientId: '', type: 'chiamata', status: 'pendente', urgency: 2, scheduledAt: toLocalDateTimeInput(nowIso()), description: '', parentInterventionId: '',
+        clientId: '', type: 'chiamata', status: 'pendente', urgency: 2, description: '', parentInterventionId: '',
         applianceBrand: '', applianceModel: '', serialNumber: '', defect: '',
         sparePartCode: '', sparePartQty: 1, supplier: '', quoteItems: '', quoteTotal: 0, quoteValidUntil: ''
       });
@@ -843,25 +840,6 @@ export default function App() {
       setSyncStatus('Intervento aggiornato.');
     } catch (error) {
       handleApiError(error, 'Impossibile aggiornare lo stato intervento.');
-    }
-  };
-
-  const handleInterventionScheduleChange = async (intervention, newDateIso) => {
-    if (!intervention || !newDateIso) return;
-    const updated = {
-      ...intervention,
-      openedAt: newDateIso,
-      updatedAt: nowIso(),
-    };
-    try {
-      const saved = await apiFetchWithRetry(`/api/interventions/${intervention.id}`, {
-        method: 'PUT',
-        body: JSON.stringify(updated)
-      });
-      setInterventions((prev) => prev.map((entry) => (entry.id === intervention.id ? sanitizeIntervention(saved) : entry)));
-      setSyncStatus('Data intervento aggiornata.');
-    } catch (error) {
-      handleApiError(error, 'Impossibile aggiornare data/ora intervento.');
     }
   };
 
@@ -1528,9 +1506,8 @@ const buildBackup = () => ({
     )
   };
 
-  const InterventionsView = ({ typeFilter = '', title = 'Interventi', description = 'Gestione chiamate, riparazioni, ordini ricambi e preventivi.' }) => {
+  const InterventionsView = () => {
     const filtered = interventions.filter((item) => {
-      if (typeFilter && item.type !== typeFilter) return false;
       const customerName = customers.find((c) => c.id === item.clientId)?.name || '';
       const query = interventionSearch.trim().toLowerCase();
       const matchesSearch = !query
@@ -1548,8 +1525,8 @@ const buildBackup = () => ({
       <div className="space-y-6">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
-            <h2 className="text-3xl font-bold text-slate-800">{title}</h2>
-            <p className="text-sm text-slate-500">{description}</p>
+            <h2 className="text-3xl font-bold text-slate-800">Interventi</h2>
+            <p className="text-sm text-slate-500">Gestione chiamate, riparazioni, ordini ricambi e preventivi.</p>
           </div>
         </div>
 
@@ -1559,7 +1536,7 @@ const buildBackup = () => ({
             <option value="">Tutti i clienti</option>
             {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
-          <select className="border rounded p-2" value={typeFilter || interventionFilters.type} onChange={(e) => setInterventionFilters((p) => ({ ...p, type: e.target.value }))} disabled={Boolean(typeFilter)}>
+          <select className="border rounded p-2" value={interventionFilters.type} onChange={(e) => setInterventionFilters((p) => ({ ...p, type: e.target.value }))}>
             <option value="">Tutti i tipi</option>
             {interventionTypes.map((t) => <option key={t} value={t}>{t}</option>)}
           </select>
@@ -1592,7 +1569,6 @@ const buildBackup = () => ({
             <select className="border rounded p-2" value={newIntervention.urgency} onChange={(e) => setNewIntervention((p) => ({ ...p, urgency: Number(e.target.value) }))}>
               <option value={1}>Bassa</option><option value={2}>Media</option><option value={3}>Alta</option>
             </select>
-            <input type="datetime-local" className="border rounded p-2" value={newIntervention.scheduledAt} onChange={(e) => setNewIntervention((p) => ({ ...p, scheduledAt: e.target.value }))} />
           </div>
           <textarea className="w-full border rounded p-2" placeholder="Descrizione" value={newIntervention.description} onChange={(e) => setNewIntervention((p) => ({ ...p, description: e.target.value }))} />
           {newIntervention.type === 'riparazione' && (
@@ -1818,6 +1794,9 @@ const buildBackup = () => ({
       </div>
       <nav className="p-4 space-y-2 flex-1">
         <button onClick={() => setActiveTab('dashboard')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'dashboard' ? 'bg-slate-800 text-yellow-400' : ''}`}><LayoutDashboard size={20}/> Dashboard</button>
+        <button onClick={() => setActiveTab('tickets')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'tickets' ? 'bg-slate-800 text-yellow-400' : ''}`}><Ticket size={20}/> Ticket</button>
+        <button onClick={() => setActiveTab('interventions')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'interventions' ? 'bg-slate-800 text-yellow-400' : ''}`}><Wrench size={20}/> Interventi</button>
+        <button onClick={() => setActiveTab('calendar')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'calendar' ? 'bg-slate-800 text-yellow-400' : ''}`}><Wrench size={20}/> Riparazioni</button>
         <button onClick={() => setActiveTab('customers')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'customers' ? 'bg-slate-800 text-yellow-400' : ''}`}><Users size={20}/> Clienti</button>
         <button onClick={() => setActiveTab('chiamate')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'chiamate' ? 'bg-slate-800 text-yellow-400' : ''}`}><Phone size={20}/> Chiamate</button>
         <button onClick={() => setActiveTab('riparazioni')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'riparazioni' ? 'bg-slate-800 text-yellow-400' : ''}`}><Wrench size={20}/> Riparazioni</button>
@@ -2030,10 +2009,6 @@ const buildBackup = () => ({
             {activeTab === 'calendar' && <CalendarView />}
             {activeTab === 'customers' && <CustomerListView />}
             {activeTab === 'interventions' && <InterventionsView />}
-            {activeTab === 'chiamate' && <InterventionsView typeFilter="chiamata" title="Chiamate" description="Interventi a domicilio e richieste telefoniche." />}
-            {activeTab === 'riparazioni' && <InterventionsView typeFilter="riparazione" title="Riparazioni" description="Interventi di riparazione in laboratorio o da ritiro." />}
-            {activeTab === 'ordine-ricambi' && <InterventionsView typeFilter="ordine_ricambi" title="Ordine Ricambi" description="Ordini ricambi collegati a chiamate o riparazioni." />}
-            {activeTab === 'preventivi-nuovi' && <InterventionsView typeFilter="preventivo" title="Preventivi Nuovi" description="Preventivi per nuovi elettrodomestici." />}
             {activeTab === 'inventory' && <InventoryView />}
             {activeTab === 'settings' && <SettingsPanel />}
             
