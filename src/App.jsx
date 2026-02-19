@@ -200,6 +200,8 @@ const sanitizeTicket = (ticket, idx = 0) => {
     description: typeof ticket.description === 'string' ? ticket.description : '',
     customerId: typeof ticket.customerId === 'string' ? ticket.customerId : '',
     status: ticket.status || 'aperto',
+    type: interventionTypes.includes(ticket.type) ? ticket.type : 'chiamata',
+    urgency: [1, 2, 3].includes(Number(ticket.urgency)) ? Number(ticket.urgency) : 2,
     date: safeDate,
     time: safeTime,
     updatedAt: typeof ticket.updatedAt === 'string' ? ticket.updatedAt : nowIso(),
@@ -273,6 +275,19 @@ const sanitizeInventoryList = (list, fallback = []) => {
 
 const interventionTypes = ['chiamata', 'riparazione', 'ordine_ricambi', 'preventivo'];
 const interventionStatuses = ['pendente', 'preso_in_carico', 'diagnosticato', 'ordine_ricambi', 'preventivato', 'saldato', 'chiuso'];
+const interventionTypeMeta = {
+  chiamata: { label: 'Chiamate', color: 'blue' },
+  riparazione: { label: 'Riparazioni', color: 'indigo' },
+  ordine_ricambi: { label: 'Ordini Ricambi', color: 'amber' },
+  preventivo: { label: 'Preventivi', color: 'emerald' }
+};
+
+const dedicatedTabToType = {
+  chiamate: 'chiamata',
+  riparazioni: 'riparazione',
+  'ordine-ricambi': 'ordine_ricambi',
+  'preventivi-nuovi': 'preventivo'
+};
 
 const sanitizeIntervention = (item, idx = 0) => {
   if (!item || typeof item !== 'object') return null;
@@ -346,6 +361,8 @@ export default function App() {
 
   // --- STATO CALENDARIO ---
   const [currentDate, setCurrentDate] = useState(new Date());
+  const [draggingInterventionId, setDraggingInterventionId] = useState(null);
+  const [calendarEditorItem, setCalendarEditorItem] = useState(null);
 
   // --- STATO APP ---
   const [customers, setCustomers] = useState(() => sanitizeCustomers(loadCache('customers', initialCustomers), initialCustomers));
@@ -629,7 +646,7 @@ export default function App() {
   // Forms
   const [newCustomer, setNewCustomer] = useState({ name: '', email: '', phone: '', address: '' });
   const [newTicket, setNewTicket] = useState({
-    subject: '', description: '', customerId: '', status: 'aperto',
+    subject: '', description: '', customerId: '', status: 'aperto', type: 'chiamata', urgency: 2,
     date: new Date().toISOString().split('T')[0], time: '09:00'
   });
   const [newIntervention, setNewIntervention] = useState({
@@ -663,6 +680,16 @@ export default function App() {
   const [isImportingInventory, setIsImportingInventory] = useState(false);
   const [interventionSearch, setInterventionSearch] = useState('');
   const [interventionFilters, setInterventionFilters] = useState({ clientId: '', type: '', status: '', urgency: '' });
+
+  const openInterventions = interventions.filter((item) => item.status !== 'chiuso');
+
+  const switchToTab = (tab) => {
+    setActiveTab(tab);
+    const mappedType = dedicatedTabToType[tab];
+    if (mappedType) {
+      setNewIntervention((prev) => ({ ...prev, type: mappedType }));
+    }
+  };
 
   // --- AZIONI ---
   const handleApiError = (error, fallback) => {
@@ -760,7 +787,7 @@ export default function App() {
         body: JSON.stringify(ticket)
       });
       setTickets((prev) => sanitizeTickets([...prev, created], initialTickets));
-      setNewTicket({ subject: '', description: '', customerId: '', status: 'aperto', date: new Date().toISOString().split('T')[0], time: '09:00' });
+      setNewTicket({ subject: '', description: '', customerId: '', status: 'aperto', type: 'chiamata', urgency: 2, date: new Date().toISOString().split('T')[0], time: '09:00' });
       setShowNewTicket(false);
       setSyncStatus('Ticket salvato nel backend.');
       addToast('Ticket creato con successo.', 'success');
@@ -771,21 +798,22 @@ export default function App() {
     }
   };
 
-  const handleAddIntervention = async () => {
-    if (!newIntervention.clientId || !newIntervention.type) return;
+  const handleAddIntervention = async (forcedType = null) => {
+    const selectedType = forcedType || newIntervention.type;
+    if (!newIntervention.clientId || !selectedType) return;
     const additionalData = {};
-    if (newIntervention.type === 'riparazione') {
+    if (selectedType === 'riparazione') {
       additionalData.applianceBrand = newIntervention.applianceBrand;
       additionalData.applianceModel = newIntervention.applianceModel;
       additionalData.serialNumber = newIntervention.serialNumber;
       additionalData.defect = newIntervention.defect;
     }
-    if (newIntervention.type === 'ordine_ricambi') {
+    if (selectedType === 'ordine_ricambi') {
       additionalData.sparePartCode = newIntervention.sparePartCode;
       additionalData.quantity = Number(newIntervention.sparePartQty || 1);
       additionalData.supplier = newIntervention.supplier;
     }
-    if (newIntervention.type === 'preventivo') {
+    if (selectedType === 'preventivo') {
       additionalData.quoteItems = newIntervention.quoteItems;
       additionalData.quoteTotal = Number(newIntervention.quoteTotal || 0);
       additionalData.quoteValidUntil = newIntervention.quoteValidUntil;
@@ -794,7 +822,7 @@ export default function App() {
     const payload = sanitizeIntervention({
       id: crypto?.randomUUID?.() || Date.now().toString(),
       clientId: newIntervention.clientId,
-      type: newIntervention.type,
+      type: selectedType,
       status: newIntervention.status,
       urgency: Number(newIntervention.urgency || 2),
       openedAt: nowIso(),
@@ -812,7 +840,7 @@ export default function App() {
       });
       setInterventions((prev) => sanitizeInterventions([created, ...prev], initialInterventions));
       setNewIntervention({
-        clientId: '', type: 'chiamata', status: 'pendente', urgency: 2, description: '', parentInterventionId: '',
+        clientId: '', type: forcedType || selectedType || 'chiamata', status: 'pendente', urgency: 2, description: '', parentInterventionId: '',
         applianceBrand: '', applianceModel: '', serialNumber: '', defect: '',
         sparePartCode: '', sparePartQty: 1, supplier: '', quoteItems: '', quoteTotal: 0, quoteValidUntil: ''
       });
@@ -1044,8 +1072,8 @@ const buildBackup = () => ({
 
   const handleExportTickets = () => {
     exportToCsv('tickets_export.csv',
-      ['ID', 'Oggetto', 'Descrizione', 'Cliente', 'Stato', 'Data', 'Ora'],
-      tickets.map(t => [t.id, t.subject, t.description, customers.find(c => c.id === t.customerId)?.name || '', t.status, t.date, t.time])
+      ['ID', 'Oggetto', 'Descrizione', 'Cliente', 'Tipologia', 'Urgenza', 'Stato', 'Data', 'Ora'],
+      tickets.map(t => [t.id, t.subject, t.description, customers.find(c => c.id === t.customerId)?.name || '', t.type || 'chiamata', t.urgency || 2, t.status, t.date, t.time])
     );
   };
 
@@ -1476,20 +1504,36 @@ const buildBackup = () => ({
         <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
           <div className="bg-white p-6 rounded shadow border-l-4 border-blue-500">
             <p className="text-slate-500">Ticket Aperti</p>
-            <p className="text-3xl font-bold">{tickets.filter(t => t.status === 'aperto').length}</p>
+            <p className="text-3xl font-bold">{tickets.filter((t) => t.status === 'aperto').length}</p>
           </div>
           <div className="bg-white p-6 rounded shadow border-l-4 border-yellow-500">
-            <p className="text-slate-500">In Lavorazione</p>
-            <p className="text-3xl font-bold">{tickets.filter(t => t.status === 'in lavorazione').length}</p>
+            <p className="text-slate-500">Ticket in Lavorazione</p>
+            <p className="text-3xl font-bold">{tickets.filter((t) => t.status === 'in lavorazione').length}</p>
           </div>
           <div className="bg-white p-6 rounded shadow border-l-4 border-purple-500">
-            <p className="text-slate-500">Ricambi Totali</p>
-            <p className="text-3xl font-bold">{inventory.reduce((acc, item) => acc + parseInt(item.qty), 0)}</p>
+            <p className="text-slate-500">Interventi Aperti</p>
+            <p className="text-3xl font-bold">{openInterventions.length}</p>
           </div>
           <div className="bg-white p-6 rounded shadow border-l-4 border-red-500">
             <p className="text-slate-500">Scorte Basse</p>
             <p className="text-3xl font-bold text-red-600">{lowStock.length}</p>
           </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          {Object.entries(interventionTypeMeta).map(([typeKey, meta]) => {
+            const count = openInterventions.filter((item) => item.type === typeKey).length;
+            return (
+              <button
+                key={typeKey}
+                onClick={() => switchToTab(Object.entries(dedicatedTabToType).find(([, value]) => value === typeKey)?.[0] || 'interventions')}
+                className="bg-white p-4 rounded shadow border border-slate-200 text-left hover:border-slate-300"
+              >
+                <p className="text-sm text-slate-500">{meta.label} aperte</p>
+                <p className="text-2xl font-bold text-slate-800">{count}</p>
+              </button>
+            );
+          })}
         </div>
 
         {lowStock.length > 0 && (
@@ -1614,6 +1658,75 @@ const buildBackup = () => ({
                 <div>{item.urgency === 3 ? 'Alta' : item.urgency === 2 ? 'Media' : 'Bassa'}</div>
                 <div>{new Date(item.openedAt).toLocaleString('it-IT')}</div>
                 <div>{item.durationDays}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const DedicatedInterventionDashboard = ({ tabKey }) => {
+    const typeKey = dedicatedTabToType[tabKey] || 'chiamata';
+    const meta = interventionTypeMeta[typeKey];
+    const typeItems = interventions.filter((item) => item.type === typeKey);
+    const typeOpen = typeItems.filter((item) => item.status !== 'chiuso');
+
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-3xl font-bold text-slate-800">Dashboard {meta.label}</h2>
+            <p className="text-sm text-slate-500">Riepilogo ticket/interventi dedicato e creazione rapida.</p>
+          </div>
+          <button onClick={() => switchToTab('interventions')} className="bg-slate-100 border text-slate-700 px-3 py-2 rounded">Vista completa interventi</button>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="bg-white p-4 rounded shadow border border-slate-200">
+            <p className="text-sm text-slate-500">Aperti</p>
+            <p className="text-2xl font-bold">{typeOpen.length}</p>
+          </div>
+          <div className="bg-white p-4 rounded shadow border border-slate-200">
+            <p className="text-sm text-slate-500">Totali</p>
+            <p className="text-2xl font-bold">{typeItems.length}</p>
+          </div>
+          <div className="bg-white p-4 rounded shadow border border-slate-200">
+            <p className="text-sm text-slate-500">Urgenti</p>
+            <p className="text-2xl font-bold">{typeOpen.filter((item) => Number(item.urgency) === 3).length}</p>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-xl shadow border border-slate-200 p-4 space-y-3">
+          <h3 className="font-semibold text-slate-700">Nuovo ticket {meta.label.toLowerCase().slice(0, -1)}</h3>
+          <div className="grid md:grid-cols-3 gap-3">
+            <select className="border rounded p-2" value={newIntervention.clientId} onChange={(e) => setNewIntervention((p) => ({ ...p, type: typeKey, clientId: e.target.value }))}>
+              <option value="">Cliente...</option>
+              {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+            <select className="border rounded p-2" value={newIntervention.status} onChange={(e) => setNewIntervention((p) => ({ ...p, type: typeKey, status: e.target.value }))}>
+              {interventionStatuses.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+            <select className="border rounded p-2" value={newIntervention.urgency} onChange={(e) => setNewIntervention((p) => ({ ...p, type: typeKey, urgency: Number(e.target.value) }))}>
+              <option value={1}>Bassa</option><option value={2}>Media</option><option value={3}>Alta</option>
+            </select>
+          </div>
+          <textarea className="w-full border rounded p-2" placeholder="Descrizione" value={newIntervention.description} onChange={(e) => setNewIntervention((p) => ({ ...p, type: typeKey, description: e.target.value }))} />
+          <button onClick={() => handleAddIntervention(typeKey)} className="bg-indigo-600 text-white px-4 py-2 rounded">Aggiungi {meta.label.toLowerCase().slice(0, -1)}</button>
+        </div>
+
+        <div className="bg-white rounded-xl shadow border border-slate-200 overflow-hidden">
+          <div className="grid grid-cols-4 gap-3 px-4 py-3 bg-slate-50 text-xs uppercase font-semibold text-slate-500">
+            <div>Codice</div><div>Cliente</div><div>Stato</div><div>Data</div>
+          </div>
+          <div className="divide-y divide-slate-100">
+            {typeItems.length === 0 && <div className="px-4 py-3 text-sm text-slate-500">Nessun ticket presente.</div>}
+            {typeItems.slice(0, 20).map((item) => (
+              <div key={item.id} className="grid grid-cols-4 gap-3 px-4 py-3 items-center">
+                <div className="font-mono text-xs">{item.id}</div>
+                <div>{customers.find((c) => c.id === item.clientId)?.name || 'N/D'}</div>
+                <div>{item.status}</div>
+                <div>{new Date(item.openedAt).toLocaleString('it-IT')}</div>
               </div>
             ))}
           </div>
@@ -1793,18 +1906,17 @@ const buildBackup = () => ({
         <button onClick={() => setIsSidebarOpen(false)} className="md:hidden"><X className="w-6 h-6" /></button>
       </div>
       <nav className="p-4 space-y-2 flex-1">
-        <button onClick={() => setActiveTab('dashboard')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'dashboard' ? 'bg-slate-800 text-yellow-400' : ''}`}><LayoutDashboard size={20}/> Dashboard</button>
-        <button onClick={() => setActiveTab('tickets')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'tickets' ? 'bg-slate-800 text-yellow-400' : ''}`}><Ticket size={20}/> Ticket</button>
-        <button onClick={() => setActiveTab('interventions')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'interventions' ? 'bg-slate-800 text-yellow-400' : ''}`}><Wrench size={20}/> Interventi</button>
-        <button onClick={() => setActiveTab('calendar')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'calendar' ? 'bg-slate-800 text-yellow-400' : ''}`}><Wrench size={20}/> Riparazioni</button>
-        <button onClick={() => setActiveTab('customers')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'customers' ? 'bg-slate-800 text-yellow-400' : ''}`}><Users size={20}/> Clienti</button>
-        <button onClick={() => setActiveTab('chiamate')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'chiamate' ? 'bg-slate-800 text-yellow-400' : ''}`}><Phone size={20}/> Chiamate</button>
-        <button onClick={() => setActiveTab('riparazioni')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'riparazioni' ? 'bg-slate-800 text-yellow-400' : ''}`}><Wrench size={20}/> Riparazioni</button>
-        <button onClick={() => setActiveTab('ordine-ricambi')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'ordine-ricambi' ? 'bg-slate-800 text-yellow-400' : ''}`}><Package size={20}/> Ordine Ricambi</button>
-        <button onClick={() => setActiveTab('preventivi-nuovi')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'preventivi-nuovi' ? 'bg-slate-800 text-yellow-400' : ''}`}><Ticket size={20}/> Preventivi Nuovi</button>
-        <button onClick={() => setActiveTab('calendar')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'calendar' ? 'bg-slate-800 text-yellow-400' : ''}`}><CalendarIcon size={20}/> Calendario</button>
-        <button onClick={() => setActiveTab('inventory')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'inventory' ? 'bg-slate-800 text-yellow-400' : ''}`}><Package size={20}/> Magazzino</button>
-        <button onClick={() => setActiveTab('settings')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'settings' ? 'bg-slate-800 text-yellow-400' : ''}`}><Bot size={20}/> Impostazioni</button>
+        <button onClick={() => switchToTab('dashboard')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'dashboard' ? 'bg-slate-800 text-yellow-400' : ''}`}><LayoutDashboard size={20}/> Dashboard</button>
+        <button onClick={() => switchToTab('tickets')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'tickets' ? 'bg-slate-800 text-yellow-400' : ''}`}><Ticket size={20}/> Ticket</button>
+        <button onClick={() => switchToTab('interventions')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'interventions' ? 'bg-slate-800 text-yellow-400' : ''}`}><Wrench size={20}/> Interventi</button>
+                <button onClick={() => switchToTab('customers')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'customers' ? 'bg-slate-800 text-yellow-400' : ''}`}><Users size={20}/> Clienti</button>
+        <button onClick={() => switchToTab('chiamate')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'chiamate' ? 'bg-slate-800 text-yellow-400' : ''}`}><Phone size={20}/> Chiamate</button>
+        <button onClick={() => switchToTab('riparazioni')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'riparazioni' ? 'bg-slate-800 text-yellow-400' : ''}`}><Wrench size={20}/> Riparazioni</button>
+        <button onClick={() => switchToTab('ordine-ricambi')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'ordine-ricambi' ? 'bg-slate-800 text-yellow-400' : ''}`}><Package size={20}/> Ordine Ricambi</button>
+        <button onClick={() => switchToTab('preventivi-nuovi')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'preventivi-nuovi' ? 'bg-slate-800 text-yellow-400' : ''}`}><Ticket size={20}/> Preventivi Nuovi</button>
+        <button onClick={() => switchToTab('calendar')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'calendar' ? 'bg-slate-800 text-yellow-400' : ''}`}><CalendarIcon size={20}/> Calendario</button>
+        <button onClick={() => switchToTab('inventory')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'inventory' ? 'bg-slate-800 text-yellow-400' : ''}`}><Package size={20}/> Magazzino</button>
+        <button onClick={() => switchToTab('settings')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'settings' ? 'bg-slate-800 text-yellow-400' : ''}`}><Bot size={20}/> Impostazioni</button>
       </nav>
       <div className="p-4 border-t border-slate-700"><button onClick={handleResetData} className="w-full text-xs bg-red-900/50 text-red-200 p-2 rounded">Reset Dati</button></div>
     </div>
@@ -1821,7 +1933,7 @@ const buildBackup = () => ({
           <div className="flex gap-2">
             <button onClick={() => changeMonth(-1)} className="p-2 hover:bg-slate-100 rounded"><ChevronLeft/></button>
             <button onClick={() => changeMonth(1)} className="p-2 hover:bg-slate-100 rounded"><ChevronRight/></button>
-            <button onClick={() => setActiveTab('chiamate')} className="bg-blue-600 text-white px-4 py-2 rounded flex gap-2"><Plus/> Nuovo Intervento</button>
+            <button onClick={() => switchToTab('chiamate')} className="bg-blue-600 text-white px-4 py-2 rounded flex gap-2"><Plus/> Nuovo Intervento</button>
           </div>
         </div>
 
@@ -1939,79 +2051,16 @@ const buildBackup = () => ({
                 {exportNotice}
               </div>
             )}
-            <div className="bg-white rounded shadow p-4 mb-6 border border-slate-200">
-              <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-                <div className="space-y-1">
-                  <p className="text-sm font-semibold text-slate-700 flex items-center gap-2"><Zap size={16}/> Backend &amp; sincronizzazione</p>
-                  <p className="text-xs text-slate-500">Imposta il token per accedere alle API e aggiorna il database con i dati locali quando necessario.</p>
-                  <p className={`text-xs ${backendOnline ? 'text-emerald-600' : 'text-red-600'}`}>
-                    {backendOnline ? 'Backend online' : 'Backend offline: modalità locale attiva'}
-                  </p>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <button onClick={refreshFromBackend} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded hover:bg-slate-200 border" disabled={isSyncing}>
-                    <RefreshCw size={16} className={isSyncing ? 'animate-spin' : ''}/> Aggiorna da backend
-                  </button>
-                  <button onClick={handleImportLocalData} className="flex items-center gap-2 px-3 py-2 text-sm bg-emerald-50 text-emerald-700 rounded hover:bg-emerald-100 border border-emerald-200"><Upload size={16}/> Importa dati locali</button>
-                </div>
-              </div>
-              {retryStatus && (
-                <div className="mt-3 text-xs text-slate-500">
-                  Retry in corso ({retryStatus.attempt}/{retryStatus.maxAttempts}) per {retryStatus.path}.
-                  <div className="mt-1 h-1 bg-slate-200 rounded">
-                    <div
-                      className="h-1 bg-blue-500 rounded"
-                      style={{ width: `${Math.round((retryStatus.attempt / retryStatus.maxAttempts) * 100)}%` }}
-                    />
-                  </div>
-                </div>
-              )}
-              <div className="mt-4 grid gap-2 md:grid-cols-2">
-                <div className="flex flex-col gap-2">
-                  <label className="text-xs font-semibold text-slate-700">Token API</label>
-                  <div className="text-sm text-slate-600">
-                    {maskedToken ? `Token configurato: ${maskedToken}` : 'Token non configurato.'}
-                  </div>
-                  <button onClick={() => setActiveTab('settings')} className="text-xs text-blue-600 underline w-fit">Gestisci token</button>
-                </div>
-                <div className="text-xs text-slate-500 flex items-center">
-                  {syncStatus || 'Sincronizzazione pronta.'}
-                </div>
-              </div>
-            </div>
-            <div className="bg-white rounded shadow p-4 mb-6 border border-slate-200">
-              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                <div>
-                  <p className="text-sm font-semibold text-slate-700 flex items-center gap-2"><FileSpreadsheet size={16}/> Backup e Export</p>
-                  <p className="text-xs text-slate-500">Scarica un JSON di backup per conservarlo su Drive/Cloud, oppure esporta CSV apribili in Excel per storico o assenza di connessione.</p>
-                </div>
-                <div className="flex flex-wrap gap-2 justify-end">
-                  <button onClick={handleDownloadBackup} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-800 text-white rounded hover:bg-slate-700"><Download size={16}/> Backup JSON</button>
-                  <button onClick={handleDownloadAutoBackup} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded hover:bg-slate-200 border"><Download size={16}/> Ultimo Backup</button>
-                  <button onClick={handleRestoreLatestBackup} className="flex items-center gap-2 px-3 py-2 text-sm bg-amber-50 text-amber-700 rounded hover:bg-amber-100 border border-amber-200">Ripristina Backup</button>
-                  <button onClick={handleSelectBackupFile} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded hover:bg-slate-200 border"><Upload size={16}/> Importa Backup</button>
-                  <button onClick={handlePersistStorage} className="flex items-center gap-2 px-3 py-2 text-sm bg-emerald-600 text-white rounded hover:bg-emerald-500" disabled={isPersistingStorage}>
-                    {isPersistingStorage ? <RefreshCw size={16} className="animate-spin"/> : <Download size={16}/>} Blocca dati nel browser
-                  </button>
-                  <button onClick={handleExportTickets} className="flex items-center gap-2 px-3 py-2 text-sm bg-blue-50 text-blue-700 rounded hover:bg-blue-100 border border-blue-200"><FileSpreadsheet size={16}/> Ticket CSV</button>
-                  <button onClick={handleExportInventory} className="flex items-center gap-2 px-3 py-2 text-sm bg-purple-50 text-purple-700 rounded hover:bg-purple-100 border border-purple-200"><FileSpreadsheet size={16}/> Magazzino CSV</button>
-                  <button onClick={handleExportCustomers} className="flex items-center gap-2 px-3 py-2 text-sm bg-green-50 text-green-700 rounded hover:bg-green-100 border border-green-200"><FileSpreadsheet size={16}/> Clienti CSV</button>
-                  <input ref={fileInputRef} type="file" accept="application/json" className="hidden" onChange={handleImportBackup} />
-                </div>
-              </div>
-              <div className="mt-3 text-xs text-slate-500">
-                Backup automatico: {autoBackupAt ? `ultimo salvataggio ${autoBackupAt}` : 'non disponibile'}.
-              </div>
-              {backupStatus && <p className="mt-2 text-xs text-amber-600">{backupStatus}</p>}
-              {importError && <p className="mt-2 text-sm text-red-600">{importError}</p>}
-            </div>
             {activeTab === 'dashboard' && <DashboardView />}
             {activeTab === 'calendar' && <CalendarView />}
             {activeTab === 'customers' && <CustomerListView />}
             {activeTab === 'interventions' && <InterventionsView />}
             {activeTab === 'inventory' && <InventoryView />}
             {activeTab === 'settings' && <SettingsPanel />}
-            
+            {(activeTab === 'chiamate' || activeTab === 'riparazioni' || activeTab === 'ordine-ricambi' || activeTab === 'preventivi-nuovi') && (
+              <DedicatedInterventionDashboard tabKey={activeTab} />
+            )}
+
             {activeTab === 'tickets' && (
               <div className="space-y-6">
                 <div className="flex flex-wrap items-center justify-between gap-4">
@@ -2045,6 +2094,9 @@ const buildBackup = () => ({
                               <div>
                                 <div className="font-semibold text-slate-800">{ticket.subject}</div>
                                 <div className="text-sm text-slate-500">{ticket.description}</div>
+                                <div className="text-xs text-slate-400 mt-1">
+                                  {interventionTypeMeta[ticket.type]?.label || 'Chiamate'} • Urgenza {ticket.urgency === 3 ? 'Alta' : ticket.urgency === 2 ? 'Media' : 'Bassa'}
+                                </div>
                               </div>
                             </div>
                             <div className="text-slate-600">{customer?.name || 'Cliente non assegnato'}</div>
@@ -2241,6 +2293,19 @@ const buildBackup = () => ({
                         <option value="">Seleziona Cliente...</option>
                         {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                     </select>
+                    <div className="grid grid-cols-2 gap-2">
+                      <select className="w-full border p-2 rounded" value={newTicket.type} onChange={e => setNewTicket({...newTicket, type: e.target.value})}>
+                        <option value="chiamata">Chiamata</option>
+                        <option value="riparazione">Riparazione</option>
+                        <option value="ordine_ricambi">Ordine Ricambi</option>
+                        <option value="preventivo">Preventivo</option>
+                      </select>
+                      <select className="w-full border p-2 rounded" value={newTicket.urgency} onChange={e => setNewTicket({...newTicket, urgency: Number(e.target.value)})}>
+                        <option value={1}>Urgenza bassa</option>
+                        <option value={2}>Urgenza media</option>
+                        <option value={3}>Urgenza alta</option>
+                      </select>
+                    </div>
                     <input className="w-full border p-2 rounded" placeholder="Elettrodomestico / Problema" value={newTicket.subject} onChange={e => setNewTicket({...newTicket, subject: e.target.value})} />
                     <div className="flex gap-2">
                         <input type="date" className="w-full border p-2 rounded" value={newTicket.date} onChange={e => setNewTicket({...newTicket, date: e.target.value})} />
