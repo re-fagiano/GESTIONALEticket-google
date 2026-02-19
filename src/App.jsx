@@ -729,7 +729,7 @@ export default function App() {
     }
   };
 
-  const handleAddCustomer = async () => {
+  const handleCreateCustomer = async () => {
     if (!newCustomer.name) return;
     const customer = sanitizeCustomer({ ...newCustomer, id: crypto?.randomUUID?.() || Date.now().toString() }, customers.length);
     try {
@@ -750,7 +750,7 @@ export default function App() {
     }
   };
 
-  const handleAddTicket = async () => {
+  const handleCreateTicket = async () => {
     if (!newTicket.subject || !newTicket.customerId) return;
     const ticket = sanitizeTicket({ ...newTicket, id: crypto?.randomUUID?.() || Date.now().toString() }, tickets.length);
     try {
@@ -843,7 +843,7 @@ export default function App() {
     }
   };
 
-  const handleAddPart = async () => {
+  const handleCreatePart = async () => {
     if (!newPart.name) return;
     const part = sanitizeInventoryItem({
       ...newPart,
@@ -2250,7 +2250,7 @@ const buildBackup = () => ({
                 </div>
                 <div className="flex justify-end gap-2 mt-4">
                   <button onClick={() => setShowNewTicket(false)} className="px-4 py-2 text-slate-500">Annulla</button>
-                  <button onClick={handleAddTicket} className="px-4 py-2 bg-blue-600 text-white rounded flex items-center gap-2" disabled={isSavingTicket}>
+                  <button onClick={handleCreateTicket} className="px-4 py-2 bg-blue-600 text-white rounded flex items-center gap-2" disabled={isSavingTicket}>
                     {isSavingTicket && <RefreshCw size={16} className="animate-spin"/>} Salva
                   </button>
                 </div>
@@ -2270,7 +2270,7 @@ const buildBackup = () => ({
                 </div>
                 <div className="flex justify-end gap-2 mt-4">
                   <button onClick={() => setShowNewCustomer(false)} className="px-4 py-2 text-slate-500">Annulla</button>
-                  <button onClick={handleAddCustomer} className="px-4 py-2 bg-green-600 text-white rounded flex items-center gap-2" disabled={isSavingCustomer}>
+                  <button onClick={handleCreateCustomer} className="px-4 py-2 bg-green-600 text-white rounded flex items-center gap-2" disabled={isSavingCustomer}>
                     {isSavingCustomer && <RefreshCw size={16} className="animate-spin"/>} Salva
                   </button>
                 </div>
@@ -2295,7 +2295,7 @@ const buildBackup = () => ({
                 </div>
                 <div className="flex justify-end gap-2 mt-4">
                   <button onClick={() => setShowNewPart(false)} className="px-4 py-2 text-slate-500">Annulla</button>
-                  <button onClick={handleAddPart} className="px-4 py-2 bg-purple-600 text-white rounded flex items-center gap-2" disabled={isSavingPart}>
+                  <button onClick={handleCreatePart} className="px-4 py-2 bg-purple-600 text-white rounded flex items-center gap-2" disabled={isSavingPart}>
                     {isSavingPart && <RefreshCw size={16} className="animate-spin"/>} Salva
                   </button>
                 </div>
