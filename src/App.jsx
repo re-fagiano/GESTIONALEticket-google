@@ -200,6 +200,8 @@ const sanitizeTicket = (ticket, idx = 0) => {
     description: typeof ticket.description === 'string' ? ticket.description : '',
     customerId: typeof ticket.customerId === 'string' ? ticket.customerId : '',
     status: ticket.status || 'aperto',
+    type: interventionTypes.includes(ticket.type) ? ticket.type : 'chiamata',
+    urgency: [1, 2, 3].includes(Number(ticket.urgency)) ? Number(ticket.urgency) : 2,
     date: safeDate,
     time: safeTime,
     updatedAt: typeof ticket.updatedAt === 'string' ? ticket.updatedAt : nowIso(),
@@ -644,7 +646,7 @@ export default function App() {
   // Forms
   const [newCustomer, setNewCustomer] = useState({ name: '', email: '', phone: '', address: '' });
   const [newTicket, setNewTicket] = useState({
-    subject: '', description: '', customerId: '', status: 'aperto',
+    subject: '', description: '', customerId: '', status: 'aperto', type: 'chiamata', urgency: 2,
     date: new Date().toISOString().split('T')[0], time: '09:00'
   });
   const [newIntervention, setNewIntervention] = useState({
@@ -785,7 +787,7 @@ export default function App() {
         body: JSON.stringify(ticket)
       });
       setTickets((prev) => sanitizeTickets([...prev, created], initialTickets));
-      setNewTicket({ subject: '', description: '', customerId: '', status: 'aperto', date: new Date().toISOString().split('T')[0], time: '09:00' });
+      setNewTicket({ subject: '', description: '', customerId: '', status: 'aperto', type: 'chiamata', urgency: 2, date: new Date().toISOString().split('T')[0], time: '09:00' });
       setShowNewTicket(false);
       setSyncStatus('Ticket salvato nel backend.');
       addToast('Ticket creato con successo.', 'success');
@@ -1070,8 +1072,8 @@ const buildBackup = () => ({
 
   const handleExportTickets = () => {
     exportToCsv('tickets_export.csv',
-      ['ID', 'Oggetto', 'Descrizione', 'Cliente', 'Stato', 'Data', 'Ora'],
-      tickets.map(t => [t.id, t.subject, t.description, customers.find(c => c.id === t.customerId)?.name || '', t.status, t.date, t.time])
+      ['ID', 'Oggetto', 'Descrizione', 'Cliente', 'Tipologia', 'Urgenza', 'Stato', 'Data', 'Ora'],
+      tickets.map(t => [t.id, t.subject, t.description, customers.find(c => c.id === t.customerId)?.name || '', t.type || 'chiamata', t.urgency || 2, t.status, t.date, t.time])
     );
   };
 
@@ -2158,6 +2160,9 @@ const buildBackup = () => ({
                               <div>
                                 <div className="font-semibold text-slate-800">{ticket.subject}</div>
                                 <div className="text-sm text-slate-500">{ticket.description}</div>
+                                <div className="text-xs text-slate-400 mt-1">
+                                  {interventionTypeMeta[ticket.type]?.label || 'Chiamate'} • Urgenza {ticket.urgency === 3 ? 'Alta' : ticket.urgency === 2 ? 'Media' : 'Bassa'}
+                                </div>
                               </div>
                             </div>
                             <div className="text-slate-600">{customer?.name || 'Cliente non assegnato'}</div>
@@ -2354,6 +2359,19 @@ const buildBackup = () => ({
                         <option value="">Seleziona Cliente...</option>
                         {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                     </select>
+                    <div className="grid grid-cols-2 gap-2">
+                      <select className="w-full border p-2 rounded" value={newTicket.type} onChange={e => setNewTicket({...newTicket, type: e.target.value})}>
+                        <option value="chiamata">Chiamata</option>
+                        <option value="riparazione">Riparazione</option>
+                        <option value="ordine_ricambi">Ordine Ricambi</option>
+                        <option value="preventivo">Preventivo</option>
+                      </select>
+                      <select className="w-full border p-2 rounded" value={newTicket.urgency} onChange={e => setNewTicket({...newTicket, urgency: Number(e.target.value)})}>
+                        <option value={1}>Urgenza bassa</option>
+                        <option value={2}>Urgenza media</option>
+                        <option value={3}>Urgenza alta</option>
+                      </select>
+                    </div>
                     <input className="w-full border p-2 rounded" placeholder="Elettrodomestico / Problema" value={newTicket.subject} onChange={e => setNewTicket({...newTicket, subject: e.target.value})} />
                     <div className="flex gap-2">
                         <input type="date" className="w-full border p-2 rounded" value={newTicket.date} onChange={e => setNewTicket({...newTicket, date: e.target.value})} />
