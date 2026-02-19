@@ -346,6 +346,8 @@ export default function App() {
 
   // --- STATO CALENDARIO ---
   const [currentDate, setCurrentDate] = useState(new Date());
+  const [draggingInterventionId, setDraggingInterventionId] = useState(null);
+  const [calendarEditorItem, setCalendarEditorItem] = useState(null);
 
   // --- STATO APP ---
   const [customers, setCustomers] = useState(() => sanitizeCustomers(loadCache('customers', initialCustomers), initialCustomers));
