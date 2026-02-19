@@ -2051,6 +2051,72 @@ const buildBackup = () => ({
                 {exportNotice}
               </div>
             )}
+            <div className="bg-white rounded shadow p-4 mb-6 border border-slate-200">
+              <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                <div className="space-y-1">
+                  <p className="text-sm font-semibold text-slate-700 flex items-center gap-2"><Zap size={16}/> Backend &amp; sincronizzazione</p>
+                  <p className="text-xs text-slate-500">Imposta il token per accedere alle API e aggiorna il database con i dati locali quando necessario.</p>
+                  <p className={`text-xs ${backendOnline ? 'text-emerald-600' : 'text-red-600'}`}>
+                    {backendOnline ? 'Backend online' : 'Backend offline: modalità locale attiva'}
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button onClick={refreshFromBackend} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded hover:bg-slate-200 border" disabled={isSyncing}>
+                    <RefreshCw size={16} className={isSyncing ? 'animate-spin' : ''}/> Aggiorna da backend
+                  </button>
+                  <button onClick={handleImportLocalData} className="flex items-center gap-2 px-3 py-2 text-sm bg-emerald-50 text-emerald-700 rounded hover:bg-emerald-100 border border-emerald-200"><Upload size={16}/> Importa dati locali</button>
+                </div>
+              </div>
+              {retryStatus && (
+                <div className="mt-3 text-xs text-slate-500">
+                  Retry in corso ({retryStatus.attempt}/{retryStatus.maxAttempts}) per {retryStatus.path}.
+                  <div className="mt-1 h-1 bg-slate-200 rounded">
+                    <div
+                      className="h-1 bg-blue-500 rounded"
+                      style={{ width: `${Math.round((retryStatus.attempt / retryStatus.maxAttempts) * 100)}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+              <div className="mt-4 grid gap-2 md:grid-cols-2">
+                <div className="flex flex-col gap-2">
+                  <label className="text-xs font-semibold text-slate-700">Token API</label>
+                  <div className="text-sm text-slate-600">
+                    {maskedToken ? `Token configurato: ${maskedToken}` : 'Token non configurato.'}
+                  </div>
+                  <button onClick={() => switchToTab('settings')} className="text-xs text-blue-600 underline w-fit">Gestisci token</button>
+                </div>
+                <div className="text-xs text-slate-500 flex items-center">
+                  {syncStatus || 'Sincronizzazione pronta.'}
+                </div>
+              </div>
+            </div>
+            <div className="bg-white rounded shadow p-4 mb-6 border border-slate-200">
+              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <p className="text-sm font-semibold text-slate-700 flex items-center gap-2"><FileSpreadsheet size={16}/> Backup e Export</p>
+                  <p className="text-xs text-slate-500">Scarica un JSON di backup per conservarlo su Drive/Cloud, oppure esporta CSV apribili in Excel per storico o assenza di connessione.</p>
+                </div>
+                <div className="flex flex-wrap gap-2 justify-end">
+                  <button onClick={handleDownloadBackup} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-800 text-white rounded hover:bg-slate-700"><Download size={16}/> Backup JSON</button>
+                  <button onClick={handleDownloadAutoBackup} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded hover:bg-slate-200 border"><Download size={16}/> Ultimo Backup</button>
+                  <button onClick={handleRestoreLatestBackup} className="flex items-center gap-2 px-3 py-2 text-sm bg-amber-50 text-amber-700 rounded hover:bg-amber-100 border border-amber-200">Ripristina Backup</button>
+                  <button onClick={handleSelectBackupFile} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded hover:bg-slate-200 border"><Upload size={16}/> Importa Backup</button>
+                  <button onClick={handlePersistStorage} className="flex items-center gap-2 px-3 py-2 text-sm bg-emerald-600 text-white rounded hover:bg-emerald-500" disabled={isPersistingStorage}>
+                    {isPersistingStorage ? <RefreshCw size={16} className="animate-spin"/> : <Download size={16}/>} Blocca dati nel browser
+                  </button>
+                  <button onClick={handleExportTickets} className="flex items-center gap-2 px-3 py-2 text-sm bg-blue-50 text-blue-700 rounded hover:bg-blue-100 border border-blue-200"><FileSpreadsheet size={16}/> Ticket CSV</button>
+                  <button onClick={handleExportInventory} className="flex items-center gap-2 px-3 py-2 text-sm bg-purple-50 text-purple-700 rounded hover:bg-purple-100 border border-purple-200"><FileSpreadsheet size={16}/> Magazzino CSV</button>
+                  <button onClick={handleExportCustomers} className="flex items-center gap-2 px-3 py-2 text-sm bg-green-50 text-green-700 rounded hover:bg-green-100 border border-green-200"><FileSpreadsheet size={16}/> Clienti CSV</button>
+                  <input ref={fileInputRef} type="file" accept="application/json" className="hidden" onChange={handleImportBackup} />
+                </div>
+              </div>
+              <div className="mt-3 text-xs text-slate-500">
+                Backup automatico: {autoBackupAt ? `ultimo salvataggio ${autoBackupAt}` : 'non disponibile'}.
+              </div>
+              {backupStatus && <p className="mt-2 text-xs text-amber-600">{backupStatus}</p>}
+              {importError && <p className="mt-2 text-sm text-red-600">{importError}</p>}
+            </div>
             {activeTab === 'dashboard' && <DashboardView />}
             {activeTab === 'calendar' && <CalendarView />}
             {activeTab === 'customers' && <CustomerListView />}
