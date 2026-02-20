@@ -982,31 +982,6 @@ export default function App() {
     }
   };
 
-
-  const openInterventionDetails = (intervention) => {
-    if (!intervention) return;
-    setSelectedIntervention({ ...intervention });
-  };
-
-  const handleSaveInterventionDetails = async () => {
-    if (!selectedIntervention) return;
-    const payload = sanitizeIntervention({
-      ...selectedIntervention,
-      updatedAt: nowIso()
-    });
-    try {
-      const saved = await apiFetchWithRetry(`/api/interventions/${payload.id}`, {
-        method: 'PUT',
-        body: JSON.stringify(payload)
-      });
-      setInterventions((prev) => prev.map((entry) => (entry.id === payload.id ? sanitizeIntervention(saved) : entry)));
-      setSelectedIntervention(null);
-      addToast('Intervento aggiornato.', 'success');
-    } catch (error) {
-      handleApiError(error, 'Impossibile aggiornare i dettagli intervento.');
-    }
-  };
-
   const handleCreatePart = async () => {
     if (!newPart.name.trim()) {
       addToast('Inserisci almeno il nome del ricambio.', 'error');
@@ -1829,7 +1804,7 @@ const buildBackup = () => ({
           </div>
           <div className="divide-y divide-slate-100">
             {filtered.map((item) => (
-              <div key={item.id} className="grid grid-cols-1 md:grid-cols-[1.2fr,1fr,1fr,1fr,1fr,1fr,0.8fr,0.8fr] gap-3 px-4 py-3 items-center cursor-pointer hover:bg-slate-50" onClick={() => openInterventionDetails(item)}>
+              <div key={item.id} className="grid grid-cols-1 md:grid-cols-[1.2fr,1fr,1fr,1fr,1fr,1fr,0.8fr] gap-3 px-4 py-3 items-center cursor-pointer hover:bg-slate-50" onClick={() => openInterventionDetails(item)}>
                 <div className="font-mono text-xs">{item.id}</div>
                 <div>{customers.find((c) => c.id === item.clientId)?.name || 'N/D'}</div>
                 <div>{item.type}</div>
@@ -1926,7 +1901,7 @@ const buildBackup = () => ({
           <div className="divide-y divide-slate-100">
             {typeItems.length === 0 && <div className="px-4 py-3 text-sm text-slate-500">Nessun ticket presente.</div>}
             {typeItems.slice(0, 20).map((item) => (
-              <div key={item.id} className="grid grid-cols-5 gap-3 px-4 py-3 items-center cursor-pointer hover:bg-slate-50" onClick={() => openInterventionDetails(item)}>
+              <div key={item.id} className="grid grid-cols-4 gap-3 px-4 py-3 items-center cursor-pointer hover:bg-slate-50" onClick={() => openInterventionDetails(item)}>
                 <div className="font-mono text-xs">{item.id}</div>
                 <div>{customers.find((c) => c.id === item.clientId)?.name || 'N/D'}</div>
                 <div>{item.status}</div>
