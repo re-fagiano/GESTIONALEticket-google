@@ -200,6 +200,8 @@ const sanitizeTicket = (ticket, idx = 0) => {
     description: typeof ticket.description === 'string' ? ticket.description : '',
     customerId: typeof ticket.customerId === 'string' ? ticket.customerId : '',
     status: ticket.status || 'aperto',
+    type: interventionTypes.includes(ticket.type) ? ticket.type : 'chiamata',
+    urgency: [1, 2, 3].includes(Number(ticket.urgency)) ? Number(ticket.urgency) : 2,
     date: safeDate,
     time: safeTime,
     updatedAt: typeof ticket.updatedAt === 'string' ? ticket.updatedAt : nowIso(),
@@ -273,6 +275,19 @@ const sanitizeInventoryList = (list, fallback = []) => {
 
 const interventionTypes = ['chiamata', 'riparazione', 'ordine_ricambi', 'preventivo'];
 const interventionStatuses = ['pendente', 'preso_in_carico', 'diagnosticato', 'ordine_ricambi', 'preventivato', 'saldato', 'chiuso'];
+const interventionTypeMeta = {
+  chiamata: { label: 'Chiamate', color: 'blue' },
+  riparazione: { label: 'Riparazioni', color: 'indigo' },
+  ordine_ricambi: { label: 'Ordini Ricambi', color: 'amber' },
+  preventivo: { label: 'Preventivi', color: 'emerald' }
+};
+
+const dedicatedTabToType = {
+  chiamate: 'chiamata',
+  riparazioni: 'riparazione',
+  'ordine-ricambi': 'ordine_ricambi',
+  'preventivi-nuovi': 'preventivo'
+};
 
 const sanitizeIntervention = (item, idx = 0) => {
   if (!item || typeof item !== 'object') return null;
@@ -346,6 +361,8 @@ export default function App() {
 
   // --- STATO CALENDARIO ---
   const [currentDate, setCurrentDate] = useState(new Date());
+  const [draggingInterventionId, setDraggingInterventionId] = useState(null);
+  const [calendarEditorItem, setCalendarEditorItem] = useState(null);
 
   // --- STATO APP ---
   const [customers, setCustomers] = useState(() => sanitizeCustomers(loadCache('customers', initialCustomers), initialCustomers));
@@ -629,7 +646,7 @@ export default function App() {
   // Forms
   const [newCustomer, setNewCustomer] = useState({ name: '', email: '', phone: '', address: '' });
   const [newTicket, setNewTicket] = useState({
-    subject: '', description: '', customerId: '', status: 'aperto',
+    subject: '', description: '', customerId: '', status: 'aperto', type: 'chiamata', urgency: 2,
     date: new Date().toISOString().split('T')[0], time: '09:00'
   });
   const [newIntervention, setNewIntervention] = useState({
@@ -651,6 +668,9 @@ export default function App() {
     quoteValidUntil: ''
   });
   const [newPart, setNewPart] = useState({ code: '', name: '', description: '', location: '', qty: 1, price: 0, minQty: 5 });
+  const [ticketCustomerQuery, setTicketCustomerQuery] = useState('');
+  const [returnToTicketAfterCustomer, setReturnToTicketAfterCustomer] = useState(false);
+  const [newInterventionFiles, setNewInterventionFiles] = useState([]);
   const [importError, setImportError] = useState('');
   const fileInputRef = useRef(null);
   const inventoryFileInputRef = useRef(null);
@@ -663,6 +683,31 @@ export default function App() {
   const [isImportingInventory, setIsImportingInventory] = useState(false);
   const [interventionSearch, setInterventionSearch] = useState('');
   const [interventionFilters, setInterventionFilters] = useState({ clientId: '', type: '', status: '', urgency: '' });
+
+  const openInterventions = interventions.filter((item) => item.status !== 'chiuso');
+
+  const switchToTab = (tab) => {
+    setActiveTab(tab);
+    const mappedType = dedicatedTabToType[tab];
+    if (mappedType) {
+      setNewIntervention((prev) => ({ ...prev, type: mappedType }));
+    }
+  };
+
+  const getFilteredTicketCustomers = () => customers.filter((customer) => {
+    const query = ticketCustomerQuery.trim().toLowerCase();
+    if (!query) return true;
+    return [customer.name, customer.email, customer.phone].join(' ').toLowerCase().includes(query);
+  });
+
+  const mapFilesToAttachmentMeta = (files) => files.map((file) => ({
+    name: file.name,
+    type: file.type || 'application/octet-stream',
+    size: Number(file.size || 0),
+    uploadedAt: nowIso()
+  }));
+
+  const shouldFallbackToLocal = (error) => [401, 403].includes(Number(error?.status)) || !backendOnline;
 
   // --- AZIONI ---
   const handleApiError = (error, fallback) => {
@@ -730,7 +775,10 @@ export default function App() {
   };
 
   const handleCreateCustomer = async () => {
-    if (!newCustomer.name) return;
+    if (!newCustomer.name.trim()) {
+      addToast('Inserisci almeno il nome cliente.', 'error');
+      return;
+    }
     const customer = sanitizeCustomer({ ...newCustomer, id: crypto?.randomUUID?.() || Date.now().toString() }, customers.length);
     try {
       setIsSavingCustomer(true);
@@ -741,17 +789,41 @@ export default function App() {
       setCustomers((prev) => sanitizeCustomers([...prev, created], initialCustomers));
       setNewCustomer({ name: '', email: '', phone: '', address: '' });
       setShowNewCustomer(false);
+      if (returnToTicketAfterCustomer) {
+        setShowNewTicket(true);
+        setNewTicket((prev) => ({ ...prev, customerId: created.id }));
+        setReturnToTicketAfterCustomer(false);
+      }
       setSyncStatus('Cliente salvato nel backend.');
       addToast('Cliente aggiunto con successo.', 'success');
     } catch (error) {
-      handleApiError(error, 'Impossibile salvare il cliente.');
+      if (shouldFallbackToLocal(error)) {
+        setCustomers((prev) => sanitizeCustomers([...prev, customer], initialCustomers));
+        setShowNewCustomer(false);
+        if (returnToTicketAfterCustomer) {
+          setShowNewTicket(true);
+          setNewTicket((prev) => ({ ...prev, customerId: customer.id }));
+          setReturnToTicketAfterCustomer(false);
+        }
+        addToast('Cliente salvato in locale (token mancante/non valido).', 'success');
+        setSyncStatus('Modalità locale: cliente salvato solo nel browser.');
+      } else {
+        handleApiError(error, 'Impossibile salvare il cliente.');
+      }
     } finally {
       setIsSavingCustomer(false);
     }
   };
 
   const handleCreateTicket = async () => {
-    if (!newTicket.subject || !newTicket.customerId) return;
+    if (!newTicket.customerId) {
+      addToast('Seleziona un cliente prima di salvare il ticket.', 'error');
+      return;
+    }
+    if (!newTicket.subject.trim()) {
+      addToast("Inserisci l'oggetto/problema del ticket.", 'error');
+      return;
+    }
     const ticket = sanitizeTicket({ ...newTicket, id: crypto?.randomUUID?.() || Date.now().toString() }, tickets.length);
     try {
       setIsSavingTicket(true);
@@ -760,32 +832,50 @@ export default function App() {
         body: JSON.stringify(ticket)
       });
       setTickets((prev) => sanitizeTickets([...prev, created], initialTickets));
-      setNewTicket({ subject: '', description: '', customerId: '', status: 'aperto', date: new Date().toISOString().split('T')[0], time: '09:00' });
+      setNewTicket({ subject: '', description: '', customerId: '', status: 'aperto', type: 'chiamata', urgency: 2, date: new Date().toISOString().split('T')[0], time: '09:00' });
+      setTicketCustomerQuery('');
       setShowNewTicket(false);
       setSyncStatus('Ticket salvato nel backend.');
       addToast('Ticket creato con successo.', 'success');
     } catch (error) {
-      handleApiError(error, 'Impossibile salvare il ticket.');
+      if (shouldFallbackToLocal(error)) {
+        setTickets((prev) => sanitizeTickets([...prev, ticket], initialTickets));
+        setNewTicket({ subject: '', description: '', customerId: '', status: 'aperto', type: 'chiamata', urgency: 2, date: new Date().toISOString().split('T')[0], time: '09:00' });
+        setTicketCustomerQuery('');
+        setShowNewTicket(false);
+        addToast('Ticket salvato in locale (token mancante/non valido).', 'success');
+        setSyncStatus('Modalità locale: ticket salvato solo nel browser.');
+      } else {
+        handleApiError(error, 'Impossibile salvare il ticket.');
+      }
     } finally {
       setIsSavingTicket(false);
     }
   };
 
-  const handleAddIntervention = async () => {
-    if (!newIntervention.clientId || !newIntervention.type) return;
-    const additionalData = {};
-    if (newIntervention.type === 'riparazione') {
+  const handleAddIntervention = async (forcedType = null) => {
+    const selectedType = forcedType || newIntervention.type;
+    if (!newIntervention.clientId) {
+      addToast("Seleziona un cliente prima di creare l'intervento.", 'error');
+      return;
+    }
+    if (!selectedType) {
+      addToast('Seleziona la tipologia di intervento.', 'error');
+      return;
+    }
+    const additionalData = { attachments: mapFilesToAttachmentMeta(newInterventionFiles) };
+    if (selectedType === 'riparazione') {
       additionalData.applianceBrand = newIntervention.applianceBrand;
       additionalData.applianceModel = newIntervention.applianceModel;
       additionalData.serialNumber = newIntervention.serialNumber;
       additionalData.defect = newIntervention.defect;
     }
-    if (newIntervention.type === 'ordine_ricambi') {
+    if (selectedType === 'ordine_ricambi') {
       additionalData.sparePartCode = newIntervention.sparePartCode;
       additionalData.quantity = Number(newIntervention.sparePartQty || 1);
       additionalData.supplier = newIntervention.supplier;
     }
-    if (newIntervention.type === 'preventivo') {
+    if (selectedType === 'preventivo') {
       additionalData.quoteItems = newIntervention.quoteItems;
       additionalData.quoteTotal = Number(newIntervention.quoteTotal || 0);
       additionalData.quoteValidUntil = newIntervention.quoteValidUntil;
@@ -794,7 +884,7 @@ export default function App() {
     const payload = sanitizeIntervention({
       id: crypto?.randomUUID?.() || Date.now().toString(),
       clientId: newIntervention.clientId,
-      type: newIntervention.type,
+      type: selectedType,
       status: newIntervention.status,
       urgency: Number(newIntervention.urgency || 2),
       openedAt: nowIso(),
@@ -812,14 +902,27 @@ export default function App() {
       });
       setInterventions((prev) => sanitizeInterventions([created, ...prev], initialInterventions));
       setNewIntervention({
-        clientId: '', type: 'chiamata', status: 'pendente', urgency: 2, description: '', parentInterventionId: '',
+        clientId: '', type: forcedType || selectedType || 'chiamata', status: 'pendente', urgency: 2, description: '', parentInterventionId: '',
         applianceBrand: '', applianceModel: '', serialNumber: '', defect: '',
         sparePartCode: '', sparePartQty: 1, supplier: '', quoteItems: '', quoteTotal: 0, quoteValidUntil: ''
       });
+      setNewInterventionFiles([]);
       setSyncStatus('Intervento creato nel backend.');
       addToast('Intervento creato con successo.', 'success');
     } catch (error) {
-      handleApiError(error, 'Impossibile creare l\'intervento.');
+      if (shouldFallbackToLocal(error)) {
+        setInterventions((prev) => sanitizeInterventions([payload, ...prev], initialInterventions));
+        setNewIntervention({
+          clientId: '', type: forcedType || selectedType || 'chiamata', status: 'pendente', urgency: 2, description: '', parentInterventionId: '',
+          applianceBrand: '', applianceModel: '', serialNumber: '', defect: '',
+          sparePartCode: '', sparePartQty: 1, supplier: '', quoteItems: '', quoteTotal: 0, quoteValidUntil: ''
+        });
+        setNewInterventionFiles([]);
+        addToast('Intervento salvato in locale (token mancante/non valido).', 'success');
+        setSyncStatus('Modalità locale: intervento salvato solo nel browser.');
+      } else {
+        handleApiError(error, 'Impossibile creare l\'intervento.');
+      }
     }
   };
 
@@ -844,7 +947,10 @@ export default function App() {
   };
 
   const handleCreatePart = async () => {
-    if (!newPart.name) return;
+    if (!newPart.name.trim()) {
+      addToast('Inserisci almeno il nome del ricambio.', 'error');
+      return;
+    }
     const part = sanitizeInventoryItem({
       ...newPart,
       description: newPart.description || newPart.name,
@@ -862,7 +968,15 @@ export default function App() {
       setSyncStatus('Ricambio salvato nel backend.');
       addToast('Ricambio salvato.', 'success');
     } catch (error) {
-      handleApiError(error, 'Impossibile salvare il ricambio.');
+      if (shouldFallbackToLocal(error)) {
+        setInventory((prev) => sanitizeInventoryList([...prev, part], initialInventory));
+        setNewPart({ code: '', name: '', description: '', location: '', qty: 1, price: 0, minQty: 5 });
+        setShowNewPart(false);
+        addToast('Ricambio salvato in locale (token mancante/non valido).', 'success');
+        setSyncStatus('Modalità locale: ricambio salvato solo nel browser.');
+      } else {
+        handleApiError(error, 'Impossibile salvare il ricambio.');
+      }
     } finally {
       setIsSavingPart(false);
     }
@@ -1044,8 +1158,8 @@ const buildBackup = () => ({
 
   const handleExportTickets = () => {
     exportToCsv('tickets_export.csv',
-      ['ID', 'Oggetto', 'Descrizione', 'Cliente', 'Stato', 'Data', 'Ora'],
-      tickets.map(t => [t.id, t.subject, t.description, customers.find(c => c.id === t.customerId)?.name || '', t.status, t.date, t.time])
+      ['ID', 'Oggetto', 'Descrizione', 'Cliente', 'Tipologia', 'Urgenza', 'Stato', 'Data', 'Ora'],
+      tickets.map(t => [t.id, t.subject, t.description, customers.find(c => c.id === t.customerId)?.name || '', t.type || 'chiamata', t.urgency || 2, t.status, t.date, t.time])
     );
   };
 
@@ -1476,20 +1590,36 @@ const buildBackup = () => ({
         <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
           <div className="bg-white p-6 rounded shadow border-l-4 border-blue-500">
             <p className="text-slate-500">Ticket Aperti</p>
-            <p className="text-3xl font-bold">{tickets.filter(t => t.status === 'aperto').length}</p>
+            <p className="text-3xl font-bold">{tickets.filter((t) => t.status === 'aperto').length}</p>
           </div>
           <div className="bg-white p-6 rounded shadow border-l-4 border-yellow-500">
-            <p className="text-slate-500">In Lavorazione</p>
-            <p className="text-3xl font-bold">{tickets.filter(t => t.status === 'in lavorazione').length}</p>
+            <p className="text-slate-500">Ticket in Lavorazione</p>
+            <p className="text-3xl font-bold">{tickets.filter((t) => t.status === 'in lavorazione').length}</p>
           </div>
           <div className="bg-white p-6 rounded shadow border-l-4 border-purple-500">
-            <p className="text-slate-500">Ricambi Totali</p>
-            <p className="text-3xl font-bold">{inventory.reduce((acc, item) => acc + parseInt(item.qty), 0)}</p>
+            <p className="text-slate-500">Interventi Aperti</p>
+            <p className="text-3xl font-bold">{openInterventions.length}</p>
           </div>
           <div className="bg-white p-6 rounded shadow border-l-4 border-red-500">
             <p className="text-slate-500">Scorte Basse</p>
             <p className="text-3xl font-bold text-red-600">{lowStock.length}</p>
           </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          {Object.entries(interventionTypeMeta).map(([typeKey, meta]) => {
+            const count = openInterventions.filter((item) => item.type === typeKey).length;
+            return (
+              <button
+                key={typeKey}
+                onClick={() => switchToTab(Object.entries(dedicatedTabToType).find(([, value]) => value === typeKey)?.[0] || 'interventions')}
+                className="bg-white p-4 rounded shadow border border-slate-200 text-left hover:border-slate-300"
+              >
+                <p className="text-sm text-slate-500">{meta.label} aperte</p>
+                <p className="text-2xl font-bold text-slate-800">{count}</p>
+              </button>
+            );
+          })}
         </div>
 
         {lowStock.length > 0 && (
@@ -1593,6 +1723,19 @@ const buildBackup = () => ({
               <input type="date" className="border rounded p-2" value={newIntervention.quoteValidUntil} onChange={(e) => setNewIntervention((p) => ({ ...p, quoteValidUntil: e.target.value }))} />
             </div>
           )}
+          <div className="space-y-2">
+            <label className="block text-xs text-slate-500">Allegati foto/documenti</label>
+            <input
+              type="file"
+              multiple
+              accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.txt"
+              className="w-full border rounded p-2 text-sm"
+              onChange={(e) => setNewInterventionFiles(Array.from(e.target.files || []))}
+            />
+            {newInterventionFiles.length > 0 && (
+              <p className="text-xs text-slate-500">{newInterventionFiles.length} allegato/i selezionato/i.</p>
+            )}
+          </div>
           <button onClick={handleAddIntervention} className="bg-indigo-600 text-white px-4 py-2 rounded">Salva intervento</button>
         </div>
 
@@ -1614,6 +1757,83 @@ const buildBackup = () => ({
                 <div>{item.urgency === 3 ? 'Alta' : item.urgency === 2 ? 'Media' : 'Bassa'}</div>
                 <div>{new Date(item.openedAt).toLocaleString('it-IT')}</div>
                 <div>{item.durationDays}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const DedicatedInterventionDashboard = ({ tabKey }) => {
+    const typeKey = dedicatedTabToType[tabKey] || 'chiamata';
+    const meta = interventionTypeMeta[typeKey];
+    const typeItems = interventions.filter((item) => item.type === typeKey);
+    const typeOpen = typeItems.filter((item) => item.status !== 'chiuso');
+
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-3xl font-bold text-slate-800">Dashboard {meta.label}</h2>
+            <p className="text-sm text-slate-500">Riepilogo ticket/interventi dedicato e creazione rapida.</p>
+          </div>
+          <button onClick={() => switchToTab('interventions')} className="bg-slate-100 border text-slate-700 px-3 py-2 rounded">Vista completa interventi</button>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="bg-white p-4 rounded shadow border border-slate-200">
+            <p className="text-sm text-slate-500">Aperti</p>
+            <p className="text-2xl font-bold">{typeOpen.length}</p>
+          </div>
+          <div className="bg-white p-4 rounded shadow border border-slate-200">
+            <p className="text-sm text-slate-500">Totali</p>
+            <p className="text-2xl font-bold">{typeItems.length}</p>
+          </div>
+          <div className="bg-white p-4 rounded shadow border border-slate-200">
+            <p className="text-sm text-slate-500">Urgenti</p>
+            <p className="text-2xl font-bold">{typeOpen.filter((item) => Number(item.urgency) === 3).length}</p>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-xl shadow border border-slate-200 p-4 space-y-3">
+          <h3 className="font-semibold text-slate-700">Nuovo ticket {meta.label.toLowerCase().slice(0, -1)}</h3>
+          <div className="grid md:grid-cols-3 gap-3">
+            <select className="border rounded p-2" value={newIntervention.clientId} onChange={(e) => setNewIntervention((p) => ({ ...p, type: typeKey, clientId: e.target.value }))}>
+              <option value="">Cliente...</option>
+              {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+            <select className="border rounded p-2" value={newIntervention.status} onChange={(e) => setNewIntervention((p) => ({ ...p, type: typeKey, status: e.target.value }))}>
+              {interventionStatuses.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+            <select className="border rounded p-2" value={newIntervention.urgency} onChange={(e) => setNewIntervention((p) => ({ ...p, type: typeKey, urgency: Number(e.target.value) }))}>
+              <option value={1}>Bassa</option><option value={2}>Media</option><option value={3}>Alta</option>
+            </select>
+          </div>
+          <textarea className="w-full border rounded p-2" placeholder="Descrizione" value={newIntervention.description} onChange={(e) => setNewIntervention((p) => ({ ...p, type: typeKey, description: e.target.value }))} />
+          <input
+            type="file"
+            multiple
+            accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.txt"
+            className="w-full border rounded p-2 text-sm"
+            onChange={(e) => setNewInterventionFiles(Array.from(e.target.files || []))}
+          />
+          {newInterventionFiles.length > 0 && <p className="text-xs text-slate-500">{newInterventionFiles.length} allegato/i selezionato/i.</p>}
+          <button onClick={() => handleAddIntervention(typeKey)} className="bg-indigo-600 text-white px-4 py-2 rounded">Aggiungi {meta.label.toLowerCase().slice(0, -1)}</button>
+        </div>
+
+        <div className="bg-white rounded-xl shadow border border-slate-200 overflow-hidden">
+          <div className="grid grid-cols-4 gap-3 px-4 py-3 bg-slate-50 text-xs uppercase font-semibold text-slate-500">
+            <div>Codice</div><div>Cliente</div><div>Stato</div><div>Data</div>
+          </div>
+          <div className="divide-y divide-slate-100">
+            {typeItems.length === 0 && <div className="px-4 py-3 text-sm text-slate-500">Nessun ticket presente.</div>}
+            {typeItems.slice(0, 20).map((item) => (
+              <div key={item.id} className="grid grid-cols-4 gap-3 px-4 py-3 items-center">
+                <div className="font-mono text-xs">{item.id}</div>
+                <div>{customers.find((c) => c.id === item.clientId)?.name || 'N/D'}</div>
+                <div>{item.status}</div>
+                <div>{new Date(item.openedAt).toLocaleString('it-IT')}</div>
               </div>
             ))}
           </div>
@@ -1793,18 +2013,17 @@ const buildBackup = () => ({
         <button onClick={() => setIsSidebarOpen(false)} className="md:hidden"><X className="w-6 h-6" /></button>
       </div>
       <nav className="p-4 space-y-2 flex-1">
-        <button onClick={() => setActiveTab('dashboard')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'dashboard' ? 'bg-slate-800 text-yellow-400' : ''}`}><LayoutDashboard size={20}/> Dashboard</button>
-        <button onClick={() => setActiveTab('tickets')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'tickets' ? 'bg-slate-800 text-yellow-400' : ''}`}><Ticket size={20}/> Ticket</button>
-        <button onClick={() => setActiveTab('interventions')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'interventions' ? 'bg-slate-800 text-yellow-400' : ''}`}><Wrench size={20}/> Interventi</button>
-        <button onClick={() => setActiveTab('calendar')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'calendar' ? 'bg-slate-800 text-yellow-400' : ''}`}><Wrench size={20}/> Riparazioni</button>
-        <button onClick={() => setActiveTab('customers')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'customers' ? 'bg-slate-800 text-yellow-400' : ''}`}><Users size={20}/> Clienti</button>
-        <button onClick={() => setActiveTab('chiamate')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'chiamate' ? 'bg-slate-800 text-yellow-400' : ''}`}><Phone size={20}/> Chiamate</button>
-        <button onClick={() => setActiveTab('riparazioni')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'riparazioni' ? 'bg-slate-800 text-yellow-400' : ''}`}><Wrench size={20}/> Riparazioni</button>
-        <button onClick={() => setActiveTab('ordine-ricambi')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'ordine-ricambi' ? 'bg-slate-800 text-yellow-400' : ''}`}><Package size={20}/> Ordine Ricambi</button>
-        <button onClick={() => setActiveTab('preventivi-nuovi')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'preventivi-nuovi' ? 'bg-slate-800 text-yellow-400' : ''}`}><Ticket size={20}/> Preventivi Nuovi</button>
-        <button onClick={() => setActiveTab('calendar')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'calendar' ? 'bg-slate-800 text-yellow-400' : ''}`}><CalendarIcon size={20}/> Calendario</button>
-        <button onClick={() => setActiveTab('inventory')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'inventory' ? 'bg-slate-800 text-yellow-400' : ''}`}><Package size={20}/> Magazzino</button>
-        <button onClick={() => setActiveTab('settings')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'settings' ? 'bg-slate-800 text-yellow-400' : ''}`}><Bot size={20}/> Impostazioni</button>
+        <button onClick={() => switchToTab('dashboard')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'dashboard' ? 'bg-slate-800 text-yellow-400' : ''}`}><LayoutDashboard size={20}/> Dashboard</button>
+        <button onClick={() => switchToTab('tickets')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'tickets' ? 'bg-slate-800 text-yellow-400' : ''}`}><Ticket size={20}/> Ticket</button>
+        <button onClick={() => switchToTab('interventions')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'interventions' ? 'bg-slate-800 text-yellow-400' : ''}`}><Wrench size={20}/> Interventi</button>
+                <button onClick={() => switchToTab('customers')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'customers' ? 'bg-slate-800 text-yellow-400' : ''}`}><Users size={20}/> Clienti</button>
+        <button onClick={() => switchToTab('chiamate')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'chiamate' ? 'bg-slate-800 text-yellow-400' : ''}`}><Phone size={20}/> Chiamate</button>
+        <button onClick={() => switchToTab('riparazioni')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'riparazioni' ? 'bg-slate-800 text-yellow-400' : ''}`}><Wrench size={20}/> Riparazioni</button>
+        <button onClick={() => switchToTab('ordine-ricambi')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'ordine-ricambi' ? 'bg-slate-800 text-yellow-400' : ''}`}><Package size={20}/> Ordine Ricambi</button>
+        <button onClick={() => switchToTab('preventivi-nuovi')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'preventivi-nuovi' ? 'bg-slate-800 text-yellow-400' : ''}`}><Ticket size={20}/> Preventivi Nuovi</button>
+        <button onClick={() => switchToTab('calendar')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'calendar' ? 'bg-slate-800 text-yellow-400' : ''}`}><CalendarIcon size={20}/> Calendario</button>
+        <button onClick={() => switchToTab('inventory')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'inventory' ? 'bg-slate-800 text-yellow-400' : ''}`}><Package size={20}/> Magazzino</button>
+        <button onClick={() => switchToTab('settings')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'settings' ? 'bg-slate-800 text-yellow-400' : ''}`}><Bot size={20}/> Impostazioni</button>
       </nav>
       <div className="p-4 border-t border-slate-700"><button onClick={handleResetData} className="w-full text-xs bg-red-900/50 text-red-200 p-2 rounded">Reset Dati</button></div>
     </div>
@@ -1821,7 +2040,7 @@ const buildBackup = () => ({
           <div className="flex gap-2">
             <button onClick={() => changeMonth(-1)} className="p-2 hover:bg-slate-100 rounded"><ChevronLeft/></button>
             <button onClick={() => changeMonth(1)} className="p-2 hover:bg-slate-100 rounded"><ChevronRight/></button>
-            <button onClick={() => setActiveTab('chiamate')} className="bg-blue-600 text-white px-4 py-2 rounded flex gap-2"><Plus/> Nuovo Intervento</button>
+            <button onClick={() => switchToTab('chiamate')} className="bg-blue-600 text-white px-4 py-2 rounded flex gap-2"><Plus/> Nuovo Intervento</button>
           </div>
         </div>
 
@@ -1939,79 +2158,16 @@ const buildBackup = () => ({
                 {exportNotice}
               </div>
             )}
-            <div className="bg-white rounded shadow p-4 mb-6 border border-slate-200">
-              <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-                <div className="space-y-1">
-                  <p className="text-sm font-semibold text-slate-700 flex items-center gap-2"><Zap size={16}/> Backend &amp; sincronizzazione</p>
-                  <p className="text-xs text-slate-500">Imposta il token per accedere alle API e aggiorna il database con i dati locali quando necessario.</p>
-                  <p className={`text-xs ${backendOnline ? 'text-emerald-600' : 'text-red-600'}`}>
-                    {backendOnline ? 'Backend online' : 'Backend offline: modalità locale attiva'}
-                  </p>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <button onClick={refreshFromBackend} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded hover:bg-slate-200 border" disabled={isSyncing}>
-                    <RefreshCw size={16} className={isSyncing ? 'animate-spin' : ''}/> Aggiorna da backend
-                  </button>
-                  <button onClick={handleImportLocalData} className="flex items-center gap-2 px-3 py-2 text-sm bg-emerald-50 text-emerald-700 rounded hover:bg-emerald-100 border border-emerald-200"><Upload size={16}/> Importa dati locali</button>
-                </div>
-              </div>
-              {retryStatus && (
-                <div className="mt-3 text-xs text-slate-500">
-                  Retry in corso ({retryStatus.attempt}/{retryStatus.maxAttempts}) per {retryStatus.path}.
-                  <div className="mt-1 h-1 bg-slate-200 rounded">
-                    <div
-                      className="h-1 bg-blue-500 rounded"
-                      style={{ width: `${Math.round((retryStatus.attempt / retryStatus.maxAttempts) * 100)}%` }}
-                    />
-                  </div>
-                </div>
-              )}
-              <div className="mt-4 grid gap-2 md:grid-cols-2">
-                <div className="flex flex-col gap-2">
-                  <label className="text-xs font-semibold text-slate-700">Token API</label>
-                  <div className="text-sm text-slate-600">
-                    {maskedToken ? `Token configurato: ${maskedToken}` : 'Token non configurato.'}
-                  </div>
-                  <button onClick={() => setActiveTab('settings')} className="text-xs text-blue-600 underline w-fit">Gestisci token</button>
-                </div>
-                <div className="text-xs text-slate-500 flex items-center">
-                  {syncStatus || 'Sincronizzazione pronta.'}
-                </div>
-              </div>
-            </div>
-            <div className="bg-white rounded shadow p-4 mb-6 border border-slate-200">
-              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                <div>
-                  <p className="text-sm font-semibold text-slate-700 flex items-center gap-2"><FileSpreadsheet size={16}/> Backup e Export</p>
-                  <p className="text-xs text-slate-500">Scarica un JSON di backup per conservarlo su Drive/Cloud, oppure esporta CSV apribili in Excel per storico o assenza di connessione.</p>
-                </div>
-                <div className="flex flex-wrap gap-2 justify-end">
-                  <button onClick={handleDownloadBackup} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-800 text-white rounded hover:bg-slate-700"><Download size={16}/> Backup JSON</button>
-                  <button onClick={handleDownloadAutoBackup} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded hover:bg-slate-200 border"><Download size={16}/> Ultimo Backup</button>
-                  <button onClick={handleRestoreLatestBackup} className="flex items-center gap-2 px-3 py-2 text-sm bg-amber-50 text-amber-700 rounded hover:bg-amber-100 border border-amber-200">Ripristina Backup</button>
-                  <button onClick={handleSelectBackupFile} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded hover:bg-slate-200 border"><Upload size={16}/> Importa Backup</button>
-                  <button onClick={handlePersistStorage} className="flex items-center gap-2 px-3 py-2 text-sm bg-emerald-600 text-white rounded hover:bg-emerald-500" disabled={isPersistingStorage}>
-                    {isPersistingStorage ? <RefreshCw size={16} className="animate-spin"/> : <Download size={16}/>} Blocca dati nel browser
-                  </button>
-                  <button onClick={handleExportTickets} className="flex items-center gap-2 px-3 py-2 text-sm bg-blue-50 text-blue-700 rounded hover:bg-blue-100 border border-blue-200"><FileSpreadsheet size={16}/> Ticket CSV</button>
-                  <button onClick={handleExportInventory} className="flex items-center gap-2 px-3 py-2 text-sm bg-purple-50 text-purple-700 rounded hover:bg-purple-100 border border-purple-200"><FileSpreadsheet size={16}/> Magazzino CSV</button>
-                  <button onClick={handleExportCustomers} className="flex items-center gap-2 px-3 py-2 text-sm bg-green-50 text-green-700 rounded hover:bg-green-100 border border-green-200"><FileSpreadsheet size={16}/> Clienti CSV</button>
-                  <input ref={fileInputRef} type="file" accept="application/json" className="hidden" onChange={handleImportBackup} />
-                </div>
-              </div>
-              <div className="mt-3 text-xs text-slate-500">
-                Backup automatico: {autoBackupAt ? `ultimo salvataggio ${autoBackupAt}` : 'non disponibile'}.
-              </div>
-              {backupStatus && <p className="mt-2 text-xs text-amber-600">{backupStatus}</p>}
-              {importError && <p className="mt-2 text-sm text-red-600">{importError}</p>}
-            </div>
             {activeTab === 'dashboard' && <DashboardView />}
             {activeTab === 'calendar' && <CalendarView />}
             {activeTab === 'customers' && <CustomerListView />}
             {activeTab === 'interventions' && <InterventionsView />}
             {activeTab === 'inventory' && <InventoryView />}
             {activeTab === 'settings' && <SettingsPanel />}
-            
+            {(activeTab === 'chiamate' || activeTab === 'riparazioni' || activeTab === 'ordine-ricambi' || activeTab === 'preventivi-nuovi') && (
+              <DedicatedInterventionDashboard tabKey={activeTab} />
+            )}
+
             {activeTab === 'tickets' && (
               <div className="space-y-6">
                 <div className="flex flex-wrap items-center justify-between gap-4">
@@ -2019,7 +2175,7 @@ const buildBackup = () => ({
                     <h2 className="text-3xl font-bold text-slate-800">Gestione Ticket</h2>
                     <p className="text-sm text-slate-500">Visualizza i problemi segnalati, aggiorna lo stato e avvia la diagnosi AI.</p>
                   </div>
-                  <button onClick={() => setShowNewTicket(true)} className="bg-blue-600 text-white px-4 py-2 rounded flex gap-2 items-center shadow">
+                  <button onClick={() => { setTicketCustomerQuery(''); setShowNewTicket(true); }} className="bg-blue-600 text-white px-4 py-2 rounded flex gap-2 items-center shadow">
                     <Plus/> Nuovo Ticket
                   </button>
                 </div>
@@ -2045,6 +2201,9 @@ const buildBackup = () => ({
                               <div>
                                 <div className="font-semibold text-slate-800">{ticket.subject}</div>
                                 <div className="text-sm text-slate-500">{ticket.description}</div>
+                                <div className="text-xs text-slate-400 mt-1">
+                                  {interventionTypeMeta[ticket.type]?.label || 'Chiamate'} • Urgenza {ticket.urgency === 3 ? 'Alta' : ticket.urgency === 2 ? 'Media' : 'Bassa'}
+                                </div>
                               </div>
                             </div>
                             <div className="text-slate-600">{customer?.name || 'Cliente non assegnato'}</div>
@@ -2233,14 +2392,46 @@ const buildBackup = () => ({
       )}
 
       {showNewTicket && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-            <div className="bg-white p-6 rounded-lg w-full max-w-md">
-                <h3 className="text-xl font-bold mb-4">Nuovo Intervento</h3>
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => { setShowNewTicket(false); setReturnToTicketAfterCustomer(false); setTicketCustomerQuery(''); }}>
+            <div className="bg-white p-6 rounded-lg w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+                <h3 className="text-xl font-bold mb-4">Nuovo Ticket</h3>
                 <div className="space-y-3">
-                    <select className="w-full border p-2 rounded" value={newTicket.customerId} onChange={e => setNewTicket({...newTicket, customerId: e.target.value})}>
+                    <input
+                      className="w-full border p-2 rounded"
+                      placeholder="Cerca cliente per nome, email o telefono"
+                      value={ticketCustomerQuery}
+                      onChange={(e) => setTicketCustomerQuery(e.target.value)}
+                    />
+                    <select
+                      className="w-full border p-2 rounded"
+                      value={newTicket.customerId}
+                      onChange={e => {
+                        if (e.target.value === '__add_new_customer__') {
+                          setReturnToTicketAfterCustomer(true);
+                          setShowNewTicket(false);
+                          setShowNewCustomer(true);
+                          return;
+                        }
+                        setNewTicket({...newTicket, customerId: e.target.value});
+                      }}
+                    >
                         <option value="">Seleziona Cliente...</option>
-                        {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                        {getFilteredTicketCustomers().map(c => <option key={c.id} value={c.id}>{c.name} {c.phone ? `• ${c.phone}` : ''}</option>)}
+                        <option value="__add_new_customer__">+ Aggiungi nuovo cliente</option>
                     </select>
+                    <div className="grid grid-cols-2 gap-2">
+                      <select className="w-full border p-2 rounded" value={newTicket.type} onChange={e => setNewTicket({...newTicket, type: e.target.value})}>
+                        <option value="chiamata">Chiamata</option>
+                        <option value="riparazione">Riparazione</option>
+                        <option value="ordine_ricambi">Ordine Ricambi</option>
+                        <option value="preventivo">Preventivo</option>
+                      </select>
+                      <select className="w-full border p-2 rounded" value={newTicket.urgency} onChange={e => setNewTicket({...newTicket, urgency: Number(e.target.value)})}>
+                        <option value={1}>Urgenza bassa</option>
+                        <option value={2}>Urgenza media</option>
+                        <option value={3}>Urgenza alta</option>
+                      </select>
+                    </div>
                     <input className="w-full border p-2 rounded" placeholder="Elettrodomestico / Problema" value={newTicket.subject} onChange={e => setNewTicket({...newTicket, subject: e.target.value})} />
                     <div className="flex gap-2">
                         <input type="date" className="w-full border p-2 rounded" value={newTicket.date} onChange={e => setNewTicket({...newTicket, date: e.target.value})} />
@@ -2249,7 +2440,7 @@ const buildBackup = () => ({
                     <textarea className="w-full border p-2 rounded" placeholder="Descrizione dettagliata (per AI)" value={newTicket.description} onChange={e => setNewTicket({...newTicket, description: e.target.value})} />
                 </div>
                 <div className="flex justify-end gap-2 mt-4">
-                  <button onClick={() => setShowNewTicket(false)} className="px-4 py-2 text-slate-500">Annulla</button>
+                  <button onClick={() => { setShowNewTicket(false); setReturnToTicketAfterCustomer(false); setTicketCustomerQuery(''); }} className="px-4 py-2 text-slate-500">Annulla</button>
                   <button onClick={handleCreateTicket} className="px-4 py-2 bg-blue-600 text-white rounded flex items-center gap-2" disabled={isSavingTicket}>
                     {isSavingTicket && <RefreshCw size={16} className="animate-spin"/>} Salva
                   </button>
@@ -2259,8 +2450,8 @@ const buildBackup = () => ({
       )}
 
       {showNewCustomer && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-            <div className="bg-white p-6 rounded-lg w-full max-w-md">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => { setShowNewCustomer(false); if (returnToTicketAfterCustomer) { setShowNewTicket(true); setReturnToTicketAfterCustomer(false); } }}>
+            <div className="bg-white p-6 rounded-lg w-full max-w-md" onClick={(e) => e.stopPropagation()}>
                 <h3 className="text-xl font-bold mb-4">Nuovo Cliente</h3>
                 <div className="space-y-3">
                     <input className="w-full border p-2 rounded" placeholder="Nome Completo" value={newCustomer.name} onChange={e => setNewCustomer({...newCustomer, name: e.target.value})} />
@@ -2269,7 +2460,13 @@ const buildBackup = () => ({
                     <input className="w-full border p-2 rounded" placeholder="Indirizzo" value={newCustomer.address} onChange={e => setNewCustomer({...newCustomer, address: e.target.value})} />
                 </div>
                 <div className="flex justify-end gap-2 mt-4">
-                  <button onClick={() => setShowNewCustomer(false)} className="px-4 py-2 text-slate-500">Annulla</button>
+                  <button onClick={() => {
+                    setShowNewCustomer(false);
+                    if (returnToTicketAfterCustomer) {
+                      setShowNewTicket(true);
+                      setReturnToTicketAfterCustomer(false);
+                    }
+                  }} className="px-4 py-2 text-slate-500">Annulla</button>
                   <button onClick={handleCreateCustomer} className="px-4 py-2 bg-green-600 text-white rounded flex items-center gap-2" disabled={isSavingCustomer}>
                     {isSavingCustomer && <RefreshCw size={16} className="animate-spin"/>} Salva
                   </button>
@@ -2279,8 +2476,8 @@ const buildBackup = () => ({
       )}
 
       {showNewPart && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-            <div className="bg-white p-6 rounded-lg w-full max-w-md">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setShowNewPart(false)}>
+            <div className="bg-white p-6 rounded-lg w-full max-w-md" onClick={(e) => e.stopPropagation()}>
                 <h3 className="text-xl font-bold mb-4">Nuovo Articolo Magazzino</h3>
                 <div className="space-y-3">
                     <input className="w-full border p-2 rounded" placeholder="Codice Articolo (es. RIC-001)" value={newPart.code} onChange={e => setNewPart({...newPart, code: e.target.value})} />
