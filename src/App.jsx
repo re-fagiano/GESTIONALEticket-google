@@ -669,7 +669,9 @@ export default function App() {
   });
   const [newPart, setNewPart] = useState({ code: '', name: '', description: '', location: '', qty: 1, price: 0, minQty: 5 });
   const [ticketCustomerQuery, setTicketCustomerQuery] = useState('');
+  const [interventionCustomerQuery, setInterventionCustomerQuery] = useState('');
   const [returnToTicketAfterCustomer, setReturnToTicketAfterCustomer] = useState(false);
+  const [returnToInterventionAfterCustomer, setReturnToInterventionAfterCustomer] = useState(false);
   const [newInterventionFiles, setNewInterventionFiles] = useState([]);
   const [importError, setImportError] = useState('');
   const fileInputRef = useRef(null);
@@ -685,6 +687,18 @@ export default function App() {
   const [interventionFilters, setInterventionFilters] = useState({ clientId: '', type: '', status: '', urgency: '' });
 
   const openInterventions = interventions.filter((item) => item.status !== 'chiuso');
+  const normalizedTicketCustomerQuery = ticketCustomerQuery.trim().toLowerCase();
+  const filteredTicketCustomers = customers.filter((customer) => {
+    if (!normalizedTicketCustomerQuery) return true;
+    const searchable = `${customer.name} ${customer.email} ${customer.phone}`.toLowerCase();
+    return searchable.includes(normalizedTicketCustomerQuery);
+  });
+  const normalizedInterventionCustomerQuery = interventionCustomerQuery.trim().toLowerCase();
+  const filteredInterventionCustomers = customers.filter((customer) => {
+    if (!normalizedInterventionCustomerQuery) return true;
+    const searchable = `${customer.name} ${customer.email} ${customer.phone}`.toLowerCase();
+    return searchable.includes(normalizedInterventionCustomerQuery);
+  });
 
   const switchToTab = (tab) => {
     setActiveTab(tab);
@@ -705,6 +719,11 @@ export default function App() {
     const causes = ['Backend offline', 'Token errato', 'Problemi di rete'];
     setStorageWarning(`${message} Possibili cause: ${causes.join(', ')}.`);
     addToast(message, 'error');
+  };
+
+  const shouldFallbackToLocal = (error) => {
+    const status = Number(error?.status);
+    return !status || status === 401 || status === 403 || status >= 500;
   };
 
   const handleSaveToken = async () => {
@@ -779,6 +798,10 @@ export default function App() {
         setNewTicket((prev) => ({ ...prev, customerId: created.id }));
         setReturnToTicketAfterCustomer(false);
       }
+      if (returnToInterventionAfterCustomer) {
+        setNewIntervention((prev) => ({ ...prev, clientId: created.id }));
+        setReturnToInterventionAfterCustomer(false);
+      }
       setSyncStatus('Cliente salvato nel backend.');
       addToast('Cliente aggiunto con successo.', 'success');
     } catch (error) {
@@ -789,6 +812,10 @@ export default function App() {
           setShowNewTicket(true);
           setNewTicket((prev) => ({ ...prev, customerId: customer.id }));
           setReturnToTicketAfterCustomer(false);
+        }
+        if (returnToInterventionAfterCustomer) {
+          setNewIntervention((prev) => ({ ...prev, clientId: customer.id }));
+          setReturnToInterventionAfterCustomer(false);
         }
         addToast('Cliente salvato in locale (token mancante/non valido).', 'success');
         setSyncStatus('Modalità locale: cliente salvato solo nel browser.');
@@ -839,7 +866,14 @@ export default function App() {
 
   const handleAddIntervention = async (forcedType = null) => {
     const selectedType = forcedType || newIntervention.type;
-    if (!newIntervention.clientId || !selectedType) return;
+    if (!newIntervention.clientId) {
+      addToast('Seleziona un cliente prima di salvare l\'intervento.', 'error');
+      return;
+    }
+    if (!selectedType) {
+      addToast('Seleziona il tipo intervento.', 'error');
+      return;
+    }
     const additionalData = {};
     if (selectedType === 'riparazione') {
       additionalData.applianceBrand = newIntervention.applianceBrand;
@@ -883,6 +917,7 @@ export default function App() {
         applianceBrand: '', applianceModel: '', serialNumber: '', defect: '',
         sparePartCode: '', sparePartQty: 1, supplier: '', quoteItems: '', quoteTotal: 0, quoteValidUntil: ''
       });
+      setInterventionCustomerQuery('');
       setNewInterventionFiles([]);
       setSyncStatus('Intervento creato nel backend.');
       addToast('Intervento creato con successo.', 'success');
@@ -894,6 +929,7 @@ export default function App() {
           applianceBrand: '', applianceModel: '', serialNumber: '', defect: '',
           sparePartCode: '', sparePartQty: 1, supplier: '', quoteItems: '', quoteTotal: 0, quoteValidUntil: ''
         });
+        setInterventionCustomerQuery('');
         setNewInterventionFiles([]);
         addToast('Intervento salvato in locale (token mancante/non valido).', 'success');
         setSyncStatus('Modalità locale: intervento salvato solo nel browser.');
@@ -920,6 +956,26 @@ export default function App() {
       setSyncStatus('Intervento aggiornato.');
     } catch (error) {
       handleApiError(error, 'Impossibile aggiornare lo stato intervento.');
+    }
+  };
+
+  const handleInterventionScheduleChange = async (intervention, openedAt) => {
+    if (!intervention || !openedAt) return;
+    const updated = {
+      ...intervention,
+      openedAt,
+      updatedAt: nowIso()
+    };
+    try {
+      const saved = await apiFetchWithRetry(`/api/interventions/${intervention.id}`, {
+        method: 'PUT',
+        body: JSON.stringify(updated)
+      });
+      setInterventions((prev) => prev.map((entry) => (entry.id === intervention.id ? sanitizeIntervention(saved) : entry)));
+      setSyncStatus('Data intervento aggiornata.');
+      addToast('Data intervento aggiornata.', 'success');
+    } catch (error) {
+      handleApiError(error, 'Impossibile aggiornare la data intervento.');
     }
   };
 
@@ -1662,10 +1718,28 @@ const buildBackup = () => ({
 
         <div className="bg-white rounded-xl shadow border border-slate-200 p-4 space-y-3">
           <h3 className="font-semibold text-slate-700">Nuovo intervento</h3>
+          <input
+            className="w-full border rounded p-2"
+            placeholder="Cerca cliente per nome, email o telefono"
+            value={interventionCustomerQuery}
+            onChange={(e) => setInterventionCustomerQuery(e.target.value)}
+          />
           <div className="grid md:grid-cols-4 gap-3">
-            <select className="border rounded p-2" value={newIntervention.clientId} onChange={(e) => setNewIntervention((p) => ({ ...p, clientId: e.target.value }))}>
+            <select
+              className="border rounded p-2"
+              value={newIntervention.clientId}
+              onChange={(e) => {
+                if (e.target.value === '__add_new_customer__') {
+                  setReturnToInterventionAfterCustomer(true);
+                  setShowNewCustomer(true);
+                  return;
+                }
+                setNewIntervention((p) => ({ ...p, clientId: e.target.value }));
+              }}
+            >
               <option value="">Cliente...</option>
-              {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              {filteredInterventionCustomers.map((c) => <option key={c.id} value={c.id}>{c.name} {c.phone ? `• ${c.phone}` : ''}</option>)}
+              <option value="__add_new_customer__">+ Aggiungi nuovo cliente</option>
             </select>
             <select className="border rounded p-2" value={newIntervention.type} onChange={(e) => setNewIntervention((p) => ({ ...p, type: e.target.value }))}>
               {interventionTypes.map((t) => <option key={t} value={t}>{t}</option>)}
@@ -1775,10 +1849,28 @@ const buildBackup = () => ({
 
         <div className="bg-white rounded-xl shadow border border-slate-200 p-4 space-y-3">
           <h3 className="font-semibold text-slate-700">Nuovo ticket {meta.label.toLowerCase().slice(0, -1)}</h3>
+          <input
+            className="w-full border rounded p-2"
+            placeholder="Cerca cliente per nome, email o telefono"
+            value={interventionCustomerQuery}
+            onChange={(e) => setInterventionCustomerQuery(e.target.value)}
+          />
           <div className="grid md:grid-cols-3 gap-3">
-            <select className="border rounded p-2" value={newIntervention.clientId} onChange={(e) => setNewIntervention((p) => ({ ...p, type: typeKey, clientId: e.target.value }))}>
+            <select
+              className="border rounded p-2"
+              value={newIntervention.clientId}
+              onChange={(e) => {
+                if (e.target.value === '__add_new_customer__') {
+                  setReturnToInterventionAfterCustomer(true);
+                  setShowNewCustomer(true);
+                  return;
+                }
+                setNewIntervention((p) => ({ ...p, type: typeKey, clientId: e.target.value }));
+              }}
+            >
               <option value="">Cliente...</option>
-              {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              {filteredInterventionCustomers.map((c) => <option key={c.id} value={c.id}>{c.name} {c.phone ? `• ${c.phone}` : ''}</option>)}
+              <option value="__add_new_customer__">+ Aggiungi nuovo cliente</option>
             </select>
             <select className="border rounded p-2" value={newIntervention.status} onChange={(e) => setNewIntervention((p) => ({ ...p, type: typeKey, status: e.target.value }))}>
               {interventionStatuses.map((s) => <option key={s} value={s}>{s}</option>)}
@@ -2485,7 +2577,16 @@ const buildBackup = () => ({
       )}
 
       {showNewCustomer && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => { setShowNewCustomer(false); if (returnToTicketAfterCustomer) { setShowNewTicket(true); setReturnToTicketAfterCustomer(false); } }}>
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => {
+          setShowNewCustomer(false);
+          if (returnToTicketAfterCustomer) {
+            setShowNewTicket(true);
+            setReturnToTicketAfterCustomer(false);
+          }
+          if (returnToInterventionAfterCustomer) {
+            setReturnToInterventionAfterCustomer(false);
+          }
+        }}>
             <div className="bg-white p-6 rounded-lg w-full max-w-md" onClick={(e) => e.stopPropagation()}>
                 <h3 className="text-xl font-bold mb-4">Nuovo Cliente</h3>
                 <div className="space-y-3">
@@ -2500,6 +2601,9 @@ const buildBackup = () => ({
                     if (returnToTicketAfterCustomer) {
                       setShowNewTicket(true);
                       setReturnToTicketAfterCustomer(false);
+                    }
+                    if (returnToInterventionAfterCustomer) {
+                      setReturnToInterventionAfterCustomer(false);
                     }
                   }} className="px-4 py-2 text-slate-500">Annulla</button>
                   <button onClick={handleCreateCustomer} className="px-4 py-2 bg-green-600 text-white rounded flex items-center gap-2" disabled={isSavingCustomer}>
