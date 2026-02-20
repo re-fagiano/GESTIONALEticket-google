@@ -668,6 +668,9 @@ export default function App() {
     quoteValidUntil: ''
   });
   const [newPart, setNewPart] = useState({ code: '', name: '', description: '', location: '', qty: 1, price: 0, minQty: 5 });
+  const [ticketCustomerQuery, setTicketCustomerQuery] = useState('');
+  const [returnToTicketAfterCustomer, setReturnToTicketAfterCustomer] = useState(false);
+  const [newInterventionFiles, setNewInterventionFiles] = useState([]);
   const [importError, setImportError] = useState('');
   const fileInputRef = useRef(null);
   const inventoryFileInputRef = useRef(null);
@@ -768,10 +771,27 @@ export default function App() {
       setCustomers((prev) => sanitizeCustomers([...prev, created], initialCustomers));
       setNewCustomer({ name: '', email: '', phone: '', address: '' });
       setShowNewCustomer(false);
+      if (returnToTicketAfterCustomer) {
+        setShowNewTicket(true);
+        setNewTicket((prev) => ({ ...prev, customerId: created.id }));
+        setReturnToTicketAfterCustomer(false);
+      }
       setSyncStatus('Cliente salvato nel backend.');
       addToast('Cliente aggiunto con successo.', 'success');
     } catch (error) {
-      handleApiError(error, 'Impossibile salvare il cliente.');
+      if (shouldFallbackToLocal(error)) {
+        setCustomers((prev) => sanitizeCustomers([...prev, customer], initialCustomers));
+        setShowNewCustomer(false);
+        if (returnToTicketAfterCustomer) {
+          setShowNewTicket(true);
+          setNewTicket((prev) => ({ ...prev, customerId: customer.id }));
+          setReturnToTicketAfterCustomer(false);
+        }
+        addToast('Cliente salvato in locale (token mancante/non valido).', 'success');
+        setSyncStatus('Modalità locale: cliente salvato solo nel browser.');
+      } else {
+        handleApiError(error, 'Impossibile salvare il cliente.');
+      }
     } finally {
       setIsSavingCustomer(false);
     }
@@ -792,7 +812,16 @@ export default function App() {
       setSyncStatus('Ticket salvato nel backend.');
       addToast('Ticket creato con successo.', 'success');
     } catch (error) {
-      handleApiError(error, 'Impossibile salvare il ticket.');
+      if (shouldFallbackToLocal(error)) {
+        setTickets((prev) => sanitizeTickets([...prev, ticket], initialTickets));
+        setNewTicket({ subject: '', description: '', customerId: '', status: 'aperto', type: 'chiamata', urgency: 2, date: new Date().toISOString().split('T')[0], time: '09:00' });
+        setTicketCustomerQuery('');
+        setShowNewTicket(false);
+        addToast('Ticket salvato in locale (token mancante/non valido).', 'success');
+        setSyncStatus('Modalità locale: ticket salvato solo nel browser.');
+      } else {
+        handleApiError(error, 'Impossibile salvare il ticket.');
+      }
     } finally {
       setIsSavingTicket(false);
     }
@@ -844,10 +873,23 @@ export default function App() {
         applianceBrand: '', applianceModel: '', serialNumber: '', defect: '',
         sparePartCode: '', sparePartQty: 1, supplier: '', quoteItems: '', quoteTotal: 0, quoteValidUntil: ''
       });
+      setNewInterventionFiles([]);
       setSyncStatus('Intervento creato nel backend.');
       addToast('Intervento creato con successo.', 'success');
     } catch (error) {
-      handleApiError(error, 'Impossibile creare l\'intervento.');
+      if (shouldFallbackToLocal(error)) {
+        setInterventions((prev) => sanitizeInterventions([payload, ...prev], initialInterventions));
+        setNewIntervention({
+          clientId: '', type: forcedType || selectedType || 'chiamata', status: 'pendente', urgency: 2, description: '', parentInterventionId: '',
+          applianceBrand: '', applianceModel: '', serialNumber: '', defect: '',
+          sparePartCode: '', sparePartQty: 1, supplier: '', quoteItems: '', quoteTotal: 0, quoteValidUntil: ''
+        });
+        setNewInterventionFiles([]);
+        addToast('Intervento salvato in locale (token mancante/non valido).', 'success');
+        setSyncStatus('Modalità locale: intervento salvato solo nel browser.');
+      } else {
+        handleApiError(error, 'Impossibile creare l\'intervento.');
+      }
     }
   };
 
@@ -890,7 +932,15 @@ export default function App() {
       setSyncStatus('Ricambio salvato nel backend.');
       addToast('Ricambio salvato.', 'success');
     } catch (error) {
-      handleApiError(error, 'Impossibile salvare il ricambio.');
+      if (shouldFallbackToLocal(error)) {
+        setInventory((prev) => sanitizeInventoryList([...prev, part], initialInventory));
+        setNewPart({ code: '', name: '', description: '', location: '', qty: 1, price: 0, minQty: 5 });
+        setShowNewPart(false);
+        addToast('Ricambio salvato in locale (token mancante/non valido).', 'success');
+        setSyncStatus('Modalità locale: ricambio salvato solo nel browser.');
+      } else {
+        handleApiError(error, 'Impossibile salvare il ricambio.');
+      }
     } finally {
       setIsSavingPart(false);
     }
@@ -1637,6 +1687,19 @@ const buildBackup = () => ({
               <input type="date" className="border rounded p-2" value={newIntervention.quoteValidUntil} onChange={(e) => setNewIntervention((p) => ({ ...p, quoteValidUntil: e.target.value }))} />
             </div>
           )}
+          <div className="space-y-2">
+            <label className="block text-xs text-slate-500">Allegati foto/documenti</label>
+            <input
+              type="file"
+              multiple
+              accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.txt"
+              className="w-full border rounded p-2 text-sm"
+              onChange={(e) => setNewInterventionFiles(Array.from(e.target.files || []))}
+            />
+            {newInterventionFiles.length > 0 && (
+              <p className="text-xs text-slate-500">{newInterventionFiles.length} allegato/i selezionato/i.</p>
+            )}
+          </div>
           <button onClick={handleAddIntervention} className="bg-indigo-600 text-white px-4 py-2 rounded">Salva intervento</button>
         </div>
 
@@ -2353,11 +2416,30 @@ const buildBackup = () => ({
       {showNewTicket && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
             <div className="bg-white p-6 rounded-lg w-full max-w-md">
-                <h3 className="text-xl font-bold mb-4">Nuovo Intervento</h3>
+                <h3 className="text-xl font-bold mb-4">Nuovo Ticket</h3>
                 <div className="space-y-3">
-                    <select className="w-full border p-2 rounded" value={newTicket.customerId} onChange={e => setNewTicket({...newTicket, customerId: e.target.value})}>
+                    <input
+                      className="w-full border p-2 rounded"
+                      placeholder="Cerca cliente per nome, email o telefono"
+                      value={ticketCustomerQuery}
+                      onChange={(e) => setTicketCustomerQuery(e.target.value)}
+                    />
+                    <select
+                      className="w-full border p-2 rounded"
+                      value={newTicket.customerId}
+                      onChange={e => {
+                        if (e.target.value === '__add_new_customer__') {
+                          setReturnToTicketAfterCustomer(true);
+                          setShowNewTicket(false);
+                          setShowNewCustomer(true);
+                          return;
+                        }
+                        setNewTicket({...newTicket, customerId: e.target.value});
+                      }}
+                    >
                         <option value="">Seleziona Cliente...</option>
-                        {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                        {filteredTicketCustomers.map(c => <option key={c.id} value={c.id}>{c.name} {c.phone ? `• ${c.phone}` : ''}</option>)}
+                        <option value="__add_new_customer__">+ Aggiungi nuovo cliente</option>
                     </select>
                     <div className="grid grid-cols-2 gap-2">
                       <select className="w-full border p-2 rounded" value={newTicket.type} onChange={e => setNewTicket({...newTicket, type: e.target.value})}>
