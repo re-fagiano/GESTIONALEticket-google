@@ -364,6 +364,7 @@ export default function App() {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [draggingInterventionId, setDraggingInterventionId] = useState(null);
   const [calendarEditorItem, setCalendarEditorItem] = useState(null);
+  const [calendarFocusDate, setCalendarFocusDate] = useState(() => new Date());
 
   // --- STATO APP ---
   const [customers, setCustomers] = useState(() => sanitizeCustomers(loadCache('customers', initialCustomers), initialCustomers));
@@ -1611,6 +1612,11 @@ const buildBackup = () => ({
     setCurrentDate((prev) => {
       const next = new Date(prev);
       next.setMonth(prev.getMonth() + offset);
+      setCalendarFocusDate((focusPrev) => {
+        const focusNext = new Date(focusPrev);
+        focusNext.setFullYear(next.getFullYear(), next.getMonth(), Math.min(focusNext.getDate(), 28));
+        return focusNext;
+      });
       return next;
     });
   };
@@ -1793,8 +1799,8 @@ const buildBackup = () => ({
         </div>
 
         <div className="bg-white rounded-xl shadow border border-slate-200 overflow-hidden">
-          <div className="grid grid-cols-1 md:grid-cols-[1.2fr,1fr,1fr,1fr,1fr,1fr,0.8fr] gap-3 px-4 py-3 bg-slate-50 text-xs uppercase font-semibold text-slate-500">
-            <div>Codice</div><div>Cliente</div><div>Tipo</div><div>Stato</div><div>Urgenza</div><div>Data apertura</div><div>Durata</div>
+          <div className="grid grid-cols-1 md:grid-cols-[1.2fr,1fr,1fr,1fr,1fr,1fr,0.8fr,0.8fr] gap-3 px-4 py-3 bg-slate-50 text-xs uppercase font-semibold text-slate-500">
+            <div>Codice</div><div>Cliente</div><div>Tipo</div><div>Stato</div><div>Urgenza</div><div>Data apertura</div><div>Durata</div><div>Azioni</div>
           </div>
           <div className="divide-y divide-slate-100">
             {filtered.map((item) => (
@@ -1810,6 +1816,9 @@ const buildBackup = () => ({
                 <div>{item.urgency === 3 ? 'Alta' : item.urgency === 2 ? 'Media' : 'Bassa'}</div>
                 <div>{new Date(item.openedAt).toLocaleString('it-IT')}</div>
                 <div>{item.durationDays}</div>
+                <div>
+                  <button className="text-xs px-2 py-1 rounded border border-indigo-200 text-indigo-700 bg-indigo-50" onClick={(e) => { e.stopPropagation(); openInterventionDetails(item); }}>Apri</button>
+                </div>
               </div>
             ))}
           </div>
@@ -1886,8 +1895,8 @@ const buildBackup = () => ({
         </div>
 
         <div className="bg-white rounded-xl shadow border border-slate-200 overflow-hidden">
-          <div className="grid grid-cols-4 gap-3 px-4 py-3 bg-slate-50 text-xs uppercase font-semibold text-slate-500">
-            <div>Codice</div><div>Cliente</div><div>Stato</div><div>Data</div>
+          <div className="grid grid-cols-5 gap-3 px-4 py-3 bg-slate-50 text-xs uppercase font-semibold text-slate-500">
+            <div>Codice</div><div>Cliente</div><div>Stato</div><div>Data</div><div>Azioni</div>
           </div>
           <div className="divide-y divide-slate-100">
             {typeItems.length === 0 && <div className="px-4 py-3 text-sm text-slate-500">Nessun ticket presente.</div>}
@@ -1897,6 +1906,9 @@ const buildBackup = () => ({
                 <div>{customers.find((c) => c.id === item.clientId)?.name || 'N/D'}</div>
                 <div>{item.status}</div>
                 <div>{new Date(item.openedAt).toLocaleString('it-IT')}</div>
+                <div>
+                  <button className="text-xs px-2 py-1 rounded border border-indigo-200 text-indigo-700 bg-indigo-50" onClick={(e) => { e.stopPropagation(); openInterventionDetails(item); }}>Apri</button>
+                </div>
               </div>
             ))}
           </div>
@@ -2097,6 +2109,12 @@ const buildBackup = () => ({
   const CalendarView = () => {
     const days = getDaysInMonth(currentDate);
     const monthName = currentDate.toLocaleString('it-IT', { month: 'long', year: 'numeric' });
+    const focusedDay = isValidDate(calendarFocusDate) ? calendarFocusDate : new Date();
+    const focusedDayString = focusedDay.toISOString().split('T')[0];
+    const focusedInterventions = interventions
+      .filter((item) => new Date(item.openedAt).toISOString().split('T')[0] === focusedDayString)
+      .sort((a, b) => new Date(a.openedAt).getTime() - new Date(b.openedAt).getTime());
+    const slotHours = Array.from({ length: 14 }, (_, idx) => idx + 7);
 
     return (
       <div className="space-y-4">
@@ -2122,10 +2140,12 @@ const buildBackup = () => ({
                 return dateString === dayString;
               });
               const isToday = dayString === new Date().toISOString().split('T')[0];
+              const isFocused = dayString === focusedDayString;
               return (
                 <div
                   key={idx}
-                  className={`h-32 border rounded p-2 flex flex-col gap-1 overflow-y-auto ${isToday ? 'border-blue-500 bg-blue-50' : 'border-slate-200 hover:bg-slate-50'}`}
+                  className={`h-32 border rounded p-2 flex flex-col gap-1 overflow-y-auto ${isToday ? 'border-blue-500 bg-blue-50' : 'border-slate-200 hover:bg-slate-50'} ${isFocused ? 'ring-2 ring-indigo-300' : ''}`}
+                  onClick={() => setCalendarFocusDate(new Date(day))}
                   onDragOver={(e) => e.preventDefault()}
                   onDrop={(e) => {
                     e.preventDefault();
@@ -2133,9 +2153,10 @@ const buildBackup = () => ({
                     if (!interventionId) return;
                     const intervention = interventions.find((entry) => entry.id === interventionId);
                     if (!intervention) return;
+                    const slotHour = Number(e.dataTransfer.getData('text/slot-hour'));
                     const currentTime = new Date(intervention.openedAt);
                     const [year, month, dayNum] = dayString.split('-').map(Number);
-                    const newDate = new Date(year, month - 1, dayNum, currentTime.getHours(), currentTime.getMinutes(), 0, 0);
+                    const newDate = new Date(year, month - 1, dayNum, Number.isFinite(slotHour) ? slotHour : currentTime.getHours(), currentTime.getMinutes(), 0, 0);
                     handleInterventionScheduleChange(intervention, newDate.toISOString());
                     setDraggingInterventionId(null);
                   }}
@@ -2150,10 +2171,15 @@ const buildBackup = () => ({
                         draggable
                         onDragStart={(e) => {
                           e.dataTransfer.setData('text/intervention-id', item.id);
+                          e.dataTransfer.setData('text/slot-hour', String(openedDate.getHours()));
                           setDraggingInterventionId(item.id);
                         }}
                         onDragEnd={() => setDraggingInterventionId(null)}
-                        onClick={() => setCalendarEditorItem(item)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setCalendarEditorItem(item);
+                          openInterventionDetails(item);
+                        }}
                         className="text-xs bg-white border-l-4 border-indigo-500 p-1 rounded shadow-sm cursor-move hover:bg-indigo-50"
                       >
                         <div className="font-bold">{openedDate.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' })} • {item.type}</div>
@@ -2161,6 +2187,61 @@ const buildBackup = () => ({
                       </div>
                     );
                   })}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="bg-white rounded shadow p-4 border border-slate-200">
+          <div className="mb-3">
+            <h3 className="font-semibold text-slate-800">Agenda giornaliera • {focusedDay.toLocaleDateString('it-IT')}</h3>
+            <p className="text-xs text-slate-500">Trascina gli interventi tra le fasce orarie per cambiare giorno e ora (stile Google Calendar).</p>
+          </div>
+          <div className="space-y-2 max-h-[420px] overflow-y-auto pr-1">
+            {slotHours.map((hour) => {
+              const slotItems = focusedInterventions.filter((item) => new Date(item.openedAt).getHours() === hour);
+              return (
+                <div
+                  key={`slot-${hour}`}
+                  className="border rounded p-2 bg-slate-50"
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    const interventionId = e.dataTransfer.getData('text/intervention-id') || draggingInterventionId;
+                    if (!interventionId) return;
+                    const intervention = interventions.find((entry) => entry.id === interventionId);
+                    if (!intervention) return;
+                    const sourceDate = new Date(intervention.openedAt);
+                    const newDate = new Date(focusedDay.getFullYear(), focusedDay.getMonth(), focusedDay.getDate(), hour, sourceDate.getMinutes(), 0, 0);
+                    handleInterventionScheduleChange(intervention, newDate.toISOString());
+                    setDraggingInterventionId(null);
+                  }}
+                >
+                  <div className="text-xs font-semibold text-slate-500 mb-2">{`${String(hour).padStart(2, '0')}:00`}</div>
+                  {slotItems.length === 0 && <div className="text-xs text-slate-400">Nessun intervento</div>}
+                  <div className="space-y-1">
+                    {slotItems.map((item) => {
+                      const customerName = customers.find((c) => c.id === item.clientId)?.name || 'Cliente non assegnato';
+                      return (
+                        <div
+                          key={`slot-item-${item.id}`}
+                          className="bg-white border border-indigo-200 rounded px-2 py-1 text-xs cursor-move hover:bg-indigo-50"
+                          draggable
+                          onDragStart={(e) => {
+                            e.dataTransfer.setData('text/intervention-id', item.id);
+                            e.dataTransfer.setData('text/slot-hour', String(hour));
+                            setDraggingInterventionId(item.id);
+                          }}
+                          onDragEnd={() => setDraggingInterventionId(null)}
+                          onClick={() => openInterventionDetails(item)}
+                        >
+                          <div className="font-semibold text-indigo-700">{item.type} • {new Date(item.openedAt).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' })}</div>
+                          <div className="truncate text-slate-600">{customerName}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               );
             })}
@@ -2180,7 +2261,7 @@ const buildBackup = () => ({
                 <input
                   type="datetime-local"
                   className="border rounded p-2"
-                  defaultValue={toLocalDateTimeInput(calendarEditorItem.openedAt)}
+                  value={toLocalDateTimeInput(calendarEditorItem.openedAt)}
                   onChange={(e) => setCalendarEditorItem((prev) => ({ ...prev, openedAt: new Date(e.target.value).toISOString() }))}
                 />
               </div>
