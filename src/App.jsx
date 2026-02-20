@@ -262,6 +262,7 @@ const sanitizeInventoryItem = (item, idx = 0) => {
     qty: parsedQty,
     price: parsedPrice,
     minQty: parsedMinQty,
+    priceDate: typeof item.priceDate === 'string' ? item.priceDate : '',
     pendingSync: Boolean(item.pendingSync),
     updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : nowIso(),
     version: Number.isFinite(Number(item.version)) ? Number(item.version) : 1
@@ -337,9 +338,9 @@ const initialTickets = [
 ];
 
 const initialInventory = [
-  { id: 'p1', code: 'POM-001', name: 'Pompa Scarico Universale', description: 'Pompa Scarico Universale', location: 'AF-01-A', qty: 3, price: 25.00, minQty: 5 },
-  { id: 'p2', code: 'CUS-002', name: 'Cuscinetti Cestello', description: 'Cuscinetti Cestello', location: 'BF-02-C', qty: 10, price: 15.50, minQty: 2 },
-  { id: 'p3', code: 'SCH-003', name: 'Scheda Elettronica Samsung', description: 'Scheda Elettronica Samsung', location: 'SEC-09', qty: 1, price: 120.00, minQty: 1 }
+  { id: 'p1', code: 'POM-001', name: 'Pompa Scarico Universale', description: 'Pompa Scarico Universale', location: 'AF-01-A', qty: 3, price: 25.00, minQty: 5, priceDate: new Date().toISOString().split('T')[0] },
+  { id: 'p2', code: 'CUS-002', name: 'Cuscinetti Cestello', description: 'Cuscinetti Cestello', location: 'BF-02-C', qty: 10, price: 15.50, minQty: 2, priceDate: new Date().toISOString().split('T')[0] },
+  { id: 'p3', code: 'SCH-003', name: 'Scheda Elettronica Samsung', description: 'Scheda Elettronica Samsung', location: 'SEC-09', qty: 1, price: 120.00, minQty: 1, priceDate: new Date().toISOString().split('T')[0] }
 ];
 
 const initialInterventions = [
@@ -667,9 +668,11 @@ export default function App() {
     quoteTotal: 0,
     quoteValidUntil: ''
   });
-  const [newPart, setNewPart] = useState({ code: '', name: '', description: '', location: '', qty: 1, price: 0, minQty: 5 });
+  const [newPart, setNewPart] = useState({ code: '', name: '', description: '', location: '', qty: 1, price: 0, minQty: 5, priceDate: new Date().toISOString().split('T')[0] });
   const [ticketCustomerQuery, setTicketCustomerQuery] = useState('');
+  const [interventionCustomerQuery, setInterventionCustomerQuery] = useState('');
   const [returnToTicketAfterCustomer, setReturnToTicketAfterCustomer] = useState(false);
+  const [returnToInterventionAfterCustomer, setReturnToInterventionAfterCustomer] = useState(false);
   const [newInterventionFiles, setNewInterventionFiles] = useState([]);
   const [importError, setImportError] = useState('');
   const fileInputRef = useRef(null);
@@ -683,8 +686,21 @@ export default function App() {
   const [isImportingInventory, setIsImportingInventory] = useState(false);
   const [interventionSearch, setInterventionSearch] = useState('');
   const [interventionFilters, setInterventionFilters] = useState({ clientId: '', type: '', status: '', urgency: '' });
+  const [selectedIntervention, setSelectedIntervention] = useState(null);
 
   const openInterventions = interventions.filter((item) => item.status !== 'chiuso');
+  const normalizedTicketCustomerQuery = ticketCustomerQuery.trim().toLowerCase();
+  const filteredTicketCustomers = customers.filter((customer) => {
+    if (!normalizedTicketCustomerQuery) return true;
+    const searchable = `${customer.name} ${customer.email} ${customer.phone}`.toLowerCase();
+    return searchable.includes(normalizedTicketCustomerQuery);
+  });
+  const normalizedInterventionCustomerQuery = interventionCustomerQuery.trim().toLowerCase();
+  const filteredInterventionCustomers = customers.filter((customer) => {
+    if (!normalizedInterventionCustomerQuery) return true;
+    const searchable = `${customer.name} ${customer.email} ${customer.phone}`.toLowerCase();
+    return searchable.includes(normalizedInterventionCustomerQuery);
+  });
 
   const switchToTab = (tab) => {
     setActiveTab(tab);
@@ -705,6 +721,11 @@ export default function App() {
     const causes = ['Backend offline', 'Token errato', 'Problemi di rete'];
     setStorageWarning(`${message} Possibili cause: ${causes.join(', ')}.`);
     addToast(message, 'error');
+  };
+
+  const shouldFallbackToLocal = (error) => {
+    const status = Number(error?.status);
+    return !status || status === 401 || status === 403 || status >= 500;
   };
 
   const handleSaveToken = async () => {
@@ -779,6 +800,10 @@ export default function App() {
         setNewTicket((prev) => ({ ...prev, customerId: created.id }));
         setReturnToTicketAfterCustomer(false);
       }
+      if (returnToInterventionAfterCustomer) {
+        setNewIntervention((prev) => ({ ...prev, clientId: created.id }));
+        setReturnToInterventionAfterCustomer(false);
+      }
       setSyncStatus('Cliente salvato nel backend.');
       addToast('Cliente aggiunto con successo.', 'success');
     } catch (error) {
@@ -789,6 +814,10 @@ export default function App() {
           setShowNewTicket(true);
           setNewTicket((prev) => ({ ...prev, customerId: customer.id }));
           setReturnToTicketAfterCustomer(false);
+        }
+        if (returnToInterventionAfterCustomer) {
+          setNewIntervention((prev) => ({ ...prev, clientId: customer.id }));
+          setReturnToInterventionAfterCustomer(false);
         }
         addToast('Cliente salvato in locale (token mancante/non valido).', 'success');
         setSyncStatus('Modalità locale: cliente salvato solo nel browser.');
@@ -839,7 +868,14 @@ export default function App() {
 
   const handleAddIntervention = async (forcedType = null) => {
     const selectedType = forcedType || newIntervention.type;
-    if (!newIntervention.clientId || !selectedType) return;
+    if (!newIntervention.clientId) {
+      addToast('Seleziona un cliente prima di salvare l\'intervento.', 'error');
+      return;
+    }
+    if (!selectedType) {
+      addToast('Seleziona il tipo intervento.', 'error');
+      return;
+    }
     const additionalData = {};
     if (selectedType === 'riparazione') {
       additionalData.applianceBrand = newIntervention.applianceBrand;
@@ -883,6 +919,7 @@ export default function App() {
         applianceBrand: '', applianceModel: '', serialNumber: '', defect: '',
         sparePartCode: '', sparePartQty: 1, supplier: '', quoteItems: '', quoteTotal: 0, quoteValidUntil: ''
       });
+      setInterventionCustomerQuery('');
       setNewInterventionFiles([]);
       setSyncStatus('Intervento creato nel backend.');
       addToast('Intervento creato con successo.', 'success');
@@ -894,6 +931,7 @@ export default function App() {
           applianceBrand: '', applianceModel: '', serialNumber: '', defect: '',
           sparePartCode: '', sparePartQty: 1, supplier: '', quoteItems: '', quoteTotal: 0, quoteValidUntil: ''
         });
+        setInterventionCustomerQuery('');
         setNewInterventionFiles([]);
         addToast('Intervento salvato in locale (token mancante/non valido).', 'success');
         setSyncStatus('Modalità locale: intervento salvato solo nel browser.');
@@ -923,6 +961,51 @@ export default function App() {
     }
   };
 
+  const handleInterventionScheduleChange = async (intervention, openedAt) => {
+    if (!intervention || !openedAt) return;
+    const updated = {
+      ...intervention,
+      openedAt,
+      updatedAt: nowIso()
+    };
+    try {
+      const saved = await apiFetchWithRetry(`/api/interventions/${intervention.id}`, {
+        method: 'PUT',
+        body: JSON.stringify(updated)
+      });
+      setInterventions((prev) => prev.map((entry) => (entry.id === intervention.id ? sanitizeIntervention(saved) : entry)));
+      setSyncStatus('Data intervento aggiornata.');
+      addToast('Data intervento aggiornata.', 'success');
+    } catch (error) {
+      handleApiError(error, 'Impossibile aggiornare la data intervento.');
+    }
+  };
+
+
+  const openInterventionDetails = (intervention) => {
+    if (!intervention) return;
+    setSelectedIntervention({ ...intervention });
+  };
+
+  const handleSaveInterventionDetails = async () => {
+    if (!selectedIntervention) return;
+    const payload = sanitizeIntervention({
+      ...selectedIntervention,
+      updatedAt: nowIso()
+    });
+    try {
+      const saved = await apiFetchWithRetry(`/api/interventions/${payload.id}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload)
+      });
+      setInterventions((prev) => prev.map((entry) => (entry.id === payload.id ? sanitizeIntervention(saved) : entry)));
+      setSelectedIntervention(null);
+      addToast('Intervento aggiornato.', 'success');
+    } catch (error) {
+      handleApiError(error, 'Impossibile aggiornare i dettagli intervento.');
+    }
+  };
+
   const handleCreatePart = async () => {
     if (!newPart.name.trim()) {
       addToast('Inserisci almeno il nome del ricambio.', 'error');
@@ -940,14 +1023,14 @@ export default function App() {
         body: JSON.stringify(part)
       });
       setInventory((prev) => sanitizeInventoryList([...prev, created], initialInventory));
-      setNewPart({ code: '', name: '', description: '', location: '', qty: 1, price: 0, minQty: 5 });
+      setNewPart({ code: '', name: '', description: '', location: '', qty: 1, price: 0, minQty: 5, priceDate: new Date().toISOString().split('T')[0] });
       setShowNewPart(false);
       setSyncStatus('Ricambio salvato nel backend.');
       addToast('Ricambio salvato.', 'success');
     } catch (error) {
       if (shouldFallbackToLocal(error)) {
         setInventory((prev) => sanitizeInventoryList([...prev, part], initialInventory));
-        setNewPart({ code: '', name: '', description: '', location: '', qty: 1, price: 0, minQty: 5 });
+        setNewPart({ code: '', name: '', description: '', location: '', qty: 1, price: 0, minQty: 5, priceDate: new Date().toISOString().split('T')[0] });
         setShowNewPart(false);
         addToast('Ricambio salvato in locale (token mancante/non valido).', 'success');
         setSyncStatus('Modalità locale: ricambio salvato solo nel browser.');
@@ -1662,10 +1745,28 @@ const buildBackup = () => ({
 
         <div className="bg-white rounded-xl shadow border border-slate-200 p-4 space-y-3">
           <h3 className="font-semibold text-slate-700">Nuovo intervento</h3>
+          <input
+            className="w-full border rounded p-2"
+            placeholder="Cerca cliente per nome, email o telefono"
+            value={interventionCustomerQuery}
+            onChange={(e) => setInterventionCustomerQuery(e.target.value)}
+          />
           <div className="grid md:grid-cols-4 gap-3">
-            <select className="border rounded p-2" value={newIntervention.clientId} onChange={(e) => setNewIntervention((p) => ({ ...p, clientId: e.target.value }))}>
+            <select
+              className="border rounded p-2"
+              value={newIntervention.clientId}
+              onChange={(e) => {
+                if (e.target.value === '__add_new_customer__') {
+                  setReturnToInterventionAfterCustomer(true);
+                  setShowNewCustomer(true);
+                  return;
+                }
+                setNewIntervention((p) => ({ ...p, clientId: e.target.value }));
+              }}
+            >
               <option value="">Cliente...</option>
-              {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              {filteredInterventionCustomers.map((c) => <option key={c.id} value={c.id}>{c.name} {c.phone ? `• ${c.phone}` : ''}</option>)}
+              <option value="__add_new_customer__">+ Aggiungi nuovo cliente</option>
             </select>
             <select className="border rounded p-2" value={newIntervention.type} onChange={(e) => setNewIntervention((p) => ({ ...p, type: e.target.value }))}>
               {interventionTypes.map((t) => <option key={t} value={t}>{t}</option>)}
@@ -1722,12 +1823,12 @@ const buildBackup = () => ({
           </div>
           <div className="divide-y divide-slate-100">
             {filtered.map((item) => (
-              <div key={item.id} className="grid grid-cols-1 md:grid-cols-[1.2fr,1fr,1fr,1fr,1fr,1fr,0.8fr] gap-3 px-4 py-3 items-center">
+              <div key={item.id} className="grid grid-cols-1 md:grid-cols-[1.2fr,1fr,1fr,1fr,1fr,1fr,0.8fr] gap-3 px-4 py-3 items-center cursor-pointer hover:bg-slate-50" onClick={() => openInterventionDetails(item)}>
                 <div className="font-mono text-xs">{item.id}</div>
                 <div>{customers.find((c) => c.id === item.clientId)?.name || 'N/D'}</div>
                 <div>{item.type}</div>
                 <div>
-                  <select className="border rounded p-1 text-sm" value={item.status} onChange={(e) => handleInterventionStatusChange(item, e.target.value)}>
+                  <select className="border rounded p-1 text-sm" value={item.status} onClick={(e) => e.stopPropagation()} onChange={(e) => handleInterventionStatusChange(item, e.target.value)}>
                     {interventionStatuses.map((s) => <option key={s} value={s}>{s}</option>)}
                   </select>
                 </div>
@@ -1775,10 +1876,28 @@ const buildBackup = () => ({
 
         <div className="bg-white rounded-xl shadow border border-slate-200 p-4 space-y-3">
           <h3 className="font-semibold text-slate-700">Nuovo ticket {meta.label.toLowerCase().slice(0, -1)}</h3>
+          <input
+            className="w-full border rounded p-2"
+            placeholder="Cerca cliente per nome, email o telefono"
+            value={interventionCustomerQuery}
+            onChange={(e) => setInterventionCustomerQuery(e.target.value)}
+          />
           <div className="grid md:grid-cols-3 gap-3">
-            <select className="border rounded p-2" value={newIntervention.clientId} onChange={(e) => setNewIntervention((p) => ({ ...p, type: typeKey, clientId: e.target.value }))}>
+            <select
+              className="border rounded p-2"
+              value={newIntervention.clientId}
+              onChange={(e) => {
+                if (e.target.value === '__add_new_customer__') {
+                  setReturnToInterventionAfterCustomer(true);
+                  setShowNewCustomer(true);
+                  return;
+                }
+                setNewIntervention((p) => ({ ...p, type: typeKey, clientId: e.target.value }));
+              }}
+            >
               <option value="">Cliente...</option>
-              {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              {filteredInterventionCustomers.map((c) => <option key={c.id} value={c.id}>{c.name} {c.phone ? `• ${c.phone}` : ''}</option>)}
+              <option value="__add_new_customer__">+ Aggiungi nuovo cliente</option>
             </select>
             <select className="border rounded p-2" value={newIntervention.status} onChange={(e) => setNewIntervention((p) => ({ ...p, type: typeKey, status: e.target.value }))}>
               {interventionStatuses.map((s) => <option key={s} value={s}>{s}</option>)}
@@ -1798,7 +1917,7 @@ const buildBackup = () => ({
           <div className="divide-y divide-slate-100">
             {typeItems.length === 0 && <div className="px-4 py-3 text-sm text-slate-500">Nessun ticket presente.</div>}
             {typeItems.slice(0, 20).map((item) => (
-              <div key={item.id} className="grid grid-cols-4 gap-3 px-4 py-3 items-center">
+              <div key={item.id} className="grid grid-cols-4 gap-3 px-4 py-3 items-center cursor-pointer hover:bg-slate-50" onClick={() => openInterventionDetails(item)}>
                 <div className="font-mono text-xs">{item.id}</div>
                 <div>{customers.find((c) => c.id === item.clientId)?.name || 'N/D'}</div>
                 <div>{item.status}</div>
@@ -1873,6 +1992,7 @@ const buildBackup = () => ({
                 <th className="p-4">Codice</th>
                 <th className="p-4">Posizione</th>
                 <th className="p-4">Prezzo</th>
+                <th className="p-4">Valido dal</th>
                 <th className="p-4 text-center">Quantità</th>
                 <th className="p-4 text-right">Azioni</th>
             </tr>
@@ -1897,6 +2017,7 @@ const buildBackup = () => ({
                     </span>
                 </td>
                 <td className="p-4 text-slate-600">€ {parseFloat(item.price).toFixed(2)}</td>
+                <td className="p-4 text-sm text-slate-500">{item.priceDate ? new Date(item.priceDate).toLocaleDateString('it-IT') : 'N/D'}</td>
                 <td className="p-4 text-center">
                   <div className="flex items-center justify-center gap-3">
                     <button onClick={() => updateStock(item.id, -1)} className="w-6 h-6 rounded bg-slate-200 hover:bg-slate-300 font-bold">-</button>
@@ -2426,6 +2547,30 @@ const buildBackup = () => ({
         </div>
       )}
 
+
+      {selectedIntervention && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setSelectedIntervention(null)}>
+          <div className="bg-white p-6 rounded-lg w-full max-w-2xl" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-xl font-bold mb-4">Dettaglio intervento</h3>
+            <div className="grid md:grid-cols-2 gap-3">
+              <input className="w-full border p-2 rounded bg-slate-50" value={selectedIntervention.id} readOnly />
+              <input type="datetime-local" className="w-full border p-2 rounded" value={toLocalDateTimeInput(selectedIntervention.openedAt)} onChange={(e) => setSelectedIntervention((prev) => ({ ...prev, openedAt: new Date(e.target.value).toISOString() }))} />
+              <select className="w-full border p-2 rounded" value={selectedIntervention.status} onChange={(e) => setSelectedIntervention((prev) => ({ ...prev, status: e.target.value }))}>
+                {interventionStatuses.map((s) => <option key={s} value={s}>{s}</option>)}
+              </select>
+              <select className="w-full border p-2 rounded" value={selectedIntervention.urgency} onChange={(e) => setSelectedIntervention((prev) => ({ ...prev, urgency: Number(e.target.value) }))}>
+                <option value={1}>Bassa</option><option value={2}>Media</option><option value={3}>Alta</option>
+              </select>
+            </div>
+            <textarea className="w-full border p-2 rounded mt-3" rows={5} value={selectedIntervention.description || ''} onChange={(e) => setSelectedIntervention((prev) => ({ ...prev, description: e.target.value }))} />
+            <div className="flex justify-end gap-2 mt-4">
+              <button onClick={() => setSelectedIntervention(null)} className="px-4 py-2 text-slate-500">Chiudi</button>
+              <button onClick={handleSaveInterventionDetails} className="px-4 py-2 bg-indigo-600 text-white rounded">Salva modifiche</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showNewTicket && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
             <div className="bg-white p-6 rounded-lg w-full max-w-md">
@@ -2485,7 +2630,16 @@ const buildBackup = () => ({
       )}
 
       {showNewCustomer && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => { setShowNewCustomer(false); if (returnToTicketAfterCustomer) { setShowNewTicket(true); setReturnToTicketAfterCustomer(false); } }}>
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => {
+          setShowNewCustomer(false);
+          if (returnToTicketAfterCustomer) {
+            setShowNewTicket(true);
+            setReturnToTicketAfterCustomer(false);
+          }
+          if (returnToInterventionAfterCustomer) {
+            setReturnToInterventionAfterCustomer(false);
+          }
+        }}>
             <div className="bg-white p-6 rounded-lg w-full max-w-md" onClick={(e) => e.stopPropagation()}>
                 <h3 className="text-xl font-bold mb-4">Nuovo Cliente</h3>
                 <div className="space-y-3">
@@ -2500,6 +2654,9 @@ const buildBackup = () => ({
                     if (returnToTicketAfterCustomer) {
                       setShowNewTicket(true);
                       setReturnToTicketAfterCustomer(false);
+                    }
+                    if (returnToInterventionAfterCustomer) {
+                      setReturnToInterventionAfterCustomer(false);
                     }
                   }} className="px-4 py-2 text-slate-500">Annulla</button>
                   <button onClick={handleCreateCustomer} className="px-4 py-2 bg-green-600 text-white rounded flex items-center gap-2" disabled={isSavingCustomer}>
@@ -2519,10 +2676,17 @@ const buildBackup = () => ({
                     <input className="w-full border p-2 rounded" placeholder="Nome Prodotto (es. Cuscinetti)" value={newPart.name} onChange={e => setNewPart({...newPart, name: e.target.value})} />
                     <input className="w-full border p-2 rounded" placeholder="Descrizione (opzionale)" value={newPart.description} onChange={e => setNewPart({...newPart, description: e.target.value})} />
                     <input className="w-full border p-2 rounded" placeholder="Codice Posizione (es. af00021)" value={newPart.location} onChange={e => setNewPart({...newPart, location: e.target.value})} />
-                    <div className="flex gap-2">
-                        <input type="number" className="w-full border p-2 rounded" placeholder="Quantità" value={newPart.qty} onChange={e => setNewPart({...newPart, qty: parseInt(e.target.value)})} />
-                        <input type="number" className="w-full border p-2 rounded" placeholder="Prezzo (€)" value={newPart.price} onChange={e => setNewPart({...newPart, price: parseFloat(e.target.value)})} />
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                        <label className="text-xs text-slate-500">Quantità
+                          <input type="number" className="w-full border p-2 rounded mt-1" placeholder="Quantità" value={newPart.qty} onChange={e => setNewPart({...newPart, qty: parseInt(e.target.value)})} />
+                        </label>
+                        <label className="text-xs text-slate-500">Prezzo (€)
+                          <input type="number" step="0.01" className="w-full border p-2 rounded mt-1" placeholder="Prezzo (€)" value={newPart.price} onChange={e => setNewPart({...newPart, price: parseFloat(e.target.value)})} />
+                        </label>
                     </div>
+                    <label className="text-xs text-slate-500">Valuta prezzo (data decorrenza)
+                      <input type="date" className="w-full border p-2 rounded mt-1" value={newPart.priceDate || ''} onChange={e => setNewPart({...newPart, priceDate: e.target.value})} />
+                    </label>
                     <input type="number" className="w-full border p-2 rounded" placeholder="Quantità Minima (Allarme)" value={newPart.minQty} onChange={e => setNewPart({...newPart, minQty: parseInt(e.target.value)})} />
                 </div>
                 <div className="flex justify-end gap-2 mt-4">
