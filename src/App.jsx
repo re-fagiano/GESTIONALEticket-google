@@ -760,7 +760,10 @@ export default function App() {
   };
 
   const handleCreateCustomer = async () => {
-    if (!newCustomer.name) return;
+    if (!newCustomer.name.trim()) {
+      addToast('Inserisci almeno il nome cliente.', 'error');
+      return;
+    }
     const customer = sanitizeCustomer({ ...newCustomer, id: crypto?.randomUUID?.() || Date.now().toString() }, customers.length);
     try {
       setIsSavingCustomer(true);
@@ -798,7 +801,14 @@ export default function App() {
   };
 
   const handleCreateTicket = async () => {
-    if (!newTicket.subject || !newTicket.customerId) return;
+    if (!newTicket.customerId) {
+      addToast('Seleziona un cliente prima di salvare il ticket.', 'error');
+      return;
+    }
+    if (!newTicket.subject.trim()) {
+      addToast("Inserisci l'oggetto/problema del ticket.", 'error');
+      return;
+    }
     const ticket = sanitizeTicket({ ...newTicket, id: crypto?.randomUUID?.() || Date.now().toString() }, tickets.length);
     try {
       setIsSavingTicket(true);
@@ -914,7 +924,10 @@ export default function App() {
   };
 
   const handleCreatePart = async () => {
-    if (!newPart.name) return;
+    if (!newPart.name.trim()) {
+      addToast('Inserisci almeno il nome del ricambio.', 'error');
+      return;
+    }
     const part = sanitizeInventoryItem({
       ...newPart,
       description: newPart.description || newPart.name,
@@ -2197,7 +2210,7 @@ const buildBackup = () => ({
                     <h2 className="text-3xl font-bold text-slate-800">Gestione Ticket</h2>
                     <p className="text-sm text-slate-500">Visualizza i problemi segnalati, aggiorna lo stato e avvia la diagnosi AI.</p>
                   </div>
-                  <button onClick={() => setShowNewTicket(true)} className="bg-blue-600 text-white px-4 py-2 rounded flex gap-2 items-center shadow">
+                  <button onClick={() => { setTicketCustomerQuery(''); setShowNewTicket(true); }} className="bg-blue-600 text-white px-4 py-2 rounded flex gap-2 items-center shadow">
                     <Plus/> Nuovo Ticket
                   </button>
                 </div>
@@ -2462,7 +2475,7 @@ const buildBackup = () => ({
                     <textarea className="w-full border p-2 rounded" placeholder="Descrizione dettagliata (per AI)" value={newTicket.description} onChange={e => setNewTicket({...newTicket, description: e.target.value})} />
                 </div>
                 <div className="flex justify-end gap-2 mt-4">
-                  <button onClick={() => setShowNewTicket(false)} className="px-4 py-2 text-slate-500">Annulla</button>
+                  <button onClick={() => { setShowNewTicket(false); setReturnToTicketAfterCustomer(false); setTicketCustomerQuery(''); }} className="px-4 py-2 text-slate-500">Annulla</button>
                   <button onClick={handleCreateTicket} className="px-4 py-2 bg-blue-600 text-white rounded flex items-center gap-2" disabled={isSavingTicket}>
                     {isSavingTicket && <RefreshCw size={16} className="animate-spin"/>} Salva
                   </button>
@@ -2472,8 +2485,8 @@ const buildBackup = () => ({
       )}
 
       {showNewCustomer && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-            <div className="bg-white p-6 rounded-lg w-full max-w-md">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => { setShowNewCustomer(false); if (returnToTicketAfterCustomer) { setShowNewTicket(true); setReturnToTicketAfterCustomer(false); } }}>
+            <div className="bg-white p-6 rounded-lg w-full max-w-md" onClick={(e) => e.stopPropagation()}>
                 <h3 className="text-xl font-bold mb-4">Nuovo Cliente</h3>
                 <div className="space-y-3">
                     <input className="w-full border p-2 rounded" placeholder="Nome Completo" value={newCustomer.name} onChange={e => setNewCustomer({...newCustomer, name: e.target.value})} />
@@ -2482,7 +2495,13 @@ const buildBackup = () => ({
                     <input className="w-full border p-2 rounded" placeholder="Indirizzo" value={newCustomer.address} onChange={e => setNewCustomer({...newCustomer, address: e.target.value})} />
                 </div>
                 <div className="flex justify-end gap-2 mt-4">
-                  <button onClick={() => setShowNewCustomer(false)} className="px-4 py-2 text-slate-500">Annulla</button>
+                  <button onClick={() => {
+                    setShowNewCustomer(false);
+                    if (returnToTicketAfterCustomer) {
+                      setShowNewTicket(true);
+                      setReturnToTicketAfterCustomer(false);
+                    }
+                  }} className="px-4 py-2 text-slate-500">Annulla</button>
                   <button onClick={handleCreateCustomer} className="px-4 py-2 bg-green-600 text-white rounded flex items-center gap-2" disabled={isSavingCustomer}>
                     {isSavingCustomer && <RefreshCw size={16} className="animate-spin"/>} Salva
                   </button>
@@ -2492,8 +2511,8 @@ const buildBackup = () => ({
       )}
 
       {showNewPart && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-            <div className="bg-white p-6 rounded-lg w-full max-w-md">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setShowNewPart(false)}>
+            <div className="bg-white p-6 rounded-lg w-full max-w-md" onClick={(e) => e.stopPropagation()}>
                 <h3 className="text-xl font-bold mb-4">Nuovo Articolo Magazzino</h3>
                 <div className="space-y-3">
                     <input className="w-full border p-2 rounded" placeholder="Codice Articolo (es. RIC-001)" value={newPart.code} onChange={e => setNewPart({...newPart, code: e.target.value})} />
