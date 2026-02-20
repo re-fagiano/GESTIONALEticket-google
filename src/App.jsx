@@ -981,31 +981,6 @@ export default function App() {
     }
   };
 
-
-  const openInterventionDetails = (intervention) => {
-    if (!intervention) return;
-    setSelectedIntervention({ ...intervention });
-  };
-
-  const handleSaveInterventionDetails = async () => {
-    if (!selectedIntervention) return;
-    const payload = sanitizeIntervention({
-      ...selectedIntervention,
-      updatedAt: nowIso()
-    });
-    try {
-      const saved = await apiFetchWithRetry(`/api/interventions/${payload.id}`, {
-        method: 'PUT',
-        body: JSON.stringify(payload)
-      });
-      setInterventions((prev) => prev.map((entry) => (entry.id === payload.id ? sanitizeIntervention(saved) : entry)));
-      setSelectedIntervention(null);
-      addToast('Intervento aggiornato.', 'success');
-    } catch (error) {
-      handleApiError(error, 'Impossibile aggiornare i dettagli intervento.');
-    }
-  };
-
   const handleCreatePart = async () => {
     if (!newPart.name.trim()) {
       addToast('Inserisci almeno il nome del ricambio.', 'error');
