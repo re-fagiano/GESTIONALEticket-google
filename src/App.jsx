@@ -2426,7 +2426,6 @@ const buildBackup = () => ({
                       setCalendarFocusDate(new Date(day));
                       return;
                     }
-                    const selectedDate = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 9, 0, 0, 0);
                     setCalendarFocusDate(new Date(day));
                     openInterventionComposer(selectedDate.toISOString(), 'chiamata', { keepCalendarOpen: true });
                   }}
