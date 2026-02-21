@@ -96,6 +96,30 @@ const toLocalDateTimeInput = (value) => {
   return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
 };
 
+const generateUserCode = () => `USR-${Math.random().toString(36).slice(2, 7).toUpperCase()}-${Date.now().toString().slice(-4)}`;
+
+const formatAuditDate = (value) => {
+  const date = value ? new Date(value) : null;
+  if (!date || Number.isNaN(date.getTime())) return 'Data non disponibile';
+  return date.toLocaleString('it-IT');
+};
+
+const getDescriptionEntries = (intervention) => {
+  const entries = intervention?.additionalData?.descriptionEntries;
+  if (Array.isArray(entries) && entries.length > 0) return entries;
+  if (!intervention?.description?.trim()) return [];
+  return [{
+    id: `legacy-${intervention.id || Date.now()}`,
+    text: intervention.description,
+    authorCode: 'SYSTEM',
+    authorName: 'Dato originale',
+    createdAt: intervention.openedAt || intervention.updatedAt || nowIso(),
+    source: 'original'
+  }];
+};
+
+const buildDescriptionFromEntries = (entries = []) => entries.map((entry) => entry.text).filter(Boolean).join('\n');
+
 const safeGetItem = (key, fallback = null) => {
   if (!storageAvailable) return fallback;
   try {
@@ -374,7 +398,6 @@ export default function App() {
   const [calendarEditorItem, setCalendarEditorItem] = useState(null);
   const [calendarFocusDate, setCalendarFocusDate] = useState(() => new Date());
   const [showCalendarQuickAdd, setShowCalendarQuickAdd] = useState(false);
-  const [calendarQuickAddType, setCalendarQuickAddType] = useState('chiamata');
 
   // --- STATO APP ---
   const [customers, setCustomers] = useState(() => sanitizeCustomers(loadCache('customers', initialCustomers), initialCustomers));
@@ -409,6 +432,15 @@ export default function App() {
 
   // Stato per le notifiche toast
   const [toasts, setToasts] = useState([]);
+
+  const [operatorProfile, setOperatorProfile] = useState(() => {
+    const savedCode = safeGetItem('operatorCode', '');
+    const savedName = safeGetItem('operatorName', '');
+    return {
+      code: savedCode || generateUserCode(),
+      name: savedName || 'Operatore'
+    };
+  });
 
   // Funzione per aggiungere notifiche toast
   const addToast = (message, tone = 'success') => {
@@ -449,6 +481,11 @@ export default function App() {
       setStorageWarning('Impossibile salvare le impostazioni nel browser: storage disabilitato.');
     }
   }, [settings]);
+
+  useEffect(() => {
+    safeSetItem('operatorCode', operatorProfile.code);
+    safeSetItem('operatorName', operatorProfile.name);
+  }, [operatorProfile]);
 
   useEffect(() => {
     if (!storageAvailable || storageFallbackState.active) {
@@ -730,7 +767,6 @@ export default function App() {
     }));
     if (options.keepCalendarOpen) {
       setCalendarFocusDate(new Date(scheduledAt || nowIso()));
-      setCalendarQuickAddType(type);
       setShowCalendarQuickAdd(true);
       return;
     }
@@ -921,6 +957,19 @@ export default function App() {
       additionalData.quoteValidUntil = newIntervention.quoteValidUntil;
     }
 
+    const descriptionEntries = (newIntervention.description || '').trim()
+      ? [{
+          id: crypto?.randomUUID?.() || `${Date.now()}`,
+          text: newIntervention.description.trim(),
+          authorCode: operatorProfile.code,
+          authorName: operatorProfile.name || 'Operatore',
+          createdAt: nowIso(),
+          source: 'original'
+        }]
+      : [];
+
+    additionalData.descriptionEntries = descriptionEntries;
+
     const payload = sanitizeIntervention({
       id: crypto?.randomUUID?.() || Date.now().toString(),
       clientId: newIntervention.clientId,
@@ -930,7 +979,13 @@ export default function App() {
       openedAt: newIntervention.openedAt || nowIso(),
       description: newIntervention.description,
       parentInterventionId: newIntervention.parentInterventionId || null,
-      additionalData,
+      additionalData: {
+        ...additionalData,
+        createdBy: {
+          code: operatorProfile.code,
+          name: operatorProfile.name || 'Operatore'
+        }
+      },
       updatedAt: nowIso(),
       version: 1
     });
@@ -998,12 +1053,6 @@ export default function App() {
       updatedAt: nowIso()
     });
     if (!updated) return;
-    if (!apiToken) {
-      setInterventions((prev) => prev.map((entry) => (entry.id === updated.id ? updated : entry)));
-      setSyncStatus('Modalità locale: data intervento aggiornata solo nel browser.');
-      addToast('Data intervento aggiornata in locale (token mancante/non valido).', 'success');
-      return;
-    }
     try {
       const saved = await apiFetchWithRetry(`/api/interventions/${intervention.id}`, {
         method: 'PUT',
@@ -1063,6 +1112,112 @@ export default function App() {
         addToast('Intervento aggiornato in locale (token mancante/non valido).', 'success');
       } else {
         handleApiError(error, 'Impossibile salvare le modifiche all\'intervento.');
+      }
+    }
+  };
+
+  const openInterventionDetails = (intervention) => {
+    const safeIntervention = sanitizeIntervention(intervention);
+    if (!safeIntervention) {
+      addToast("Impossibile aprire l'intervento selezionato.", 'error');
+      return;
+    }
+    setSelectedIntervention(safeIntervention);
+  };
+
+  const handleSaveInterventionDetails = async () => {
+    if (!selectedIntervention) return;
+    const updated = sanitizeIntervention({
+      ...selectedIntervention,
+      updatedAt: nowIso(),
+      closedAt: selectedIntervention.status === 'chiuso'
+        ? (selectedIntervention.closedAt || nowIso())
+        : null
+    });
+    if (!updated) {
+      addToast('Impossibile salvare: dati intervento non validi.', 'error');
+      return;
+    }
+    try {
+      const saved = await apiFetchWithRetry(`/api/interventions/${updated.id}`, {
+        method: 'PUT',
+        body: JSON.stringify(updated)
+      });
+      const normalizedSaved = sanitizeIntervention(saved) || updated;
+      setInterventions((prev) => prev.map((entry) => (entry.id === normalizedSaved.id ? normalizedSaved : entry)));
+      setSelectedIntervention(null);
+      setSyncStatus('Intervento aggiornato.');
+      addToast('Intervento aggiornato con successo.', 'success');
+    } catch (error) {
+      if (shouldFallbackToLocal(error)) {
+        setInterventions((prev) => prev.map((entry) => (entry.id === updated.id ? updated : entry)));
+        setSelectedIntervention(null);
+        setSyncStatus('Modalità locale: intervento aggiornato solo nel browser.');
+        addToast('Intervento aggiornato in locale (token mancante/non valido).', 'success');
+      } else {
+        handleApiError(error, 'Impossibile salvare le modifiche all\'intervento.');
+      }
+    }
+  };
+
+  const openInterventionDetails = (intervention) => {
+    const safe = sanitizeIntervention(intervention);
+    if (!safe) return;
+    setSelectedIntervention({
+      ...safe,
+      descriptionEntries: getDescriptionEntries(safe),
+      newNote: ''
+    });
+  };
+
+  const handleSaveInterventionDetails = async () => {
+    if (!selectedIntervention) return;
+
+    const noteText = (selectedIntervention.newNote || '').trim();
+    const nextEntries = [...(selectedIntervention.descriptionEntries || [])];
+
+    if (noteText) {
+      nextEntries.push({
+        id: crypto?.randomUUID?.() || `${Date.now()}`,
+        text: noteText,
+        authorCode: operatorProfile.code,
+        authorName: operatorProfile.name || 'Operatore',
+        createdAt: nowIso(),
+        source: 'note'
+      });
+    }
+
+    const payload = sanitizeIntervention({
+      ...selectedIntervention,
+      description: buildDescriptionFromEntries(nextEntries),
+      additionalData: {
+        ...(selectedIntervention.additionalData || {}),
+        descriptionEntries: nextEntries,
+        lastEditor: {
+          code: operatorProfile.code,
+          name: operatorProfile.name || 'Operatore',
+          at: nowIso()
+        }
+      },
+      updatedAt: nowIso()
+    });
+
+    try {
+      const saved = await apiFetchWithRetry(`/api/interventions/${selectedIntervention.id}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload)
+      });
+      const sanitized = sanitizeIntervention(saved);
+      setInterventions((prev) => prev.map((entry) => (entry.id === selectedIntervention.id ? sanitized : entry)));
+      setSelectedIntervention(null);
+      addToast('Dettagli intervento aggiornati.', 'success');
+    } catch (error) {
+      if (shouldFallbackToLocal(error)) {
+        setInterventions((prev) => prev.map((entry) => (entry.id === selectedIntervention.id ? payload : entry)));
+        setSelectedIntervention(null);
+        addToast('Intervento aggiornato in locale.', 'success');
+      } else {
+        handleApiError(error, 'Impossibile salvare i dettagli intervento.');
       }
     }
   };
@@ -2128,6 +2283,31 @@ const buildBackup = () => ({
   const SettingsPanel = () => (
     <div className="space-y-6">
       <div className="bg-white rounded shadow p-4 border border-slate-200">
+        <h2 className="text-lg font-bold text-slate-800 mb-2">Accreditamento operatore</h2>
+        <p className="text-sm text-slate-500 mb-4">Ogni operatore ha un codice univoco usato nel tracciamento modifiche interventi.</p>
+        <div className="grid gap-3 md:grid-cols-2">
+          <div>
+            <label className="text-xs font-semibold text-slate-700">Codice operatore</label>
+            <input className="w-full border rounded p-2 text-sm bg-slate-50" value={operatorProfile.code} readOnly />
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-slate-700">Nome operatore</label>
+            <input
+              className="w-full border rounded p-2 text-sm"
+              value={operatorProfile.name}
+              onChange={(e) => setOperatorProfile((prev) => ({ ...prev, name: e.target.value }))}
+            />
+          </div>
+        </div>
+        <button
+          onClick={() => setOperatorProfile((prev) => ({ ...prev, code: generateUserCode() }))}
+          className="mt-3 px-3 py-2 text-sm bg-slate-100 border rounded"
+        >
+          Genera nuovo codice
+        </button>
+      </div>
+
+      <div className="bg-white rounded shadow p-4 border border-slate-200">
         <h2 className="text-lg font-bold text-slate-800 mb-2">Token API</h2>
         <p className="text-sm text-slate-500 mb-4">Gestisci il token API per l'accesso al backend. Il token viene salvato in cookie HttpOnly.</p>
         <div className="flex flex-col gap-3 md:flex-row md:items-center">
@@ -2220,7 +2400,7 @@ const buildBackup = () => ({
           <div className="flex gap-2">
             <button onClick={() => changeMonth(-1)} className="p-2 hover:bg-slate-100 rounded"><ChevronLeft/></button>
             <button onClick={() => changeMonth(1)} className="p-2 hover:bg-slate-100 rounded"><ChevronRight/></button>
-            <button onClick={() => openInterventionComposer(focusedDay.toISOString(), calendarQuickAddType, { keepCalendarOpen: true })} className="bg-blue-600 text-white px-4 py-2 rounded flex gap-2"><Plus/> Nuovo intervento</button>
+            <button onClick={() => openInterventionComposer(focusedDay.toISOString(), 'chiamata', { keepCalendarOpen: true })} className="bg-blue-600 text-white px-4 py-2 rounded flex gap-2"><Plus/> Nuovo intervento</button>
           </div>
         </div>
 
@@ -2247,6 +2427,7 @@ const buildBackup = () => ({
                       return;
                     }
                     setCalendarFocusDate(new Date(day));
+                    openInterventionComposer(selectedDate.toISOString(), 'chiamata', { keepCalendarOpen: true });
                   }}
                   onDragOver={(e) => e.preventDefault()}
                   onDrop={(e) => {
@@ -2298,27 +2479,7 @@ const buildBackup = () => ({
 
         <div className="bg-white rounded shadow p-4 border border-slate-200">
           <div className="mb-3">
-            <div className="flex flex-wrap items-center gap-2 justify-between">
-              <h3 className="font-semibold text-slate-800">Agenda giornaliera • {focusedDay.toLocaleDateString('it-IT')}</h3>
-              <div className="flex items-center gap-2">
-                <select
-                  className="border rounded p-2 text-sm"
-                  value={calendarQuickAddType}
-                  onChange={(e) => setCalendarQuickAddType(e.target.value)}
-                >
-                  {interventionTypes.map((type) => <option key={`quick-${type}`} value={type}>{interventionTypeMeta[type]?.singularLabel || type}</option>)}
-                </select>
-                <button
-                  onClick={() => {
-                    const selectedDate = new Date(focusedDay.getFullYear(), focusedDay.getMonth(), focusedDay.getDate(), 9, 0, 0, 0);
-                    openInterventionComposer(selectedDate.toISOString(), calendarQuickAddType, { keepCalendarOpen: true });
-                  }}
-                  className="bg-indigo-600 text-white px-3 py-2 rounded text-sm"
-                >
-                  + Aggiungi intervento
-                </button>
-              </div>
-            </div>
+            <h3 className="font-semibold text-slate-800">Agenda giornaliera • {focusedDay.toLocaleDateString('it-IT')}</h3>
             <p className="text-xs text-slate-500">Clicca su un giorno per vedere gli interventi. Trascina gli interventi tra le fasce orarie per cambiare giorno e ora (stile Google Calendar).</p>
           </div>
           <div className="space-y-2 max-h-[420px] overflow-y-auto pr-1">
@@ -2333,7 +2494,7 @@ const buildBackup = () => ({
                     const clickedEventCard = Boolean(target?.closest?.('[data-calendar-event-card="true"]'));
                     if (clickedEventCard) return;
                     const selectedDate = new Date(focusedDay.getFullYear(), focusedDay.getMonth(), focusedDay.getDate(), hour, 0, 0, 0);
-                    openInterventionComposer(selectedDate.toISOString(), calendarQuickAddType, { keepCalendarOpen: true });
+                    openInterventionComposer(selectedDate.toISOString(), 'chiamata', { keepCalendarOpen: true });
                   }}
                   onDragOver={(e) => e.preventDefault()}
                   onDrop={(e) => {
@@ -2384,23 +2545,13 @@ const buildBackup = () => ({
       {showCalendarQuickAdd && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setShowCalendarQuickAdd(false)}>
           <div className="bg-white p-6 rounded-lg w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-xl font-bold mb-1">Nuovo intervento</h3>
+            <h3 className="text-xl font-bold mb-1">Nuova chiamata</h3>
             <p className="text-sm text-slate-500 mb-4">{new Date(newIntervention.openedAt || nowIso()).toLocaleString('it-IT')}</p>
             <div className="space-y-3">
               <select
                 className="w-full border rounded p-2"
-                value={newIntervention.type}
-                onChange={(e) => {
-                  setCalendarQuickAddType(e.target.value);
-                  setNewIntervention((prev) => ({ ...prev, type: e.target.value }));
-                }}
-              >
-                {interventionTypes.map((type) => <option key={`modal-type-${type}`} value={type}>{interventionTypeMeta[type]?.singularLabel || type}</option>)}
-              </select>
-              <select
-                className="w-full border rounded p-2"
                 value={newIntervention.clientId}
-                onChange={(e) => setNewIntervention((prev) => ({ ...prev, clientId: e.target.value }))}
+                onChange={(e) => setNewIntervention((prev) => ({ ...prev, type: 'chiamata', clientId: e.target.value }))}
               >
                 <option value="">Cliente...</option>
                 {customers.map((c) => <option key={c.id} value={c.id}>{c.name} {c.phone ? `• ${c.phone}` : ''}</option>)}
@@ -2409,19 +2560,19 @@ const buildBackup = () => ({
                 type="datetime-local"
                 className="w-full border rounded p-2"
                 value={toLocalDateTimeInput(newIntervention.openedAt)}
-                onChange={(e) => setNewIntervention((prev) => ({ ...prev, openedAt: new Date(e.target.value).toISOString() }))}
+                onChange={(e) => setNewIntervention((prev) => ({ ...prev, type: 'chiamata', openedAt: new Date(e.target.value).toISOString() }))}
               />
               <textarea
                 className="w-full border rounded p-2"
                 rows={4}
-                placeholder="Descrizione intervento"
+                placeholder="Descrizione chiamata"
                 value={newIntervention.description}
-                onChange={(e) => setNewIntervention((prev) => ({ ...prev, description: e.target.value }))}
+                onChange={(e) => setNewIntervention((prev) => ({ ...prev, type: 'chiamata', description: e.target.value }))}
               />
             </div>
             <div className="flex justify-end gap-2 mt-4">
               <button onClick={() => setShowCalendarQuickAdd(false)} className="px-4 py-2 text-slate-500">Chiudi</button>
-              <button onClick={() => handleAddIntervention(newIntervention.type || calendarQuickAddType)} className="px-4 py-2 bg-indigo-600 text-white rounded">Salva intervento</button>
+              <button onClick={() => handleAddIntervention('chiamata')} className="px-4 py-2 bg-indigo-600 text-white rounded">Aggiungi chiamata</button>
             </div>
           </div>
         </div>
@@ -2473,82 +2624,6 @@ const buildBackup = () => ({
         </header>
         <main className="flex-1 overflow-y-auto p-4 md:p-8">
           <div className="max-w-6xl mx-auto pb-20">
-            {storageWarning && (
-              <div className="bg-amber-50 border border-amber-200 text-amber-800 text-sm p-3 rounded mb-4">
-                {storageWarning}
-              </div>
-            )}
-            {exportNotice && (
-              <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm p-3 rounded mb-4">
-                {exportNotice}
-              </div>
-            )}
-            <div className="bg-white rounded shadow p-4 mb-6 border border-slate-200">
-              <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-                <div className="space-y-1">
-                  <p className="text-sm font-semibold text-slate-700 flex items-center gap-2"><Zap size={16}/> Backend &amp; sincronizzazione</p>
-                  <p className="text-xs text-slate-500">Imposta il token per accedere alle API e aggiorna il database con i dati locali quando necessario.</p>
-                  <p className={`text-xs ${backendOnline ? 'text-emerald-600' : 'text-red-600'}`}>
-                    {backendOnline ? 'Backend online' : 'Backend offline: modalità locale attiva'}
-                  </p>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <button onClick={refreshFromBackend} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded hover:bg-slate-200 border" disabled={isSyncing}>
-                    <RefreshCw size={16} className={isSyncing ? 'animate-spin' : ''}/> Aggiorna da backend
-                  </button>
-                  <button onClick={handleImportLocalData} className="flex items-center gap-2 px-3 py-2 text-sm bg-emerald-50 text-emerald-700 rounded hover:bg-emerald-100 border border-emerald-200"><Upload size={16}/> Importa dati locali</button>
-                </div>
-              </div>
-              {retryStatus && (
-                <div className="mt-3 text-xs text-slate-500">
-                  Retry in corso ({retryStatus.attempt}/{retryStatus.maxAttempts}) per {retryStatus.path}.
-                  <div className="mt-1 h-1 bg-slate-200 rounded">
-                    <div
-                      className="h-1 bg-blue-500 rounded"
-                      style={{ width: `${Math.round((retryStatus.attempt / retryStatus.maxAttempts) * 100)}%` }}
-                    />
-                  </div>
-                </div>
-              )}
-              <div className="mt-4 grid gap-2 md:grid-cols-2">
-                <div className="flex flex-col gap-2">
-                  <label className="text-xs font-semibold text-slate-700">Token API</label>
-                  <div className="text-sm text-slate-600">
-                    {maskedToken ? `Token configurato: ${maskedToken}` : 'Token non configurato.'}
-                  </div>
-                  <button onClick={() => switchToTab('settings')} className="text-xs text-blue-600 underline w-fit">Gestisci token</button>
-                </div>
-                <div className="text-xs text-slate-500 flex items-center">
-                  {syncStatus || 'Sincronizzazione pronta.'}
-                </div>
-              </div>
-            </div>
-            <div className="bg-white rounded shadow p-4 mb-6 border border-slate-200">
-              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                <div>
-                  <p className="text-sm font-semibold text-slate-700 flex items-center gap-2"><FileSpreadsheet size={16}/> Backup e Export</p>
-                  <p className="text-xs text-slate-500">Scarica un JSON di backup per conservarlo su Drive/Cloud, oppure esporta CSV apribili in Excel per storico o assenza di connessione.</p>
-                </div>
-                <div className="flex flex-wrap gap-2 justify-end">
-                  <button onClick={handleDownloadBackup} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-800 text-white rounded hover:bg-slate-700"><Download size={16}/> Backup JSON</button>
-                  <button onClick={handleDownloadAutoBackup} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded hover:bg-slate-200 border"><Download size={16}/> Ultimo Backup</button>
-                  <button onClick={handleRestoreLatestBackup} className="flex items-center gap-2 px-3 py-2 text-sm bg-amber-50 text-amber-700 rounded hover:bg-amber-100 border border-amber-200">Ripristina Backup</button>
-                  <button onClick={handleSelectBackupFile} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded hover:bg-slate-200 border"><Upload size={16}/> Importa Backup</button>
-                  <button onClick={handlePersistStorage} className="flex items-center gap-2 px-3 py-2 text-sm bg-emerald-600 text-white rounded hover:bg-emerald-500" disabled={isPersistingStorage}>
-                    {isPersistingStorage ? <RefreshCw size={16} className="animate-spin"/> : <Download size={16}/>} Blocca dati nel browser
-                  </button>
-                  <button onClick={handleExportTickets} className="flex items-center gap-2 px-3 py-2 text-sm bg-blue-50 text-blue-700 rounded hover:bg-blue-100 border border-blue-200"><FileSpreadsheet size={16}/> Ticket CSV</button>
-                  <button onClick={handleExportInventory} className="flex items-center gap-2 px-3 py-2 text-sm bg-purple-50 text-purple-700 rounded hover:bg-purple-100 border border-purple-200"><FileSpreadsheet size={16}/> Magazzino CSV</button>
-                  <button onClick={handleExportCustomers} className="flex items-center gap-2 px-3 py-2 text-sm bg-green-50 text-green-700 rounded hover:bg-green-100 border border-green-200"><FileSpreadsheet size={16}/> Clienti CSV</button>
-                  <input ref={fileInputRef} type="file" accept="application/json" className="hidden" onChange={handleImportBackup} />
-                </div>
-              </div>
-              <div className="mt-3 text-xs text-slate-500">
-                Backup automatico: {autoBackupAt ? `ultimo salvataggio ${autoBackupAt}` : 'non disponibile'}.
-              </div>
-              {backupStatus && <p className="mt-2 text-xs text-amber-600">{backupStatus}</p>}
-              {importError && <p className="mt-2 text-sm text-red-600">{importError}</p>}
-            </div>
             {activeTab === 'dashboard' && <DashboardView />}
             {activeTab === 'calendar' && <CalendarView />}
             {activeTab === 'customers' && <CustomerListView />}
@@ -2797,7 +2872,31 @@ const buildBackup = () => ({
                 <option value={1}>Bassa</option><option value={2}>Media</option><option value={3}>Alta</option>
               </select>
             </div>
-            <textarea className="w-full border p-2 rounded mt-3" rows={5} value={selectedIntervention.description || ''} onChange={(e) => setSelectedIntervention((prev) => ({ ...prev, description: e.target.value }))} />
+            <div className="mt-3 space-y-2">
+              <p className="text-sm font-semibold text-slate-700">Storico scritte</p>
+              <div className="max-h-52 overflow-y-auto border rounded p-2 bg-slate-50 space-y-2">
+                {(selectedIntervention.descriptionEntries || []).length === 0 && (
+                  <p className="text-xs text-slate-500">Nessuna nota disponibile.</p>
+                )}
+                {(selectedIntervention.descriptionEntries || []).map((entry) => (
+                  <p
+                    key={entry.id}
+                    title={`Modificato da ${entry.authorName || 'Operatore'} (${entry.authorCode || 'N/D'}) il ${formatAuditDate(entry.createdAt)}`}
+                    className={`text-sm rounded px-2 py-1 ${entry.source === 'original' ? 'bg-slate-200 text-slate-700' : 'bg-indigo-100 text-indigo-800'}`}
+                  >
+                    {entry.text}
+                  </p>
+                ))}
+              </div>
+              <textarea
+                className="w-full border p-2 rounded"
+                rows={4}
+                placeholder="Aggiungi una nuova nota/intervento..."
+                value={selectedIntervention.newNote || ''}
+                onChange={(e) => setSelectedIntervention((prev) => ({ ...prev, newNote: e.target.value }))}
+              />
+              <p className="text-xs text-slate-500">Le nuove note sono colorate e mostrano autore/data passando con il mouse.</p>
+            </div>
             <div className="flex justify-end gap-2 mt-4">
               <button onClick={() => setSelectedIntervention(null)} className="px-4 py-2 text-slate-500">Chiudi</button>
               <button onClick={handleSaveInterventionDetails} className="px-4 py-2 bg-indigo-600 text-white rounded">Salva modifiche</button>
