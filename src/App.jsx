@@ -81,6 +81,14 @@ const idbSet = async (key, value) => {
   });
 };
 const nowIso = () => new Date().toISOString();
+const toDateKey = (value) => {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
 const toLocalDateTimeInput = (value) => {
   const date = value ? new Date(value) : new Date();
   if (Number.isNaN(date.getTime())) return '';
@@ -389,6 +397,7 @@ export default function App() {
   const [draggingInterventionId, setDraggingInterventionId] = useState(null);
   const [calendarEditorItem, setCalendarEditorItem] = useState(null);
   const [calendarFocusDate, setCalendarFocusDate] = useState(() => new Date());
+  const [showCalendarQuickAdd, setShowCalendarQuickAdd] = useState(false);
 
   // --- STATO APP ---
   const [customers, setCustomers] = useState(() => sanitizeCustomers(loadCache('customers', initialCustomers), initialCustomers));
@@ -432,8 +441,6 @@ export default function App() {
       name: savedName || 'Operatore'
     };
   });
-  const [mbiEnabled, setMbiEnabled] = useState(() => safeGetItem('mbiEnabled', '0') === '1');
-  const [mbiStatus, setMbiStatus] = useState('');
 
   // Funzione per aggiungere notifiche toast
   const addToast = (message, tone = 'success') => {
@@ -479,10 +486,6 @@ export default function App() {
     safeSetItem('operatorCode', operatorProfile.code);
     safeSetItem('operatorName', operatorProfile.name);
   }, [operatorProfile]);
-
-  useEffect(() => {
-    safeSetItem('mbiEnabled', mbiEnabled ? '1' : '0');
-  }, [mbiEnabled]);
 
   useEffect(() => {
     if (!storageAvailable || storageFallbackState.active) {
@@ -734,6 +737,11 @@ export default function App() {
   const [interventionFilters, setInterventionFilters] = useState({ clientId: '', type: '', status: '', urgency: '' });
   const [selectedIntervention, setSelectedIntervention] = useState(null);
 
+  useEffect(() => {
+    if (!allowLocalOverrides) return;
+    safeSetItem('operatorCode', operatorCode || 'OPERATORE-001');
+  }, [operatorCode]);
+
   const openInterventions = interventions.filter((item) => item.status !== 'chiuso');
   const normalizedTicketCustomerQuery = ticketCustomerQuery.trim().toLowerCase();
   const filteredTicketCustomers = customers.filter((customer) => {
@@ -756,12 +764,17 @@ export default function App() {
     }
   };
 
-  const openInterventionComposer = (scheduledAt = null, type = 'chiamata') => {
+  const openInterventionComposer = (scheduledAt = null, type = 'chiamata', options = {}) => {
     setNewIntervention((prev) => ({
       ...prev,
       type,
       openedAt: scheduledAt || prev.openedAt || nowIso()
     }));
+    if (options.keepCalendarOpen) {
+      setCalendarFocusDate(new Date(scheduledAt || nowIso()));
+      setShowCalendarQuickAdd(true);
+      return;
+    }
     switchToTab('interventions');
   };
 
@@ -996,6 +1009,7 @@ export default function App() {
       setInterventionCustomerQuery('');
       setNewInterventionFiles([]);
       setSyncStatus('Intervento creato nel backend.');
+      setShowCalendarQuickAdd(false);
       addToast('Intervento creato con successo.', 'success');
     } catch (error) {
       if (shouldFallbackToLocal(error)) {
@@ -1007,6 +1021,7 @@ export default function App() {
         });
         setInterventionCustomerQuery('');
         setNewInterventionFiles([]);
+        setShowCalendarQuickAdd(false);
         addToast('Intervento salvato in locale (token mancante/non valido).', 'success');
         setSyncStatus('Modalità locale: intervento salvato solo nel browser.');
       } else {
@@ -1037,11 +1052,12 @@ export default function App() {
 
   const handleInterventionScheduleChange = async (intervention, openedAt) => {
     if (!intervention || !openedAt) return;
-    const updated = {
+    const updated = sanitizeIntervention({
       ...intervention,
       openedAt,
       updatedAt: nowIso()
-    };
+    });
+    if (!updated) return;
     try {
       const saved = await apiFetchWithRetry(`/api/interventions/${intervention.id}`, {
         method: 'PUT',
@@ -1051,7 +1067,163 @@ export default function App() {
       setSyncStatus('Data intervento aggiornata.');
       addToast('Data intervento aggiornata.', 'success');
     } catch (error) {
-      handleApiError(error, 'Impossibile aggiornare la data intervento.');
+      if (shouldFallbackToLocal(error)) {
+        setInterventions((prev) => prev.map((entry) => (entry.id === updated.id ? updated : entry)));
+        setSyncStatus('Modalità locale: data intervento aggiornata solo nel browser.');
+        addToast('Data intervento aggiornata in locale (token mancante/non valido).', 'success');
+      } else {
+        handleApiError(error, 'Impossibile aggiornare la data intervento.');
+      }
+    }
+  };
+
+  const openInterventionDetails = (intervention) => {
+    const safeIntervention = sanitizeIntervention(intervention);
+    if (!safeIntervention) {
+      addToast("Impossibile aprire l'intervento selezionato.", 'error');
+      return;
+    }
+    setSelectedIntervention(safeIntervention);
+  };
+
+  const handleSaveInterventionDetails = async () => {
+    if (!selectedIntervention) return;
+    const updated = sanitizeIntervention({
+      ...selectedIntervention,
+      updatedAt: nowIso(),
+      closedAt: selectedIntervention.status === 'chiuso'
+        ? (selectedIntervention.closedAt || nowIso())
+        : null
+    });
+    if (!updated) {
+      addToast('Impossibile salvare: dati intervento non validi.', 'error');
+      return;
+    }
+    try {
+      const saved = await apiFetchWithRetry(`/api/interventions/${updated.id}`, {
+        method: 'PUT',
+        body: JSON.stringify(updated)
+      });
+      const normalizedSaved = sanitizeIntervention(saved) || updated;
+      setInterventions((prev) => prev.map((entry) => (entry.id === normalizedSaved.id ? normalizedSaved : entry)));
+      setSelectedIntervention(null);
+      setSyncStatus('Intervento aggiornato.');
+      addToast('Intervento aggiornato con successo.', 'success');
+    } catch (error) {
+      if (shouldFallbackToLocal(error)) {
+        setInterventions((prev) => prev.map((entry) => (entry.id === updated.id ? updated : entry)));
+        setSelectedIntervention(null);
+        setSyncStatus('Modalità locale: intervento aggiornato solo nel browser.');
+        addToast('Intervento aggiornato in locale (token mancante/non valido).', 'success');
+      } else {
+        handleApiError(error, 'Impossibile salvare le modifiche all\'intervento.');
+      }
+    }
+  };
+
+  const openInterventionDetails = (intervention) => {
+    const safeIntervention = sanitizeIntervention(intervention);
+    if (!safeIntervention) {
+      addToast("Impossibile aprire l'intervento selezionato.", 'error');
+      return;
+    }
+    setSelectedIntervention(safeIntervention);
+  };
+
+  const handleSaveInterventionDetails = async () => {
+    if (!selectedIntervention) return;
+    const updated = sanitizeIntervention({
+      ...selectedIntervention,
+      updatedAt: nowIso(),
+      closedAt: selectedIntervention.status === 'chiuso'
+        ? (selectedIntervention.closedAt || nowIso())
+        : null
+    });
+    if (!updated) {
+      addToast('Impossibile salvare: dati intervento non validi.', 'error');
+      return;
+    }
+    try {
+      const saved = await apiFetchWithRetry(`/api/interventions/${updated.id}`, {
+        method: 'PUT',
+        body: JSON.stringify(updated)
+      });
+      const normalizedSaved = sanitizeIntervention(saved) || updated;
+      setInterventions((prev) => prev.map((entry) => (entry.id === normalizedSaved.id ? normalizedSaved : entry)));
+      setSelectedIntervention(null);
+      setSyncStatus('Intervento aggiornato.');
+      addToast('Intervento aggiornato con successo.', 'success');
+    } catch (error) {
+      if (shouldFallbackToLocal(error)) {
+        setInterventions((prev) => prev.map((entry) => (entry.id === updated.id ? updated : entry)));
+        setSelectedIntervention(null);
+        setSyncStatus('Modalità locale: intervento aggiornato solo nel browser.');
+        addToast('Intervento aggiornato in locale (token mancante/non valido).', 'success');
+      } else {
+        handleApiError(error, 'Impossibile salvare le modifiche all\'intervento.');
+      }
+    }
+  };
+
+  const openInterventionDetails = (intervention) => {
+    const safe = sanitizeIntervention(intervention);
+    if (!safe) return;
+    setSelectedIntervention({
+      ...safe,
+      descriptionEntries: getDescriptionEntries(safe),
+      newNote: ''
+    });
+  };
+
+  const handleSaveInterventionDetails = async () => {
+    if (!selectedIntervention) return;
+
+    const noteText = (selectedIntervention.newNote || '').trim();
+    const nextEntries = [...(selectedIntervention.descriptionEntries || [])];
+
+    if (noteText) {
+      nextEntries.push({
+        id: crypto?.randomUUID?.() || `${Date.now()}`,
+        text: noteText,
+        authorCode: operatorProfile.code,
+        authorName: operatorProfile.name || 'Operatore',
+        createdAt: nowIso(),
+        source: 'note'
+      });
+    }
+
+    const payload = sanitizeIntervention({
+      ...selectedIntervention,
+      description: buildDescriptionFromEntries(nextEntries),
+      additionalData: {
+        ...(selectedIntervention.additionalData || {}),
+        descriptionEntries: nextEntries,
+        lastEditor: {
+          code: operatorProfile.code,
+          name: operatorProfile.name || 'Operatore',
+          at: nowIso()
+        }
+      },
+      updatedAt: nowIso()
+    });
+
+    try {
+      const saved = await apiFetchWithRetry(`/api/interventions/${selectedIntervention.id}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload)
+      });
+      const sanitized = sanitizeIntervention(saved);
+      setInterventions((prev) => prev.map((entry) => (entry.id === selectedIntervention.id ? sanitized : entry)));
+      setSelectedIntervention(null);
+      addToast('Dettagli intervento aggiornati.', 'success');
+    } catch (error) {
+      if (shouldFallbackToLocal(error)) {
+        setInterventions((prev) => prev.map((entry) => (entry.id === selectedIntervention.id ? payload : entry)));
+        setSelectedIntervention(null);
+        addToast('Intervento aggiornato in locale.', 'success');
+      } else {
+        handleApiError(error, 'Impossibile salvare i dettagli intervento.');
+      }
     }
   };
 
@@ -2241,21 +2413,6 @@ const buildBackup = () => ({
       </div>
 
       <div className="bg-white rounded shadow p-4 border border-slate-200">
-        <h2 className="text-lg font-bold text-slate-800 mb-2">Memoria MBI (Mirror Backup Incrementale)</h2>
-        <p className="text-sm text-slate-500 mb-4">Mantiene uno snapshot ridondante su IndexedDB e permette sync immediata verso backend remoto.</p>
-        <div className="flex flex-wrap items-center gap-3">
-          <button
-            onClick={() => setMbiEnabled((prev) => !prev)}
-            className={`px-3 py-2 rounded text-sm border ${mbiEnabled ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-slate-700 border-slate-300'}`}
-          >
-            {mbiEnabled ? 'MBI attivo' : 'Attiva MBI'}
-          </button>
-          <button onClick={handleMbiSyncNow} className="px-3 py-2 rounded text-sm border bg-indigo-600 text-white border-indigo-600">Sincronizza MBI ora</button>
-        </div>
-        <p className="text-xs text-slate-500 mt-2">{mbiStatus || 'MBI disattivo: abilitalo per mantenere snapshot ridondanti locali + remoto.'}</p>
-      </div>
-
-      <div className="bg-white rounded shadow p-4 border border-slate-200">
         <h2 className="text-lg font-bold text-slate-800 mb-2">Token API</h2>
         <p className="text-sm text-slate-500 mb-4">Gestisci il token API per l'accesso al backend. Il token viene salvato in cookie HttpOnly.</p>
         <div className="flex flex-col gap-3 md:flex-row md:items-center">
@@ -2270,6 +2427,17 @@ const buildBackup = () => ({
           <button onClick={handleRequestNewToken} className="px-4 py-2 bg-slate-100 text-slate-700 rounded border">Richiedi nuovo token</button>
         </div>
         <p className="text-xs text-slate-500 mt-2">Token attuale: {maskedToken || 'non configurato'}.</p>
+      </div>
+
+      <div className="bg-white rounded shadow p-4 border border-slate-200">
+        <h2 className="text-lg font-bold text-slate-800 mb-2">Operatore</h2>
+        <p className="text-sm text-slate-500 mb-3">Codice univoco operatore da tracciare negli aggiornamenti descrizione degli interventi.</p>
+        <input
+          className="w-full border rounded p-2 text-sm"
+          placeholder="Es. OP-001"
+          value={operatorCode}
+          onChange={(e) => setOperatorCode(e.target.value.toUpperCase())}
+        />
       </div>
 
       <div className="bg-white rounded shadow p-4 border border-slate-200">
@@ -2335,9 +2503,9 @@ const buildBackup = () => ({
     const days = getDaysInMonth(currentDate);
     const monthName = currentDate.toLocaleString('it-IT', { month: 'long', year: 'numeric' });
     const focusedDay = isValidDate(calendarFocusDate) ? calendarFocusDate : new Date();
-    const focusedDayString = focusedDay.toISOString().split('T')[0];
+    const focusedDayString = toDateKey(focusedDay);
     const focusedInterventions = interventions
-      .filter((item) => new Date(item.openedAt).toISOString().split('T')[0] === focusedDayString)
+      .filter((item) => toDateKey(item.openedAt) === focusedDayString)
       .sort((a, b) => new Date(a.openedAt).getTime() - new Date(b.openedAt).getTime());
     const slotHours = Array.from({ length: 14 }, (_, idx) => idx + 7);
 
@@ -2348,7 +2516,7 @@ const buildBackup = () => ({
           <div className="flex gap-2">
             <button onClick={() => changeMonth(-1)} className="p-2 hover:bg-slate-100 rounded"><ChevronLeft/></button>
             <button onClick={() => changeMonth(1)} className="p-2 hover:bg-slate-100 rounded"><ChevronRight/></button>
-            <button onClick={() => openInterventionComposer(focusedDay.toISOString(), 'chiamata')} className="bg-blue-600 text-white px-4 py-2 rounded flex gap-2"><Plus/> Nuovo intervento</button>
+            <button onClick={() => openInterventionComposer(focusedDay.toISOString(), 'chiamata', { keepCalendarOpen: true })} className="bg-blue-600 text-white px-4 py-2 rounded flex gap-2"><Plus/> Nuovo intervento</button>
           </div>
         </div>
 
@@ -2359,12 +2527,9 @@ const buildBackup = () => ({
           <div className="grid grid-cols-7 gap-2">
             {days.map((day, idx) => {
               if (!day || !isValidDate(day)) return <div key={idx} className="bg-slate-50 h-32 rounded"></div>;
-              const dayString = day.toISOString().split('T')[0];
-              const dayInterventions = interventions.filter((i) => {
-                const dateString = new Date(i.openedAt).toISOString().split('T')[0];
-                return dateString === dayString;
-              });
-              const isToday = dayString === new Date().toISOString().split('T')[0];
+              const dayString = toDateKey(day);
+              const dayInterventions = interventions.filter((i) => toDateKey(i.openedAt) === dayString);
+              const isToday = dayString === toDateKey(new Date());
               const isFocused = dayString === focusedDayString;
               return (
                 <div
@@ -2377,9 +2542,8 @@ const buildBackup = () => ({
                       setCalendarFocusDate(new Date(day));
                       return;
                     }
-                    const selectedDate = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 9, 0, 0, 0);
                     setCalendarFocusDate(new Date(day));
-                    openInterventionComposer(selectedDate.toISOString(), 'chiamata');
+                    openInterventionComposer(selectedDate.toISOString(), 'chiamata', { keepCalendarOpen: true });
                   }}
                   onDragOver={(e) => e.preventDefault()}
                   onDrop={(e) => {
@@ -2432,7 +2596,7 @@ const buildBackup = () => ({
         <div className="bg-white rounded shadow p-4 border border-slate-200">
           <div className="mb-3">
             <h3 className="font-semibold text-slate-800">Agenda giornaliera • {focusedDay.toLocaleDateString('it-IT')}</h3>
-            <p className="text-xs text-slate-500">Trascina gli interventi tra le fasce orarie per cambiare giorno e ora (stile Google Calendar).</p>
+            <p className="text-xs text-slate-500">Clicca su un giorno per vedere gli interventi. Trascina gli interventi tra le fasce orarie per cambiare giorno e ora (stile Google Calendar).</p>
           </div>
           <div className="space-y-2 max-h-[420px] overflow-y-auto pr-1">
             {slotHours.map((hour) => {
@@ -2441,6 +2605,13 @@ const buildBackup = () => ({
                 <div
                   key={`slot-${hour}`}
                   className="border rounded p-2 bg-slate-50"
+                  onClick={(e) => {
+                    const target = e.target;
+                    const clickedEventCard = Boolean(target?.closest?.('[data-calendar-event-card="true"]'));
+                    if (clickedEventCard) return;
+                    const selectedDate = new Date(focusedDay.getFullYear(), focusedDay.getMonth(), focusedDay.getDate(), hour, 0, 0, 0);
+                    openInterventionComposer(selectedDate.toISOString(), 'chiamata', { keepCalendarOpen: true });
+                  }}
                   onDragOver={(e) => e.preventDefault()}
                   onDrop={(e) => {
                     e.preventDefault();
@@ -2484,6 +2655,44 @@ const buildBackup = () => ({
             })}
           </div>
         </div>
+
+
+
+      {showCalendarQuickAdd && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setShowCalendarQuickAdd(false)}>
+          <div className="bg-white p-6 rounded-lg w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-xl font-bold mb-1">Nuova chiamata</h3>
+            <p className="text-sm text-slate-500 mb-4">{new Date(newIntervention.openedAt || nowIso()).toLocaleString('it-IT')}</p>
+            <div className="space-y-3">
+              <select
+                className="w-full border rounded p-2"
+                value={newIntervention.clientId}
+                onChange={(e) => setNewIntervention((prev) => ({ ...prev, type: 'chiamata', clientId: e.target.value }))}
+              >
+                <option value="">Cliente...</option>
+                {customers.map((c) => <option key={c.id} value={c.id}>{c.name} {c.phone ? `• ${c.phone}` : ''}</option>)}
+              </select>
+              <input
+                type="datetime-local"
+                className="w-full border rounded p-2"
+                value={toLocalDateTimeInput(newIntervention.openedAt)}
+                onChange={(e) => setNewIntervention((prev) => ({ ...prev, type: 'chiamata', openedAt: new Date(e.target.value).toISOString() }))}
+              />
+              <textarea
+                className="w-full border rounded p-2"
+                rows={4}
+                placeholder="Descrizione chiamata"
+                value={newIntervention.description}
+                onChange={(e) => setNewIntervention((prev) => ({ ...prev, type: 'chiamata', description: e.target.value }))}
+              />
+            </div>
+            <div className="flex justify-end gap-2 mt-4">
+              <button onClick={() => setShowCalendarQuickAdd(false)} className="px-4 py-2 text-slate-500">Chiudi</button>
+              <button onClick={() => handleAddIntervention('chiamata')} className="px-4 py-2 bg-indigo-600 text-white rounded">Aggiungi chiamata</button>
+            </div>
+          </div>
+        </div>
+      )}
 
         {calendarEditorItem && (
           <div className="bg-white rounded shadow p-4 border border-slate-200">
@@ -2785,26 +2994,15 @@ const buildBackup = () => ({
                 {(selectedIntervention.descriptionEntries || []).length === 0 && (
                   <p className="text-xs text-slate-500">Nessuna nota disponibile.</p>
                 )}
-                {(selectedIntervention.descriptionEntries || []).map((entry) => {
-                  const isOriginal = entry.source === 'original';
-                  return (
-                    <div
-                      key={entry.id}
-                      className={`group relative rounded border px-3 py-2 transition-colors ${isOriginal ? 'bg-slate-100 border-slate-300 text-slate-700' : 'bg-amber-50 border-amber-300 text-amber-900 hover:bg-amber-100'}`}
-                    >
-                      <div className="flex items-center justify-between gap-2 mb-1">
-                        <span className={`text-[10px] uppercase tracking-wide font-bold px-2 py-0.5 rounded ${isOriginal ? 'bg-slate-300 text-slate-800' : 'bg-amber-300 text-amber-950'}`}>
-                          {isOriginal ? 'Originale' : 'Modifica'}
-                        </span>
-                        <span className="text-[11px] text-slate-500">{formatAuditDate(entry.createdAt)}</span>
-                      </div>
-                      <p className="text-sm whitespace-pre-wrap">{entry.text}</p>
-                      <div className="pointer-events-none absolute left-0 -top-11 z-20 hidden min-w-[260px] rounded bg-slate-900 px-2 py-1 text-xs text-white shadow-lg group-hover:block">
-                        <strong>{entry.authorName || 'Operatore'}</strong> ({entry.authorCode || 'N/D'}) • {formatAuditDate(entry.createdAt)}
-                      </div>
-                    </div>
-                  );
-                })}
+                {(selectedIntervention.descriptionEntries || []).map((entry) => (
+                  <p
+                    key={entry.id}
+                    title={`Modificato da ${entry.authorName || 'Operatore'} (${entry.authorCode || 'N/D'}) il ${formatAuditDate(entry.createdAt)}`}
+                    className={`text-sm rounded px-2 py-1 ${entry.source === 'original' ? 'bg-slate-200 text-slate-700' : 'bg-indigo-100 text-indigo-800'}`}
+                  >
+                    {entry.text}
+                  </p>
+                ))}
               </div>
               <textarea
                 className="w-full border p-2 rounded"
