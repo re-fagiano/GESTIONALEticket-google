@@ -277,10 +277,10 @@ const sanitizeInventoryList = (list, fallback = []) => {
 const interventionTypes = ['chiamata', 'riparazione', 'ordine_ricambi', 'preventivo'];
 const interventionStatuses = ['pendente', 'preso_in_carico', 'diagnosticato', 'ordine_ricambi', 'preventivato', 'saldato', 'chiuso'];
 const interventionTypeMeta = {
-  chiamata: { label: 'Chiamate', color: 'blue' },
-  riparazione: { label: 'Riparazioni', color: 'indigo' },
-  ordine_ricambi: { label: 'Ordini Ricambi', color: 'amber' },
-  preventivo: { label: 'Preventivi', color: 'emerald' }
+  chiamata: { label: 'Chiamate', singularLabel: 'Chiamata', color: 'blue' },
+  riparazione: { label: 'Riparazioni', singularLabel: 'Riparazione', color: 'indigo' },
+  ordine_ricambi: { label: 'Ordini Ricambi', singularLabel: 'Ordine ricambi', color: 'amber' },
+  preventivo: { label: 'Preventivi', singularLabel: 'Preventivo', color: 'emerald' }
 };
 
 const dedicatedTabToType = {
@@ -656,6 +656,7 @@ export default function App() {
     type: 'chiamata',
     status: 'pendente',
     urgency: 2,
+    openedAt: nowIso(),
     description: '',
     parentInterventionId: '',
     applianceBrand: '',
@@ -709,6 +710,15 @@ export default function App() {
     if (mappedType) {
       setNewIntervention((prev) => ({ ...prev, type: mappedType }));
     }
+  };
+
+  const openInterventionComposer = (scheduledAt = null, type = 'chiamata') => {
+    setNewIntervention((prev) => ({
+      ...prev,
+      type,
+      openedAt: scheduledAt || prev.openedAt || nowIso()
+    }));
+    switchToTab('interventions');
   };
 
   // --- AZIONI ---
@@ -901,7 +911,7 @@ export default function App() {
       type: selectedType,
       status: newIntervention.status,
       urgency: Number(newIntervention.urgency || 2),
-      openedAt: nowIso(),
+      openedAt: newIntervention.openedAt || nowIso(),
       description: newIntervention.description,
       parentInterventionId: newIntervention.parentInterventionId || null,
       additionalData,
@@ -916,7 +926,7 @@ export default function App() {
       });
       setInterventions((prev) => sanitizeInterventions([created, ...prev], initialInterventions));
       setNewIntervention({
-        clientId: '', type: forcedType || selectedType || 'chiamata', status: 'pendente', urgency: 2, description: '', parentInterventionId: '',
+        clientId: '', type: forcedType || selectedType || 'chiamata', status: 'pendente', urgency: 2, openedAt: nowIso(), description: '', parentInterventionId: '',
         applianceBrand: '', applianceModel: '', serialNumber: '', defect: '',
         sparePartCode: '', sparePartQty: 1, supplier: '', quoteItems: '', quoteTotal: 0, quoteValidUntil: ''
       });
@@ -928,7 +938,7 @@ export default function App() {
       if (shouldFallbackToLocal(error)) {
         setInterventions((prev) => sanitizeInterventions([payload, ...prev], initialInterventions));
         setNewIntervention({
-          clientId: '', type: forcedType || selectedType || 'chiamata', status: 'pendente', urgency: 2, description: '', parentInterventionId: '',
+          clientId: '', type: forcedType || selectedType || 'chiamata', status: 'pendente', urgency: 2, openedAt: nowIso(), description: '', parentInterventionId: '',
           applianceBrand: '', applianceModel: '', serialNumber: '', defect: '',
           sparePartCode: '', sparePartQty: 1, supplier: '', quoteItems: '', quoteTotal: 0, quoteValidUntil: ''
         });
@@ -1759,6 +1769,12 @@ const buildBackup = () => ({
               <option value={1}>Bassa</option><option value={2}>Media</option><option value={3}>Alta</option>
             </select>
           </div>
+          <input
+            type="datetime-local"
+            className="w-full border rounded p-2"
+            value={toLocalDateTimeInput(newIntervention.openedAt)}
+            onChange={(e) => setNewIntervention((p) => ({ ...p, openedAt: new Date(e.target.value).toISOString() }))}
+          />
           <textarea className="w-full border rounded p-2" placeholder="Descrizione" value={newIntervention.description} onChange={(e) => setNewIntervention((p) => ({ ...p, description: e.target.value }))} />
           {newIntervention.type === 'riparazione' && (
             <div className="grid md:grid-cols-4 gap-3">
@@ -1859,7 +1875,7 @@ const buildBackup = () => ({
         </div>
 
         <div className="bg-white rounded-xl shadow border border-slate-200 p-4 space-y-3">
-          <h3 className="font-semibold text-slate-700">Nuovo ticket {meta.label.toLowerCase().slice(0, -1)}</h3>
+          <h3 className="font-semibold text-slate-700">Nuova {meta.singularLabel?.toLowerCase() || 'attività'}</h3>
           <input
             className="w-full border rounded p-2"
             placeholder="Cerca cliente per nome, email o telefono"
@@ -1890,8 +1906,14 @@ const buildBackup = () => ({
               <option value={1}>Bassa</option><option value={2}>Media</option><option value={3}>Alta</option>
             </select>
           </div>
+          <input
+            type="datetime-local"
+            className="w-full border rounded p-2"
+            value={toLocalDateTimeInput(newIntervention.openedAt)}
+            onChange={(e) => setNewIntervention((p) => ({ ...p, type: typeKey, openedAt: new Date(e.target.value).toISOString() }))}
+          />
           <textarea className="w-full border rounded p-2" placeholder="Descrizione" value={newIntervention.description} onChange={(e) => setNewIntervention((p) => ({ ...p, type: typeKey, description: e.target.value }))} />
-          <button onClick={() => handleAddIntervention(typeKey)} className="bg-indigo-600 text-white px-4 py-2 rounded">Aggiungi {meta.label.toLowerCase().slice(0, -1)}</button>
+          <button onClick={() => handleAddIntervention(typeKey)} className="bg-indigo-600 text-white px-4 py-2 rounded">Aggiungi {meta.singularLabel?.toLowerCase() || 'attività'}</button>
         </div>
 
         <div className="bg-white rounded-xl shadow border border-slate-200 overflow-hidden">
@@ -2123,7 +2145,7 @@ const buildBackup = () => ({
           <div className="flex gap-2">
             <button onClick={() => changeMonth(-1)} className="p-2 hover:bg-slate-100 rounded"><ChevronLeft/></button>
             <button onClick={() => changeMonth(1)} className="p-2 hover:bg-slate-100 rounded"><ChevronRight/></button>
-            <button onClick={() => switchToTab('chiamate')} className="bg-blue-600 text-white px-4 py-2 rounded flex gap-2"><Plus/> Nuovo Intervento</button>
+            <button onClick={() => openInterventionComposer(focusedDay.toISOString(), 'chiamata')} className="bg-blue-600 text-white px-4 py-2 rounded flex gap-2"><Plus/> Nuovo intervento</button>
           </div>
         </div>
 
@@ -2145,7 +2167,17 @@ const buildBackup = () => ({
                 <div
                   key={idx}
                   className={`h-32 border rounded p-2 flex flex-col gap-1 overflow-y-auto ${isToday ? 'border-blue-500 bg-blue-50' : 'border-slate-200 hover:bg-slate-50'} ${isFocused ? 'ring-2 ring-indigo-300' : ''}`}
-                  onClick={() => setCalendarFocusDate(new Date(day))}
+                  onClick={(e) => {
+                    const target = e.target;
+                    const clickedEventCard = Boolean(target?.closest?.('[data-calendar-event-card="true"]'));
+                    if (clickedEventCard) {
+                      setCalendarFocusDate(new Date(day));
+                      return;
+                    }
+                    const selectedDate = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 9, 0, 0, 0);
+                    setCalendarFocusDate(new Date(day));
+                    openInterventionComposer(selectedDate.toISOString(), 'chiamata');
+                  }}
                   onDragOver={(e) => e.preventDefault()}
                   onDrop={(e) => {
                     e.preventDefault();
@@ -2180,6 +2212,7 @@ const buildBackup = () => ({
                           setCalendarEditorItem(item);
                           openInterventionDetails(item);
                         }}
+                        data-calendar-event-card="true"
                         className="text-xs bg-white border-l-4 border-indigo-500 p-1 rounded shadow-sm cursor-move hover:bg-indigo-50"
                       >
                         <div className="font-bold">{openedDate.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' })} • {item.type}</div>
@@ -2226,6 +2259,7 @@ const buildBackup = () => ({
                       return (
                         <div
                           key={`slot-item-${item.id}`}
+                          data-calendar-event-card="true"
                           className="bg-white border border-indigo-200 rounded px-2 py-1 text-xs cursor-move hover:bg-indigo-50"
                           draggable
                           onDragStart={(e) => {
