@@ -736,12 +736,6 @@ export default function App() {
   const [interventionSearch, setInterventionSearch] = useState('');
   const [interventionFilters, setInterventionFilters] = useState({ clientId: '', type: '', status: '', urgency: '' });
   const [selectedIntervention, setSelectedIntervention] = useState(null);
-
-  useEffect(() => {
-    if (!allowLocalOverrides) return;
-    safeSetItem('operatorCode', operatorCode || 'OPERATORE-001');
-  }, [operatorCode]);
-
   const openInterventions = interventions.filter((item) => item.status !== 'chiuso');
   const normalizedTicketCustomerQuery = ticketCustomerQuery.trim().toLowerCase();
   const filteredTicketCustomers = customers.filter((customer) => {
@@ -2278,18 +2272,6 @@ const buildBackup = () => ({
         </div>
         <p className="text-xs text-slate-500 mt-2">Token attuale: {maskedToken || 'non configurato'}.</p>
       </div>
-
-      <div className="bg-white rounded shadow p-4 border border-slate-200">
-        <h2 className="text-lg font-bold text-slate-800 mb-2">Operatore</h2>
-        <p className="text-sm text-slate-500 mb-3">Codice univoco operatore da tracciare negli aggiornamenti descrizione degli interventi.</p>
-        <input
-          className="w-full border rounded p-2 text-sm"
-          placeholder="Es. OP-001"
-          value={operatorCode}
-          onChange={(e) => setOperatorCode(e.target.value.toUpperCase())}
-        />
-      </div>
-
       <div className="bg-white rounded shadow p-4 border border-slate-200">
         <h2 className="text-lg font-bold text-slate-800 mb-2">Configurazione AI DeepSeek</h2>
         {allowLocalOverrides ? (
