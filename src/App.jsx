@@ -96,6 +96,30 @@ const toLocalDateTimeInput = (value) => {
   return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
 };
 
+const generateUserCode = () => `USR-${Math.random().toString(36).slice(2, 7).toUpperCase()}-${Date.now().toString().slice(-4)}`;
+
+const formatAuditDate = (value) => {
+  const date = value ? new Date(value) : null;
+  if (!date || Number.isNaN(date.getTime())) return 'Data non disponibile';
+  return date.toLocaleString('it-IT');
+};
+
+const getDescriptionEntries = (intervention) => {
+  const entries = intervention?.additionalData?.descriptionEntries;
+  if (Array.isArray(entries) && entries.length > 0) return entries;
+  if (!intervention?.description?.trim()) return [];
+  return [{
+    id: `legacy-${intervention.id || Date.now()}`,
+    text: intervention.description,
+    authorCode: 'SYSTEM',
+    authorName: 'Dato originale',
+    createdAt: intervention.openedAt || intervention.updatedAt || nowIso(),
+    source: 'original'
+  }];
+};
+
+const buildDescriptionFromEntries = (entries = []) => entries.map((entry) => entry.text).filter(Boolean).join('\n');
+
 const safeGetItem = (key, fallback = null) => {
   if (!storageAvailable) return fallback;
   try {
@@ -409,6 +433,15 @@ export default function App() {
   // Stato per le notifiche toast
   const [toasts, setToasts] = useState([]);
 
+  const [operatorProfile, setOperatorProfile] = useState(() => {
+    const savedCode = safeGetItem('operatorCode', '');
+    const savedName = safeGetItem('operatorName', '');
+    return {
+      code: savedCode || generateUserCode(),
+      name: savedName || 'Operatore'
+    };
+  });
+
   // Funzione per aggiungere notifiche toast
   const addToast = (message, tone = 'success') => {
     const id = Date.now();
@@ -448,6 +481,11 @@ export default function App() {
       setStorageWarning('Impossibile salvare le impostazioni nel browser: storage disabilitato.');
     }
   }, [settings]);
+
+  useEffect(() => {
+    safeSetItem('operatorCode', operatorProfile.code);
+    safeSetItem('operatorName', operatorProfile.name);
+  }, [operatorProfile]);
 
   useEffect(() => {
     if (!storageAvailable || storageFallbackState.active) {
@@ -919,6 +957,19 @@ export default function App() {
       additionalData.quoteValidUntil = newIntervention.quoteValidUntil;
     }
 
+    const descriptionEntries = (newIntervention.description || '').trim()
+      ? [{
+          id: crypto?.randomUUID?.() || `${Date.now()}`,
+          text: newIntervention.description.trim(),
+          authorCode: operatorProfile.code,
+          authorName: operatorProfile.name || 'Operatore',
+          createdAt: nowIso(),
+          source: 'original'
+        }]
+      : [];
+
+    additionalData.descriptionEntries = descriptionEntries;
+
     const payload = sanitizeIntervention({
       id: crypto?.randomUUID?.() || Date.now().toString(),
       clientId: newIntervention.clientId,
@@ -928,7 +979,13 @@ export default function App() {
       openedAt: newIntervention.openedAt || nowIso(),
       description: newIntervention.description,
       parentInterventionId: newIntervention.parentInterventionId || null,
-      additionalData,
+      additionalData: {
+        ...additionalData,
+        createdBy: {
+          code: operatorProfile.code,
+          name: operatorProfile.name || 'Operatore'
+        }
+      },
       updatedAt: nowIso(),
       version: 1
     });
@@ -1099,6 +1156,68 @@ export default function App() {
         addToast('Intervento aggiornato in locale (token mancante/non valido).', 'success');
       } else {
         handleApiError(error, 'Impossibile salvare le modifiche all\'intervento.');
+      }
+    }
+  };
+
+  const openInterventionDetails = (intervention) => {
+    const safe = sanitizeIntervention(intervention);
+    if (!safe) return;
+    setSelectedIntervention({
+      ...safe,
+      descriptionEntries: getDescriptionEntries(safe),
+      newNote: ''
+    });
+  };
+
+  const handleSaveInterventionDetails = async () => {
+    if (!selectedIntervention) return;
+
+    const noteText = (selectedIntervention.newNote || '').trim();
+    const nextEntries = [...(selectedIntervention.descriptionEntries || [])];
+
+    if (noteText) {
+      nextEntries.push({
+        id: crypto?.randomUUID?.() || `${Date.now()}`,
+        text: noteText,
+        authorCode: operatorProfile.code,
+        authorName: operatorProfile.name || 'Operatore',
+        createdAt: nowIso(),
+        source: 'note'
+      });
+    }
+
+    const payload = sanitizeIntervention({
+      ...selectedIntervention,
+      description: buildDescriptionFromEntries(nextEntries),
+      additionalData: {
+        ...(selectedIntervention.additionalData || {}),
+        descriptionEntries: nextEntries,
+        lastEditor: {
+          code: operatorProfile.code,
+          name: operatorProfile.name || 'Operatore',
+          at: nowIso()
+        }
+      },
+      updatedAt: nowIso()
+    });
+
+    try {
+      const saved = await apiFetchWithRetry(`/api/interventions/${selectedIntervention.id}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload)
+      });
+      const sanitized = sanitizeIntervention(saved);
+      setInterventions((prev) => prev.map((entry) => (entry.id === selectedIntervention.id ? sanitized : entry)));
+      setSelectedIntervention(null);
+      addToast('Dettagli intervento aggiornati.', 'success');
+    } catch (error) {
+      if (shouldFallbackToLocal(error)) {
+        setInterventions((prev) => prev.map((entry) => (entry.id === selectedIntervention.id ? payload : entry)));
+        setSelectedIntervention(null);
+        addToast('Intervento aggiornato in locale.', 'success');
+      } else {
+        handleApiError(error, 'Impossibile salvare i dettagli intervento.');
       }
     }
   };
@@ -2164,6 +2283,31 @@ const buildBackup = () => ({
   const SettingsPanel = () => (
     <div className="space-y-6">
       <div className="bg-white rounded shadow p-4 border border-slate-200">
+        <h2 className="text-lg font-bold text-slate-800 mb-2">Accreditamento operatore</h2>
+        <p className="text-sm text-slate-500 mb-4">Ogni operatore ha un codice univoco usato nel tracciamento modifiche interventi.</p>
+        <div className="grid gap-3 md:grid-cols-2">
+          <div>
+            <label className="text-xs font-semibold text-slate-700">Codice operatore</label>
+            <input className="w-full border rounded p-2 text-sm bg-slate-50" value={operatorProfile.code} readOnly />
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-slate-700">Nome operatore</label>
+            <input
+              className="w-full border rounded p-2 text-sm"
+              value={operatorProfile.name}
+              onChange={(e) => setOperatorProfile((prev) => ({ ...prev, name: e.target.value }))}
+            />
+          </div>
+        </div>
+        <button
+          onClick={() => setOperatorProfile((prev) => ({ ...prev, code: generateUserCode() }))}
+          className="mt-3 px-3 py-2 text-sm bg-slate-100 border rounded"
+        >
+          Genera nuovo codice
+        </button>
+      </div>
+
+      <div className="bg-white rounded shadow p-4 border border-slate-200">
         <h2 className="text-lg font-bold text-slate-800 mb-2">Token API</h2>
         <p className="text-sm text-slate-500 mb-4">Gestisci il token API per l'accesso al backend. Il token viene salvato in cookie HttpOnly.</p>
         <div className="flex flex-col gap-3 md:flex-row md:items-center">
@@ -2729,7 +2873,31 @@ const buildBackup = () => ({
                 <option value={1}>Bassa</option><option value={2}>Media</option><option value={3}>Alta</option>
               </select>
             </div>
-            <textarea className="w-full border p-2 rounded mt-3" rows={5} value={selectedIntervention.description || ''} onChange={(e) => setSelectedIntervention((prev) => ({ ...prev, description: e.target.value }))} />
+            <div className="mt-3 space-y-2">
+              <p className="text-sm font-semibold text-slate-700">Storico scritte</p>
+              <div className="max-h-52 overflow-y-auto border rounded p-2 bg-slate-50 space-y-2">
+                {(selectedIntervention.descriptionEntries || []).length === 0 && (
+                  <p className="text-xs text-slate-500">Nessuna nota disponibile.</p>
+                )}
+                {(selectedIntervention.descriptionEntries || []).map((entry) => (
+                  <p
+                    key={entry.id}
+                    title={`Modificato da ${entry.authorName || 'Operatore'} (${entry.authorCode || 'N/D'}) il ${formatAuditDate(entry.createdAt)}`}
+                    className={`text-sm rounded px-2 py-1 ${entry.source === 'original' ? 'bg-slate-200 text-slate-700' : 'bg-indigo-100 text-indigo-800'}`}
+                  >
+                    {entry.text}
+                  </p>
+                ))}
+              </div>
+              <textarea
+                className="w-full border p-2 rounded"
+                rows={4}
+                placeholder="Aggiungi una nuova nota/intervento..."
+                value={selectedIntervention.newNote || ''}
+                onChange={(e) => setSelectedIntervention((prev) => ({ ...prev, newNote: e.target.value }))}
+              />
+              <p className="text-xs text-slate-500">Le nuove note sono colorate e mostrano autore/data passando con il mouse.</p>
+            </div>
             <div className="flex justify-end gap-2 mt-4">
               <button onClick={() => setSelectedIntervention(null)} className="px-4 py-2 text-slate-500">Chiudi</button>
               <button onClick={handleSaveInterventionDetails} className="px-4 py-2 bg-indigo-600 text-white rounded">Salva modifiche</button>
