@@ -425,6 +425,8 @@ export default function App() {
 
   // Stato per la notifica dei backup manuali/automatici
   const [backupStatus, setBackupStatus] = useState('');
+  const [mbiEnabled] = useState(false);
+  const [, setMbiStatus] = useState('');
 
   // Stato che indica se la storage persistente è in fase di richiesta
   const [isPersistingStorage, setIsPersistingStorage] = useState(false);
