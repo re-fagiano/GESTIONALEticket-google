@@ -277,10 +277,10 @@ const sanitizeInventoryList = (list, fallback = []) => {
 const interventionTypes = ['chiamata', 'riparazione', 'ordine_ricambi', 'preventivo'];
 const interventionStatuses = ['pendente', 'preso_in_carico', 'diagnosticato', 'ordine_ricambi', 'preventivato', 'saldato', 'chiuso'];
 const interventionTypeMeta = {
-  chiamata: { label: 'Chiamate', color: 'blue' },
-  riparazione: { label: 'Riparazioni', color: 'indigo' },
-  ordine_ricambi: { label: 'Ordini Ricambi', color: 'amber' },
-  preventivo: { label: 'Preventivi', color: 'emerald' }
+  chiamata: { label: 'Chiamate', singularLabel: 'Chiamata', color: 'blue' },
+  riparazione: { label: 'Riparazioni', singularLabel: 'Riparazione', color: 'indigo' },
+  ordine_ricambi: { label: 'Ordini Ricambi', singularLabel: 'Ordine ricambi', color: 'amber' },
+  preventivo: { label: 'Preventivi', singularLabel: 'Preventivo', color: 'emerald' }
 };
 
 const dedicatedTabToType = {
@@ -656,6 +656,7 @@ export default function App() {
     type: 'chiamata',
     status: 'pendente',
     urgency: 2,
+    openedAt: nowIso(),
     description: '',
     parentInterventionId: '',
     applianceBrand: '',
@@ -709,6 +710,15 @@ export default function App() {
     if (mappedType) {
       setNewIntervention((prev) => ({ ...prev, type: mappedType }));
     }
+  };
+
+  const openInterventionComposer = (scheduledAt = null, type = 'chiamata') => {
+    setNewIntervention((prev) => ({
+      ...prev,
+      type,
+      openedAt: scheduledAt || prev.openedAt || nowIso()
+    }));
+    switchToTab('interventions');
   };
 
   // --- AZIONI ---
@@ -901,7 +911,7 @@ export default function App() {
       type: selectedType,
       status: newIntervention.status,
       urgency: Number(newIntervention.urgency || 2),
-      openedAt: nowIso(),
+      openedAt: newIntervention.openedAt || nowIso(),
       description: newIntervention.description,
       parentInterventionId: newIntervention.parentInterventionId || null,
       additionalData,
@@ -916,7 +926,7 @@ export default function App() {
       });
       setInterventions((prev) => sanitizeInterventions([created, ...prev], initialInterventions));
       setNewIntervention({
-        clientId: '', type: forcedType || selectedType || 'chiamata', status: 'pendente', urgency: 2, description: '', parentInterventionId: '',
+        clientId: '', type: forcedType || selectedType || 'chiamata', status: 'pendente', urgency: 2, openedAt: nowIso(), description: '', parentInterventionId: '',
         applianceBrand: '', applianceModel: '', serialNumber: '', defect: '',
         sparePartCode: '', sparePartQty: 1, supplier: '', quoteItems: '', quoteTotal: 0, quoteValidUntil: ''
       });
@@ -928,7 +938,7 @@ export default function App() {
       if (shouldFallbackToLocal(error)) {
         setInterventions((prev) => sanitizeInterventions([payload, ...prev], initialInterventions));
         setNewIntervention({
-          clientId: '', type: forcedType || selectedType || 'chiamata', status: 'pendente', urgency: 2, description: '', parentInterventionId: '',
+          clientId: '', type: forcedType || selectedType || 'chiamata', status: 'pendente', urgency: 2, openedAt: nowIso(), description: '', parentInterventionId: '',
           applianceBrand: '', applianceModel: '', serialNumber: '', defect: '',
           sparePartCode: '', sparePartQty: 1, supplier: '', quoteItems: '', quoteTotal: 0, quoteValidUntil: ''
         });
@@ -1759,6 +1769,12 @@ const buildBackup = () => ({
               <option value={1}>Bassa</option><option value={2}>Media</option><option value={3}>Alta</option>
             </select>
           </div>
+          <input
+            type="datetime-local"
+            className="w-full border rounded p-2"
+            value={toLocalDateTimeInput(newIntervention.openedAt)}
+            onChange={(e) => setNewIntervention((p) => ({ ...p, openedAt: new Date(e.target.value).toISOString() }))}
+          />
           <textarea className="w-full border rounded p-2" placeholder="Descrizione" value={newIntervention.description} onChange={(e) => setNewIntervention((p) => ({ ...p, description: e.target.value }))} />
           {newIntervention.type === 'riparazione' && (
             <div className="grid md:grid-cols-4 gap-3">
@@ -1859,7 +1875,7 @@ const buildBackup = () => ({
         </div>
 
         <div className="bg-white rounded-xl shadow border border-slate-200 p-4 space-y-3">
-          <h3 className="font-semibold text-slate-700">Nuovo ticket {meta.label.toLowerCase().slice(0, -1)}</h3>
+          <h3 className="font-semibold text-slate-700">Nuova {meta.singularLabel?.toLowerCase() || 'attività'}</h3>
           <input
             className="w-full border rounded p-2"
             placeholder="Cerca cliente per nome, email o telefono"
@@ -1890,8 +1906,14 @@ const buildBackup = () => ({
               <option value={1}>Bassa</option><option value={2}>Media</option><option value={3}>Alta</option>
             </select>
           </div>
+          <input
+            type="datetime-local"
+            className="w-full border rounded p-2"
+            value={toLocalDateTimeInput(newIntervention.openedAt)}
+            onChange={(e) => setNewIntervention((p) => ({ ...p, type: typeKey, openedAt: new Date(e.target.value).toISOString() }))}
+          />
           <textarea className="w-full border rounded p-2" placeholder="Descrizione" value={newIntervention.description} onChange={(e) => setNewIntervention((p) => ({ ...p, type: typeKey, description: e.target.value }))} />
-          <button onClick={() => handleAddIntervention(typeKey)} className="bg-indigo-600 text-white px-4 py-2 rounded">Aggiungi {meta.label.toLowerCase().slice(0, -1)}</button>
+          <button onClick={() => handleAddIntervention(typeKey)} className="bg-indigo-600 text-white px-4 py-2 rounded">Aggiungi {meta.singularLabel?.toLowerCase() || 'attività'}</button>
         </div>
 
         <div className="bg-white rounded-xl shadow border border-slate-200 overflow-hidden">
@@ -2123,7 +2145,7 @@ const buildBackup = () => ({
           <div className="flex gap-2">
             <button onClick={() => changeMonth(-1)} className="p-2 hover:bg-slate-100 rounded"><ChevronLeft/></button>
             <button onClick={() => changeMonth(1)} className="p-2 hover:bg-slate-100 rounded"><ChevronRight/></button>
-            <button onClick={() => switchToTab('chiamate')} className="bg-blue-600 text-white px-4 py-2 rounded flex gap-2"><Plus/> Nuovo Intervento</button>
+            <button onClick={() => openInterventionComposer(focusedDay.toISOString(), 'chiamata')} className="bg-blue-600 text-white px-4 py-2 rounded flex gap-2"><Plus/> Nuovo intervento</button>
           </div>
         </div>
 
@@ -2145,7 +2167,17 @@ const buildBackup = () => ({
                 <div
                   key={idx}
                   className={`h-32 border rounded p-2 flex flex-col gap-1 overflow-y-auto ${isToday ? 'border-blue-500 bg-blue-50' : 'border-slate-200 hover:bg-slate-50'} ${isFocused ? 'ring-2 ring-indigo-300' : ''}`}
-                  onClick={() => setCalendarFocusDate(new Date(day))}
+                  onClick={(e) => {
+                    const target = e.target;
+                    const clickedEventCard = Boolean(target?.closest?.('[data-calendar-event-card="true"]'));
+                    if (clickedEventCard) {
+                      setCalendarFocusDate(new Date(day));
+                      return;
+                    }
+                    const selectedDate = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 9, 0, 0, 0);
+                    setCalendarFocusDate(new Date(day));
+                    openInterventionComposer(selectedDate.toISOString(), 'chiamata');
+                  }}
                   onDragOver={(e) => e.preventDefault()}
                   onDrop={(e) => {
                     e.preventDefault();
@@ -2180,6 +2212,7 @@ const buildBackup = () => ({
                           setCalendarEditorItem(item);
                           openInterventionDetails(item);
                         }}
+                        data-calendar-event-card="true"
                         className="text-xs bg-white border-l-4 border-indigo-500 p-1 rounded shadow-sm cursor-move hover:bg-indigo-50"
                       >
                         <div className="font-bold">{openedDate.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' })} • {item.type}</div>
@@ -2226,6 +2259,7 @@ const buildBackup = () => ({
                       return (
                         <div
                           key={`slot-item-${item.id}`}
+                          data-calendar-event-card="true"
                           className="bg-white border border-indigo-200 rounded px-2 py-1 text-xs cursor-move hover:bg-indigo-50"
                           draggable
                           onDragStart={(e) => {
@@ -2294,82 +2328,6 @@ const buildBackup = () => ({
         </header>
         <main className="flex-1 overflow-y-auto p-4 md:p-8">
           <div className="max-w-6xl mx-auto pb-20">
-            {storageWarning && (
-              <div className="bg-amber-50 border border-amber-200 text-amber-800 text-sm p-3 rounded mb-4">
-                {storageWarning}
-              </div>
-            )}
-            {exportNotice && (
-              <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm p-3 rounded mb-4">
-                {exportNotice}
-              </div>
-            )}
-            <div className="bg-white rounded shadow p-4 mb-6 border border-slate-200">
-              <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-                <div className="space-y-1">
-                  <p className="text-sm font-semibold text-slate-700 flex items-center gap-2"><Zap size={16}/> Backend &amp; sincronizzazione</p>
-                  <p className="text-xs text-slate-500">Imposta il token per accedere alle API e aggiorna il database con i dati locali quando necessario.</p>
-                  <p className={`text-xs ${backendOnline ? 'text-emerald-600' : 'text-red-600'}`}>
-                    {backendOnline ? 'Backend online' : 'Backend offline: modalità locale attiva'}
-                  </p>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <button onClick={refreshFromBackend} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded hover:bg-slate-200 border" disabled={isSyncing}>
-                    <RefreshCw size={16} className={isSyncing ? 'animate-spin' : ''}/> Aggiorna da backend
-                  </button>
-                  <button onClick={handleImportLocalData} className="flex items-center gap-2 px-3 py-2 text-sm bg-emerald-50 text-emerald-700 rounded hover:bg-emerald-100 border border-emerald-200"><Upload size={16}/> Importa dati locali</button>
-                </div>
-              </div>
-              {retryStatus && (
-                <div className="mt-3 text-xs text-slate-500">
-                  Retry in corso ({retryStatus.attempt}/{retryStatus.maxAttempts}) per {retryStatus.path}.
-                  <div className="mt-1 h-1 bg-slate-200 rounded">
-                    <div
-                      className="h-1 bg-blue-500 rounded"
-                      style={{ width: `${Math.round((retryStatus.attempt / retryStatus.maxAttempts) * 100)}%` }}
-                    />
-                  </div>
-                </div>
-              )}
-              <div className="mt-4 grid gap-2 md:grid-cols-2">
-                <div className="flex flex-col gap-2">
-                  <label className="text-xs font-semibold text-slate-700">Token API</label>
-                  <div className="text-sm text-slate-600">
-                    {maskedToken ? `Token configurato: ${maskedToken}` : 'Token non configurato.'}
-                  </div>
-                  <button onClick={() => switchToTab('settings')} className="text-xs text-blue-600 underline w-fit">Gestisci token</button>
-                </div>
-                <div className="text-xs text-slate-500 flex items-center">
-                  {syncStatus || 'Sincronizzazione pronta.'}
-                </div>
-              </div>
-            </div>
-            <div className="bg-white rounded shadow p-4 mb-6 border border-slate-200">
-              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                <div>
-                  <p className="text-sm font-semibold text-slate-700 flex items-center gap-2"><FileSpreadsheet size={16}/> Backup e Export</p>
-                  <p className="text-xs text-slate-500">Scarica un JSON di backup per conservarlo su Drive/Cloud, oppure esporta CSV apribili in Excel per storico o assenza di connessione.</p>
-                </div>
-                <div className="flex flex-wrap gap-2 justify-end">
-                  <button onClick={handleDownloadBackup} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-800 text-white rounded hover:bg-slate-700"><Download size={16}/> Backup JSON</button>
-                  <button onClick={handleDownloadAutoBackup} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded hover:bg-slate-200 border"><Download size={16}/> Ultimo Backup</button>
-                  <button onClick={handleRestoreLatestBackup} className="flex items-center gap-2 px-3 py-2 text-sm bg-amber-50 text-amber-700 rounded hover:bg-amber-100 border border-amber-200">Ripristina Backup</button>
-                  <button onClick={handleSelectBackupFile} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded hover:bg-slate-200 border"><Upload size={16}/> Importa Backup</button>
-                  <button onClick={handlePersistStorage} className="flex items-center gap-2 px-3 py-2 text-sm bg-emerald-600 text-white rounded hover:bg-emerald-500" disabled={isPersistingStorage}>
-                    {isPersistingStorage ? <RefreshCw size={16} className="animate-spin"/> : <Download size={16}/>} Blocca dati nel browser
-                  </button>
-                  <button onClick={handleExportTickets} className="flex items-center gap-2 px-3 py-2 text-sm bg-blue-50 text-blue-700 rounded hover:bg-blue-100 border border-blue-200"><FileSpreadsheet size={16}/> Ticket CSV</button>
-                  <button onClick={handleExportInventory} className="flex items-center gap-2 px-3 py-2 text-sm bg-purple-50 text-purple-700 rounded hover:bg-purple-100 border border-purple-200"><FileSpreadsheet size={16}/> Magazzino CSV</button>
-                  <button onClick={handleExportCustomers} className="flex items-center gap-2 px-3 py-2 text-sm bg-green-50 text-green-700 rounded hover:bg-green-100 border border-green-200"><FileSpreadsheet size={16}/> Clienti CSV</button>
-                  <input ref={fileInputRef} type="file" accept="application/json" className="hidden" onChange={handleImportBackup} />
-                </div>
-              </div>
-              <div className="mt-3 text-xs text-slate-500">
-                Backup automatico: {autoBackupAt ? `ultimo salvataggio ${autoBackupAt}` : 'non disponibile'}.
-              </div>
-              {backupStatus && <p className="mt-2 text-xs text-amber-600">{backupStatus}</p>}
-              {importError && <p className="mt-2 text-sm text-red-600">{importError}</p>}
-            </div>
             {activeTab === 'dashboard' && <DashboardView />}
             {activeTab === 'calendar' && <CalendarView />}
             {activeTab === 'customers' && <CustomerListView />}
