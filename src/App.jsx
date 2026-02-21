@@ -81,6 +81,14 @@ const idbSet = async (key, value) => {
   });
 };
 const nowIso = () => new Date().toISOString();
+const toDateKey = (value) => {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
 const toLocalDateTimeInput = (value) => {
   const date = value ? new Date(value) : new Date();
   if (Number.isNaN(date.getTime())) return '';
@@ -365,6 +373,7 @@ export default function App() {
   const [draggingInterventionId, setDraggingInterventionId] = useState(null);
   const [calendarEditorItem, setCalendarEditorItem] = useState(null);
   const [calendarFocusDate, setCalendarFocusDate] = useState(() => new Date());
+  const [showCalendarQuickAdd, setShowCalendarQuickAdd] = useState(false);
 
   // --- STATO APP ---
   const [customers, setCustomers] = useState(() => sanitizeCustomers(loadCache('customers', initialCustomers), initialCustomers));
@@ -712,12 +721,17 @@ export default function App() {
     }
   };
 
-  const openInterventionComposer = (scheduledAt = null, type = 'chiamata') => {
+  const openInterventionComposer = (scheduledAt = null, type = 'chiamata', options = {}) => {
     setNewIntervention((prev) => ({
       ...prev,
       type,
       openedAt: scheduledAt || prev.openedAt || nowIso()
     }));
+    if (options.keepCalendarOpen) {
+      setCalendarFocusDate(new Date(scheduledAt || nowIso()));
+      setShowCalendarQuickAdd(true);
+      return;
+    }
     switchToTab('interventions');
   };
 
@@ -933,6 +947,7 @@ export default function App() {
       setInterventionCustomerQuery('');
       setNewInterventionFiles([]);
       setSyncStatus('Intervento creato nel backend.');
+      setShowCalendarQuickAdd(false);
       addToast('Intervento creato con successo.', 'success');
     } catch (error) {
       if (shouldFallbackToLocal(error)) {
@@ -944,6 +959,7 @@ export default function App() {
         });
         setInterventionCustomerQuery('');
         setNewInterventionFiles([]);
+        setShowCalendarQuickAdd(false);
         addToast('Intervento salvato in locale (token mancante/non valido).', 'success');
         setSyncStatus('Modalità locale: intervento salvato solo nel browser.');
       } else {
@@ -974,11 +990,12 @@ export default function App() {
 
   const handleInterventionScheduleChange = async (intervention, openedAt) => {
     if (!intervention || !openedAt) return;
-    const updated = {
+    const updated = sanitizeIntervention({
       ...intervention,
       openedAt,
       updatedAt: nowIso()
-    };
+    });
+    if (!updated) return;
     try {
       const saved = await apiFetchWithRetry(`/api/interventions/${intervention.id}`, {
         method: 'PUT',
@@ -988,7 +1005,57 @@ export default function App() {
       setSyncStatus('Data intervento aggiornata.');
       addToast('Data intervento aggiornata.', 'success');
     } catch (error) {
-      handleApiError(error, 'Impossibile aggiornare la data intervento.');
+      if (shouldFallbackToLocal(error)) {
+        setInterventions((prev) => prev.map((entry) => (entry.id === updated.id ? updated : entry)));
+        setSyncStatus('Modalità locale: data intervento aggiornata solo nel browser.');
+        addToast('Data intervento aggiornata in locale (token mancante/non valido).', 'success');
+      } else {
+        handleApiError(error, 'Impossibile aggiornare la data intervento.');
+      }
+    }
+  };
+
+  const openInterventionDetails = (intervention) => {
+    const safeIntervention = sanitizeIntervention(intervention);
+    if (!safeIntervention) {
+      addToast("Impossibile aprire l'intervento selezionato.", 'error');
+      return;
+    }
+    setSelectedIntervention(safeIntervention);
+  };
+
+  const handleSaveInterventionDetails = async () => {
+    if (!selectedIntervention) return;
+    const updated = sanitizeIntervention({
+      ...selectedIntervention,
+      updatedAt: nowIso(),
+      closedAt: selectedIntervention.status === 'chiuso'
+        ? (selectedIntervention.closedAt || nowIso())
+        : null
+    });
+    if (!updated) {
+      addToast('Impossibile salvare: dati intervento non validi.', 'error');
+      return;
+    }
+    try {
+      const saved = await apiFetchWithRetry(`/api/interventions/${updated.id}`, {
+        method: 'PUT',
+        body: JSON.stringify(updated)
+      });
+      const normalizedSaved = sanitizeIntervention(saved) || updated;
+      setInterventions((prev) => prev.map((entry) => (entry.id === normalizedSaved.id ? normalizedSaved : entry)));
+      setSelectedIntervention(null);
+      setSyncStatus('Intervento aggiornato.');
+      addToast('Intervento aggiornato con successo.', 'success');
+    } catch (error) {
+      if (shouldFallbackToLocal(error)) {
+        setInterventions((prev) => prev.map((entry) => (entry.id === updated.id ? updated : entry)));
+        setSelectedIntervention(null);
+        setSyncStatus('Modalità locale: intervento aggiornato solo nel browser.');
+        addToast('Intervento aggiornato in locale (token mancante/non valido).', 'success');
+      } else {
+        handleApiError(error, 'Impossibile salvare le modifiche all\'intervento.');
+      }
     }
   };
 
@@ -2132,9 +2199,9 @@ const buildBackup = () => ({
     const days = getDaysInMonth(currentDate);
     const monthName = currentDate.toLocaleString('it-IT', { month: 'long', year: 'numeric' });
     const focusedDay = isValidDate(calendarFocusDate) ? calendarFocusDate : new Date();
-    const focusedDayString = focusedDay.toISOString().split('T')[0];
+    const focusedDayString = toDateKey(focusedDay);
     const focusedInterventions = interventions
-      .filter((item) => new Date(item.openedAt).toISOString().split('T')[0] === focusedDayString)
+      .filter((item) => toDateKey(item.openedAt) === focusedDayString)
       .sort((a, b) => new Date(a.openedAt).getTime() - new Date(b.openedAt).getTime());
     const slotHours = Array.from({ length: 14 }, (_, idx) => idx + 7);
 
@@ -2145,7 +2212,7 @@ const buildBackup = () => ({
           <div className="flex gap-2">
             <button onClick={() => changeMonth(-1)} className="p-2 hover:bg-slate-100 rounded"><ChevronLeft/></button>
             <button onClick={() => changeMonth(1)} className="p-2 hover:bg-slate-100 rounded"><ChevronRight/></button>
-            <button onClick={() => openInterventionComposer(focusedDay.toISOString(), 'chiamata')} className="bg-blue-600 text-white px-4 py-2 rounded flex gap-2"><Plus/> Nuovo intervento</button>
+            <button onClick={() => openInterventionComposer(focusedDay.toISOString(), 'chiamata', { keepCalendarOpen: true })} className="bg-blue-600 text-white px-4 py-2 rounded flex gap-2"><Plus/> Nuovo intervento</button>
           </div>
         </div>
 
@@ -2156,12 +2223,9 @@ const buildBackup = () => ({
           <div className="grid grid-cols-7 gap-2">
             {days.map((day, idx) => {
               if (!day || !isValidDate(day)) return <div key={idx} className="bg-slate-50 h-32 rounded"></div>;
-              const dayString = day.toISOString().split('T')[0];
-              const dayInterventions = interventions.filter((i) => {
-                const dateString = new Date(i.openedAt).toISOString().split('T')[0];
-                return dateString === dayString;
-              });
-              const isToday = dayString === new Date().toISOString().split('T')[0];
+              const dayString = toDateKey(day);
+              const dayInterventions = interventions.filter((i) => toDateKey(i.openedAt) === dayString);
+              const isToday = dayString === toDateKey(new Date());
               const isFocused = dayString === focusedDayString;
               return (
                 <div
@@ -2176,7 +2240,7 @@ const buildBackup = () => ({
                     }
                     const selectedDate = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 9, 0, 0, 0);
                     setCalendarFocusDate(new Date(day));
-                    openInterventionComposer(selectedDate.toISOString(), 'chiamata');
+                    openInterventionComposer(selectedDate.toISOString(), 'chiamata', { keepCalendarOpen: true });
                   }}
                   onDragOver={(e) => e.preventDefault()}
                   onDrop={(e) => {
@@ -2229,7 +2293,7 @@ const buildBackup = () => ({
         <div className="bg-white rounded shadow p-4 border border-slate-200">
           <div className="mb-3">
             <h3 className="font-semibold text-slate-800">Agenda giornaliera • {focusedDay.toLocaleDateString('it-IT')}</h3>
-            <p className="text-xs text-slate-500">Trascina gli interventi tra le fasce orarie per cambiare giorno e ora (stile Google Calendar).</p>
+            <p className="text-xs text-slate-500">Clicca su un giorno per vedere gli interventi. Trascina gli interventi tra le fasce orarie per cambiare giorno e ora (stile Google Calendar).</p>
           </div>
           <div className="space-y-2 max-h-[420px] overflow-y-auto pr-1">
             {slotHours.map((hour) => {
@@ -2238,6 +2302,13 @@ const buildBackup = () => ({
                 <div
                   key={`slot-${hour}`}
                   className="border rounded p-2 bg-slate-50"
+                  onClick={(e) => {
+                    const target = e.target;
+                    const clickedEventCard = Boolean(target?.closest?.('[data-calendar-event-card="true"]'));
+                    if (clickedEventCard) return;
+                    const selectedDate = new Date(focusedDay.getFullYear(), focusedDay.getMonth(), focusedDay.getDate(), hour, 0, 0, 0);
+                    openInterventionComposer(selectedDate.toISOString(), 'chiamata', { keepCalendarOpen: true });
+                  }}
                   onDragOver={(e) => e.preventDefault()}
                   onDrop={(e) => {
                     e.preventDefault();
@@ -2281,6 +2352,44 @@ const buildBackup = () => ({
             })}
           </div>
         </div>
+
+
+
+      {showCalendarQuickAdd && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setShowCalendarQuickAdd(false)}>
+          <div className="bg-white p-6 rounded-lg w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-xl font-bold mb-1">Nuova chiamata</h3>
+            <p className="text-sm text-slate-500 mb-4">{new Date(newIntervention.openedAt || nowIso()).toLocaleString('it-IT')}</p>
+            <div className="space-y-3">
+              <select
+                className="w-full border rounded p-2"
+                value={newIntervention.clientId}
+                onChange={(e) => setNewIntervention((prev) => ({ ...prev, type: 'chiamata', clientId: e.target.value }))}
+              >
+                <option value="">Cliente...</option>
+                {customers.map((c) => <option key={c.id} value={c.id}>{c.name} {c.phone ? `• ${c.phone}` : ''}</option>)}
+              </select>
+              <input
+                type="datetime-local"
+                className="w-full border rounded p-2"
+                value={toLocalDateTimeInput(newIntervention.openedAt)}
+                onChange={(e) => setNewIntervention((prev) => ({ ...prev, type: 'chiamata', openedAt: new Date(e.target.value).toISOString() }))}
+              />
+              <textarea
+                className="w-full border rounded p-2"
+                rows={4}
+                placeholder="Descrizione chiamata"
+                value={newIntervention.description}
+                onChange={(e) => setNewIntervention((prev) => ({ ...prev, type: 'chiamata', description: e.target.value }))}
+              />
+            </div>
+            <div className="flex justify-end gap-2 mt-4">
+              <button onClick={() => setShowCalendarQuickAdd(false)} className="px-4 py-2 text-slate-500">Chiudi</button>
+              <button onClick={() => handleAddIntervention('chiamata')} className="px-4 py-2 bg-indigo-600 text-white rounded">Aggiungi chiamata</button>
+            </div>
+          </div>
+        </div>
+      )}
 
         {calendarEditorItem && (
           <div className="bg-white rounded shadow p-4 border border-slate-200">
