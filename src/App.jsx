@@ -736,12 +736,6 @@ export default function App() {
   const [interventionSearch, setInterventionSearch] = useState('');
   const [interventionFilters, setInterventionFilters] = useState({ clientId: '', type: '', status: '', urgency: '' });
   const [selectedIntervention, setSelectedIntervention] = useState(null);
-
-  useEffect(() => {
-    if (!allowLocalOverrides) return;
-    safeSetItem('operatorCode', operatorCode || 'OPERATORE-001');
-  }, [operatorCode]);
-
   const openInterventions = interventions.filter((item) => item.status !== 'chiuso');
   const normalizedTicketCustomerQuery = ticketCustomerQuery.trim().toLowerCase();
   const filteredTicketCustomers = customers.filter((customer) => {
@@ -1073,156 +1067,6 @@ export default function App() {
         addToast('Data intervento aggiornata in locale (token mancante/non valido).', 'success');
       } else {
         handleApiError(error, 'Impossibile aggiornare la data intervento.');
-      }
-    }
-  };
-
-  const openInterventionDetails = (intervention) => {
-    const safeIntervention = sanitizeIntervention(intervention);
-    if (!safeIntervention) {
-      addToast("Impossibile aprire l'intervento selezionato.", 'error');
-      return;
-    }
-    setSelectedIntervention(safeIntervention);
-  };
-
-  const handleSaveInterventionDetails = async () => {
-    if (!selectedIntervention) return;
-    const updated = sanitizeIntervention({
-      ...selectedIntervention,
-      updatedAt: nowIso(),
-      closedAt: selectedIntervention.status === 'chiuso'
-        ? (selectedIntervention.closedAt || nowIso())
-        : null
-    });
-    if (!updated) {
-      addToast('Impossibile salvare: dati intervento non validi.', 'error');
-      return;
-    }
-    try {
-      const saved = await apiFetchWithRetry(`/api/interventions/${updated.id}`, {
-        method: 'PUT',
-        body: JSON.stringify(updated)
-      });
-      const normalizedSaved = sanitizeIntervention(saved) || updated;
-      setInterventions((prev) => prev.map((entry) => (entry.id === normalizedSaved.id ? normalizedSaved : entry)));
-      setSelectedIntervention(null);
-      setSyncStatus('Intervento aggiornato.');
-      addToast('Intervento aggiornato con successo.', 'success');
-    } catch (error) {
-      if (shouldFallbackToLocal(error)) {
-        setInterventions((prev) => prev.map((entry) => (entry.id === updated.id ? updated : entry)));
-        setSelectedIntervention(null);
-        setSyncStatus('Modalità locale: intervento aggiornato solo nel browser.');
-        addToast('Intervento aggiornato in locale (token mancante/non valido).', 'success');
-      } else {
-        handleApiError(error, 'Impossibile salvare le modifiche all\'intervento.');
-      }
-    }
-  };
-
-  const openInterventionDetails = (intervention) => {
-    const safeIntervention = sanitizeIntervention(intervention);
-    if (!safeIntervention) {
-      addToast("Impossibile aprire l'intervento selezionato.", 'error');
-      return;
-    }
-    setSelectedIntervention(safeIntervention);
-  };
-
-  const handleSaveInterventionDetails = async () => {
-    if (!selectedIntervention) return;
-    const updated = sanitizeIntervention({
-      ...selectedIntervention,
-      updatedAt: nowIso(),
-      closedAt: selectedIntervention.status === 'chiuso'
-        ? (selectedIntervention.closedAt || nowIso())
-        : null
-    });
-    if (!updated) {
-      addToast('Impossibile salvare: dati intervento non validi.', 'error');
-      return;
-    }
-    try {
-      const saved = await apiFetchWithRetry(`/api/interventions/${updated.id}`, {
-        method: 'PUT',
-        body: JSON.stringify(updated)
-      });
-      const normalizedSaved = sanitizeIntervention(saved) || updated;
-      setInterventions((prev) => prev.map((entry) => (entry.id === normalizedSaved.id ? normalizedSaved : entry)));
-      setSelectedIntervention(null);
-      setSyncStatus('Intervento aggiornato.');
-      addToast('Intervento aggiornato con successo.', 'success');
-    } catch (error) {
-      if (shouldFallbackToLocal(error)) {
-        setInterventions((prev) => prev.map((entry) => (entry.id === updated.id ? updated : entry)));
-        setSelectedIntervention(null);
-        setSyncStatus('Modalità locale: intervento aggiornato solo nel browser.');
-        addToast('Intervento aggiornato in locale (token mancante/non valido).', 'success');
-      } else {
-        handleApiError(error, 'Impossibile salvare le modifiche all\'intervento.');
-      }
-    }
-  };
-
-  const openInterventionDetails = (intervention) => {
-    const safe = sanitizeIntervention(intervention);
-    if (!safe) return;
-    setSelectedIntervention({
-      ...safe,
-      descriptionEntries: getDescriptionEntries(safe),
-      newNote: ''
-    });
-  };
-
-  const handleSaveInterventionDetails = async () => {
-    if (!selectedIntervention) return;
-
-    const noteText = (selectedIntervention.newNote || '').trim();
-    const nextEntries = [...(selectedIntervention.descriptionEntries || [])];
-
-    if (noteText) {
-      nextEntries.push({
-        id: crypto?.randomUUID?.() || `${Date.now()}`,
-        text: noteText,
-        authorCode: operatorProfile.code,
-        authorName: operatorProfile.name || 'Operatore',
-        createdAt: nowIso(),
-        source: 'note'
-      });
-    }
-
-    const payload = sanitizeIntervention({
-      ...selectedIntervention,
-      description: buildDescriptionFromEntries(nextEntries),
-      additionalData: {
-        ...(selectedIntervention.additionalData || {}),
-        descriptionEntries: nextEntries,
-        lastEditor: {
-          code: operatorProfile.code,
-          name: operatorProfile.name || 'Operatore',
-          at: nowIso()
-        }
-      },
-      updatedAt: nowIso()
-    });
-
-    try {
-      const saved = await apiFetchWithRetry(`/api/interventions/${selectedIntervention.id}`, {
-        method: 'PUT',
-        body: JSON.stringify(payload)
-      });
-      const sanitized = sanitizeIntervention(saved);
-      setInterventions((prev) => prev.map((entry) => (entry.id === selectedIntervention.id ? sanitized : entry)));
-      setSelectedIntervention(null);
-      addToast('Dettagli intervento aggiornati.', 'success');
-    } catch (error) {
-      if (shouldFallbackToLocal(error)) {
-        setInterventions((prev) => prev.map((entry) => (entry.id === selectedIntervention.id ? payload : entry)));
-        setSelectedIntervention(null);
-        addToast('Intervento aggiornato in locale.', 'success');
-      } else {
-        handleApiError(error, 'Impossibile salvare i dettagli intervento.');
       }
     }
   };
@@ -2428,18 +2272,6 @@ const buildBackup = () => ({
         </div>
         <p className="text-xs text-slate-500 mt-2">Token attuale: {maskedToken || 'non configurato'}.</p>
       </div>
-
-      <div className="bg-white rounded shadow p-4 border border-slate-200">
-        <h2 className="text-lg font-bold text-slate-800 mb-2">Operatore</h2>
-        <p className="text-sm text-slate-500 mb-3">Codice univoco operatore da tracciare negli aggiornamenti descrizione degli interventi.</p>
-        <input
-          className="w-full border rounded p-2 text-sm"
-          placeholder="Es. OP-001"
-          value={operatorCode}
-          onChange={(e) => setOperatorCode(e.target.value.toUpperCase())}
-        />
-      </div>
-
       <div className="bg-white rounded shadow p-4 border border-slate-200">
         <h2 className="text-lg font-bold text-slate-800 mb-2">Configurazione AI DeepSeek</h2>
         {allowLocalOverrides ? (
