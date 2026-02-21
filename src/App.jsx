@@ -992,6 +992,50 @@ export default function App() {
     }
   };
 
+  const openInterventionDetails = (intervention) => {
+    const safeIntervention = sanitizeIntervention(intervention);
+    if (!safeIntervention) {
+      addToast("Impossibile aprire l'intervento selezionato.", 'error');
+      return;
+    }
+    setSelectedIntervention(safeIntervention);
+  };
+
+  const handleSaveInterventionDetails = async () => {
+    if (!selectedIntervention) return;
+    const updated = sanitizeIntervention({
+      ...selectedIntervention,
+      updatedAt: nowIso(),
+      closedAt: selectedIntervention.status === 'chiuso'
+        ? (selectedIntervention.closedAt || nowIso())
+        : null
+    });
+    if (!updated) {
+      addToast('Impossibile salvare: dati intervento non validi.', 'error');
+      return;
+    }
+    try {
+      const saved = await apiFetchWithRetry(`/api/interventions/${updated.id}`, {
+        method: 'PUT',
+        body: JSON.stringify(updated)
+      });
+      const normalizedSaved = sanitizeIntervention(saved) || updated;
+      setInterventions((prev) => prev.map((entry) => (entry.id === normalizedSaved.id ? normalizedSaved : entry)));
+      setSelectedIntervention(null);
+      setSyncStatus('Intervento aggiornato.');
+      addToast('Intervento aggiornato con successo.', 'success');
+    } catch (error) {
+      if (shouldFallbackToLocal(error)) {
+        setInterventions((prev) => prev.map((entry) => (entry.id === updated.id ? updated : entry)));
+        setSelectedIntervention(null);
+        setSyncStatus('Modalità locale: intervento aggiornato solo nel browser.');
+        addToast('Intervento aggiornato in locale (token mancante/non valido).', 'success');
+      } else {
+        handleApiError(error, 'Impossibile salvare le modifiche all\'intervento.');
+      }
+    }
+  };
+
   const handleCreatePart = async () => {
     if (!newPart.name.trim()) {
       addToast('Inserisci almeno il nome del ricambio.', 'error');
