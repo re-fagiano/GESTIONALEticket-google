@@ -31,3 +31,20 @@ The AI diagnosis panel calls the DeepSeek API directly from the client. Configur
 Copy `.env.example` to `.env` and set the values locally if you want to test AI calls during development. Only the `VITE_*` variables are read at build time to avoid leaking server-only secrets.
 
 Copy `.env.example` to `.env` and set the values locally if you want to test AI calls during development. Non-`VITE_` names are injected into the client bundle automatically to support hosting providers that reserve the `VITE_` prefix.
+
+
+## Modalità memoria MBI e deploy su Railway/"Highway"
+
+La modalità **MBI (Mirror Backup Incrementale)** nel pannello Impostazioni aggiunge:
+- snapshot ridondante locale su IndexedDB;
+- pulsante **Sincronizza MBI ora** per inviare subito lo snapshot al backend remoto (`/api/import`).
+
+Per avere persistenza stabile in cloud (Railway):
+1. configura un volume persistente e imposta `DB_PATH` (es. `/data/gestionale.db`);
+2. imposta `API_TOKEN` in variabili ambiente per autenticare il backend;
+3. esponi l'app via dominio Railway e usa il token dalla sezione Impostazioni del frontend;
+4. (consigliato) pianifica un job periodico che richiama backup JSON e lo salva su Google Drive.
+
+Google Drive come storage remoto:
+- usare Drive come **backup snapshot** (JSON), non come database primario;
+- mantenere una cartella per ambiente (`prod`, `staging`) e retention (es. ultimi 30 file).

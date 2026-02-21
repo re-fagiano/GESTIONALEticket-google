@@ -432,6 +432,8 @@ export default function App() {
       name: savedName || 'Operatore'
     };
   });
+  const [mbiEnabled, setMbiEnabled] = useState(() => safeGetItem('mbiEnabled', '0') === '1');
+  const [mbiStatus, setMbiStatus] = useState('');
 
   // Funzione per aggiungere notifiche toast
   const addToast = (message, tone = 'success') => {
@@ -477,6 +479,10 @@ export default function App() {
     safeSetItem('operatorCode', operatorProfile.code);
     safeSetItem('operatorName', operatorProfile.name);
   }, [operatorProfile]);
+
+  useEffect(() => {
+    safeSetItem('mbiEnabled', mbiEnabled ? '1' : '0');
+  }, [mbiEnabled]);
 
   useEffect(() => {
     if (!storageAvailable || storageFallbackState.active) {
@@ -1300,6 +1306,38 @@ const buildBackup = () => ({
   settings
 });
 
+  const persistMbiSnapshot = async (backupPayload) => {
+    try {
+      await Promise.all([
+        idbSet('mbi_snapshot', JSON.stringify(backupPayload)),
+        idbSet('mbi_snapshot_at', backupPayload.exportedAt)
+      ]);
+      setMbiStatus(`Snapshot MBI locale aggiornato (${new Date(backupPayload.exportedAt).toLocaleTimeString('it-IT')}).`);
+    } catch {
+      setMbiStatus('Snapshot MBI locale non disponibile: verifica permessi storage browser.');
+    }
+  };
+
+  const handleMbiSyncNow = async () => {
+    const backup = buildBackup();
+    await persistMbiSnapshot(backup);
+    try {
+      await apiFetch('/api/import', {
+        method: 'POST',
+        body: JSON.stringify(backup)
+      });
+      setMbiStatus(`MBI remoto sincronizzato alle ${new Date().toLocaleTimeString('it-IT')}.`);
+      addToast('Sincronizzazione MBI completata.', 'success');
+    } catch (error) {
+      if (shouldFallbackToLocal(error)) {
+        setMbiStatus('MBI: backend non raggiungibile, snapshot locale comunque salvato.');
+        addToast('MBI locale salvato, remoto non disponibile.', 'success');
+      } else {
+        handleApiError(error, 'Sincronizzazione MBI non riuscita.');
+      }
+    }
+  };
+
   const saveAutoBackup = () => {
     const backup = buildBackup();
     const payload = JSON.stringify(backup);
@@ -1320,6 +1358,12 @@ const buildBackup = () => ({
     }, 600000);
     return () => clearInterval(interval);
   }, [customers, tickets, inventory, settings]);
+
+  useEffect(() => {
+    if (!mbiEnabled) return;
+    const backup = buildBackup();
+    persistMbiSnapshot(backup);
+  }, [mbiEnabled, customers, tickets, interventions, inventory, settings]);
 
   const handleExportTickets = () => {
     exportToCsv('tickets_export.csv',
@@ -2194,6 +2238,21 @@ const buildBackup = () => ({
         >
           Genera nuovo codice
         </button>
+      </div>
+
+      <div className="bg-white rounded shadow p-4 border border-slate-200">
+        <h2 className="text-lg font-bold text-slate-800 mb-2">Memoria MBI (Mirror Backup Incrementale)</h2>
+        <p className="text-sm text-slate-500 mb-4">Mantiene uno snapshot ridondante su IndexedDB e permette sync immediata verso backend remoto.</p>
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            onClick={() => setMbiEnabled((prev) => !prev)}
+            className={`px-3 py-2 rounded text-sm border ${mbiEnabled ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-slate-700 border-slate-300'}`}
+          >
+            {mbiEnabled ? 'MBI attivo' : 'Attiva MBI'}
+          </button>
+          <button onClick={handleMbiSyncNow} className="px-3 py-2 rounded text-sm border bg-indigo-600 text-white border-indigo-600">Sincronizza MBI ora</button>
+        </div>
+        <p className="text-xs text-slate-500 mt-2">{mbiStatus || 'MBI disattivo: abilitalo per mantenere snapshot ridondanti locali + remoto.'}</p>
       </div>
 
       <div className="bg-white rounded shadow p-4 border border-slate-200">
