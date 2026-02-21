@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   LayoutDashboard,
   Users,
@@ -322,6 +322,50 @@ const dedicatedTabToType = {
   'preventivi-nuovi': 'preventivo'
 };
 
+const mapInterventionStatusToTicketStatus = (status) => {
+  if (status === 'chiuso') return 'chiuso';
+  if (status === 'pendente') return 'aperto';
+  return 'in lavorazione';
+};
+
+const mapTicketStatusToInterventionStatus = (status, currentStatus) => {
+  if (status === 'chiuso') return 'chiuso';
+  if (status === 'aperto') return 'pendente';
+  if (currentStatus && currentStatus !== 'chiuso' && currentStatus !== 'pendente') return currentStatus;
+  return 'preso_in_carico';
+};
+
+const interventionToTicket = (intervention, index = 0) => {
+  const openedAt = intervention?.openedAt || nowIso();
+  const openedDate = new Date(openedAt);
+  const safeDate = Number.isNaN(openedDate.getTime()) ? '' : openedDate.toISOString().split('T')[0];
+  const safeTime = Number.isNaN(openedDate.getTime()) ? '09:00' : openedDate.toTimeString().slice(0, 5);
+  const details = intervention?.additionalData || {};
+  const fallbackSubject = `${interventionTypeMeta[intervention?.type]?.singularLabel || 'Intervento'} #${index + 1}`;
+  const subject =
+    typeof details.ticketSubject === 'string' && details.ticketSubject.trim()
+      ? details.ticketSubject.trim()
+      : (typeof intervention?.description === 'string' && intervention.description.trim()
+        ? intervention.description.trim().slice(0, 80)
+        : fallbackSubject);
+
+  return sanitizeTicket({
+    id: intervention.id,
+    subject,
+    description: intervention.description || '',
+    customerId: intervention.clientId || '',
+    status: mapInterventionStatusToTicketStatus(intervention.status),
+    type: intervention.type,
+    urgency: intervention.urgency,
+    date: safeDate,
+    time: safeTime,
+    updatedAt: intervention.updatedAt || nowIso(),
+    version: intervention.version || 1,
+    sourceType: 'intervention',
+    sourceStatus: intervention.status
+  }, index);
+};
+
 const sanitizeIntervention = (item, idx = 0) => {
   if (!item || typeof item !== 'object') return null;
   return {
@@ -443,6 +487,20 @@ export default function App() {
       name: savedName || 'Operatore'
     };
   });
+
+  const interventionTickets = useMemo(() => (
+    sanitizeInterventions(interventions, initialInterventions).map((entry, idx) => interventionToTicket(entry, idx))
+  ), [interventions]);
+
+  const ticketsById = useMemo(() => new Map(tickets.map((ticket) => [ticket.id, sanitizeTicket(ticket)])), [tickets]);
+
+  const displayedTickets = useMemo(() => {
+    const merged = [...interventionTickets];
+    ticketsById.forEach((ticket, id) => {
+      if (!merged.some((entry) => entry.id === id)) merged.push(ticket);
+    });
+    return merged.sort((a, b) => new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime());
+  }, [interventionTickets, ticketsById]);
 
   // Funzione per aggiungere notifiche toast
   const addToast = (message, tone = 'success') => {
@@ -1186,6 +1244,30 @@ export default function App() {
 
   const handleTicketStatusChange = async (ticket, status) => {
     if (!ticket || ticket.status === status) return;
+    const linkedIntervention = interventions.find((entry) => entry.id === ticket.id);
+
+    if (linkedIntervention) {
+      const interventionUpdate = {
+        ...linkedIntervention,
+        status: mapTicketStatusToInterventionStatus(status, linkedIntervention.status),
+        updatedAt: nowIso(),
+        closedAt: status === 'chiuso' ? nowIso() : linkedIntervention.closedAt
+      };
+      try {
+        const saved = await apiFetchWithRetry(`/api/interventions/${linkedIntervention.id}`, {
+          method: 'PUT',
+          body: JSON.stringify(interventionUpdate)
+        });
+        setInterventions((prev) => prev.map((entry) => (entry.id === linkedIntervention.id ? sanitizeIntervention(saved) : entry)));
+        setSyncStatus('Intervento/ticket aggiornato.');
+        addToast('Stato ticket aggiornato.', 'success');
+      } catch (error) {
+        handleApiError(error, 'Impossibile aggiornare lo stato del ticket.');
+        setInterventions((prev) => prev.map((entry) => (entry.id === linkedIntervention.id ? sanitizeIntervention(interventionUpdate) : entry)));
+      }
+      return;
+    }
+
     const updated = {
       ...ticket,
       status,
@@ -1268,6 +1350,24 @@ export default function App() {
     } catch (error) {
       handleApiError(error, 'Impossibile risolvere il conflitto.');
     }
+  };
+
+  const handleDeleteTicketEntry = async (ticket) => {
+    if (!ticket) return;
+    const linkedIntervention = interventions.find((entry) => entry.id === ticket.id);
+    if (linkedIntervention) {
+      if (!confirm("Sei sicuro?")) return;
+      try {
+        await apiFetch(`/api/interventions/${ticket.id}`, { method: 'DELETE' });
+        setInterventions((prev) => prev.filter((entry) => entry.id !== ticket.id));
+        setSyncStatus('Ticket/intervento eliminato dal backend.');
+        addToast('Ticket eliminato.', 'success');
+      } catch (error) {
+        handleApiError(error, 'Impossibile eliminare il ticket.');
+      }
+      return;
+    }
+    await handleDelete('tickets', ticket.id);
   };
 
   const handleDelete = async (type, id) => {
@@ -1386,7 +1486,7 @@ const buildBackup = () => ({
   const handleExportTickets = () => {
     exportToCsv('tickets_export.csv',
       ['ID', 'Oggetto', 'Descrizione', 'Cliente', 'Tipologia', 'Urgenza', 'Stato', 'Data', 'Ora'],
-      tickets.map(t => [t.id, t.subject, t.description, customers.find(c => c.id === t.customerId)?.name || '', t.type || 'chiamata', t.urgency || 2, t.status, t.date, t.time])
+      displayedTickets.map(t => [t.id, t.subject, t.description, customers.find(c => c.id === t.customerId)?.name || '', t.type || 'chiamata', t.urgency || 2, t.status, t.date, t.time])
     );
   };
 
@@ -2377,7 +2477,7 @@ const buildBackup = () => ({
                       return;
                     }
                     setCalendarFocusDate(new Date(day));
-                    openInterventionComposer(selectedDate.toISOString(), 'chiamata', { keepCalendarOpen: true });
+                    openInterventionComposer(day.toISOString(), 'chiamata', { keepCalendarOpen: true });
                   }}
                   onDragOver={(e) => e.preventDefault()}
                   onDrop={(e) => {
@@ -2603,7 +2703,7 @@ const buildBackup = () => ({
                     <div className="text-right">Diagnosi AI</div>
                   </div>
                   <div className="divide-y divide-slate-100">
-                    {tickets.map((ticket) => {
+                    {displayedTickets.map((ticket) => {
                       const customer = customers.find((c) => c.id === ticket.customerId);
                       const isActive = currentTicketForAi?.id === ticket.id;
                       return (
@@ -2650,7 +2750,7 @@ const buildBackup = () => ({
                               <button
                                 onClick={(event) => {
                                   event.stopPropagation();
-                                  handleDelete('tickets', ticket.id);
+                                  handleDeleteTicketEntry(ticket);
                                 }}
                                 className="text-red-400 hover:text-red-600"
                               >
