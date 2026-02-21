@@ -88,6 +88,30 @@ const toLocalDateTimeInput = (value) => {
   return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
 };
 
+const generateUserCode = () => `USR-${Math.random().toString(36).slice(2, 7).toUpperCase()}-${Date.now().toString().slice(-4)}`;
+
+const formatAuditDate = (value) => {
+  const date = value ? new Date(value) : null;
+  if (!date || Number.isNaN(date.getTime())) return 'Data non disponibile';
+  return date.toLocaleString('it-IT');
+};
+
+const getDescriptionEntries = (intervention) => {
+  const entries = intervention?.additionalData?.descriptionEntries;
+  if (Array.isArray(entries) && entries.length > 0) return entries;
+  if (!intervention?.description?.trim()) return [];
+  return [{
+    id: `legacy-${intervention.id || Date.now()}`,
+    text: intervention.description,
+    authorCode: 'SYSTEM',
+    authorName: 'Dato originale',
+    createdAt: intervention.openedAt || intervention.updatedAt || nowIso(),
+    source: 'original'
+  }];
+};
+
+const buildDescriptionFromEntries = (entries = []) => entries.map((entry) => entry.text).filter(Boolean).join('\n');
+
 const safeGetItem = (key, fallback = null) => {
   if (!storageAvailable) return fallback;
   try {
@@ -277,10 +301,10 @@ const sanitizeInventoryList = (list, fallback = []) => {
 const interventionTypes = ['chiamata', 'riparazione', 'ordine_ricambi', 'preventivo'];
 const interventionStatuses = ['pendente', 'preso_in_carico', 'diagnosticato', 'ordine_ricambi', 'preventivato', 'saldato', 'chiuso'];
 const interventionTypeMeta = {
-  chiamata: { label: 'Chiamate', color: 'blue' },
-  riparazione: { label: 'Riparazioni', color: 'indigo' },
-  ordine_ricambi: { label: 'Ordini Ricambi', color: 'amber' },
-  preventivo: { label: 'Preventivi', color: 'emerald' }
+  chiamata: { label: 'Chiamate', singularLabel: 'Chiamata', color: 'blue' },
+  riparazione: { label: 'Riparazioni', singularLabel: 'Riparazione', color: 'indigo' },
+  ordine_ricambi: { label: 'Ordini Ricambi', singularLabel: 'Ordine ricambi', color: 'amber' },
+  preventivo: { label: 'Preventivi', singularLabel: 'Preventivo', color: 'emerald' }
 };
 
 const dedicatedTabToType = {
@@ -400,6 +424,15 @@ export default function App() {
   // Stato per le notifiche toast
   const [toasts, setToasts] = useState([]);
 
+  const [operatorProfile, setOperatorProfile] = useState(() => {
+    const savedCode = safeGetItem('operatorCode', '');
+    const savedName = safeGetItem('operatorName', '');
+    return {
+      code: savedCode || generateUserCode(),
+      name: savedName || 'Operatore'
+    };
+  });
+
   // Funzione per aggiungere notifiche toast
   const addToast = (message, tone = 'success') => {
     const id = Date.now();
@@ -439,6 +472,11 @@ export default function App() {
       setStorageWarning('Impossibile salvare le impostazioni nel browser: storage disabilitato.');
     }
   }, [settings]);
+
+  useEffect(() => {
+    safeSetItem('operatorCode', operatorProfile.code);
+    safeSetItem('operatorName', operatorProfile.name);
+  }, [operatorProfile]);
 
   useEffect(() => {
     if (!storageAvailable || storageFallbackState.active) {
@@ -656,6 +694,7 @@ export default function App() {
     type: 'chiamata',
     status: 'pendente',
     urgency: 2,
+    openedAt: nowIso(),
     description: '',
     parentInterventionId: '',
     applianceBrand: '',
@@ -709,6 +748,15 @@ export default function App() {
     if (mappedType) {
       setNewIntervention((prev) => ({ ...prev, type: mappedType }));
     }
+  };
+
+  const openInterventionComposer = (scheduledAt = null, type = 'chiamata') => {
+    setNewIntervention((prev) => ({
+      ...prev,
+      type,
+      openedAt: scheduledAt || prev.openedAt || nowIso()
+    }));
+    switchToTab('interventions');
   };
 
   // --- AZIONI ---
@@ -895,16 +943,35 @@ export default function App() {
       additionalData.quoteValidUntil = newIntervention.quoteValidUntil;
     }
 
+    const descriptionEntries = (newIntervention.description || '').trim()
+      ? [{
+          id: crypto?.randomUUID?.() || `${Date.now()}`,
+          text: newIntervention.description.trim(),
+          authorCode: operatorProfile.code,
+          authorName: operatorProfile.name || 'Operatore',
+          createdAt: nowIso(),
+          source: 'original'
+        }]
+      : [];
+
+    additionalData.descriptionEntries = descriptionEntries;
+
     const payload = sanitizeIntervention({
       id: crypto?.randomUUID?.() || Date.now().toString(),
       clientId: newIntervention.clientId,
       type: selectedType,
       status: newIntervention.status,
       urgency: Number(newIntervention.urgency || 2),
-      openedAt: nowIso(),
+      openedAt: newIntervention.openedAt || nowIso(),
       description: newIntervention.description,
       parentInterventionId: newIntervention.parentInterventionId || null,
-      additionalData,
+      additionalData: {
+        ...additionalData,
+        createdBy: {
+          code: operatorProfile.code,
+          name: operatorProfile.name || 'Operatore'
+        }
+      },
       updatedAt: nowIso(),
       version: 1
     });
@@ -916,7 +983,7 @@ export default function App() {
       });
       setInterventions((prev) => sanitizeInterventions([created, ...prev], initialInterventions));
       setNewIntervention({
-        clientId: '', type: forcedType || selectedType || 'chiamata', status: 'pendente', urgency: 2, description: '', parentInterventionId: '',
+        clientId: '', type: forcedType || selectedType || 'chiamata', status: 'pendente', urgency: 2, openedAt: nowIso(), description: '', parentInterventionId: '',
         applianceBrand: '', applianceModel: '', serialNumber: '', defect: '',
         sparePartCode: '', sparePartQty: 1, supplier: '', quoteItems: '', quoteTotal: 0, quoteValidUntil: ''
       });
@@ -928,7 +995,7 @@ export default function App() {
       if (shouldFallbackToLocal(error)) {
         setInterventions((prev) => sanitizeInterventions([payload, ...prev], initialInterventions));
         setNewIntervention({
-          clientId: '', type: forcedType || selectedType || 'chiamata', status: 'pendente', urgency: 2, description: '', parentInterventionId: '',
+          clientId: '', type: forcedType || selectedType || 'chiamata', status: 'pendente', urgency: 2, openedAt: nowIso(), description: '', parentInterventionId: '',
           applianceBrand: '', applianceModel: '', serialNumber: '', defect: '',
           sparePartCode: '', sparePartQty: 1, supplier: '', quoteItems: '', quoteTotal: 0, quoteValidUntil: ''
         });
@@ -979,6 +1046,68 @@ export default function App() {
       addToast('Data intervento aggiornata.', 'success');
     } catch (error) {
       handleApiError(error, 'Impossibile aggiornare la data intervento.');
+    }
+  };
+
+  const openInterventionDetails = (intervention) => {
+    const safe = sanitizeIntervention(intervention);
+    if (!safe) return;
+    setSelectedIntervention({
+      ...safe,
+      descriptionEntries: getDescriptionEntries(safe),
+      newNote: ''
+    });
+  };
+
+  const handleSaveInterventionDetails = async () => {
+    if (!selectedIntervention) return;
+
+    const noteText = (selectedIntervention.newNote || '').trim();
+    const nextEntries = [...(selectedIntervention.descriptionEntries || [])];
+
+    if (noteText) {
+      nextEntries.push({
+        id: crypto?.randomUUID?.() || `${Date.now()}`,
+        text: noteText,
+        authorCode: operatorProfile.code,
+        authorName: operatorProfile.name || 'Operatore',
+        createdAt: nowIso(),
+        source: 'note'
+      });
+    }
+
+    const payload = sanitizeIntervention({
+      ...selectedIntervention,
+      description: buildDescriptionFromEntries(nextEntries),
+      additionalData: {
+        ...(selectedIntervention.additionalData || {}),
+        descriptionEntries: nextEntries,
+        lastEditor: {
+          code: operatorProfile.code,
+          name: operatorProfile.name || 'Operatore',
+          at: nowIso()
+        }
+      },
+      updatedAt: nowIso()
+    });
+
+    try {
+      const saved = await apiFetchWithRetry(`/api/interventions/${selectedIntervention.id}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload)
+      });
+      const sanitized = sanitizeIntervention(saved);
+      setInterventions((prev) => prev.map((entry) => (entry.id === selectedIntervention.id ? sanitized : entry)));
+      setSelectedIntervention(null);
+      addToast('Dettagli intervento aggiornati.', 'success');
+    } catch (error) {
+      if (shouldFallbackToLocal(error)) {
+        setInterventions((prev) => prev.map((entry) => (entry.id === selectedIntervention.id ? payload : entry)));
+        setSelectedIntervention(null);
+        addToast('Intervento aggiornato in locale.', 'success');
+      } else {
+        handleApiError(error, 'Impossibile salvare i dettagli intervento.');
+      }
     }
   };
 
@@ -1759,6 +1888,12 @@ const buildBackup = () => ({
               <option value={1}>Bassa</option><option value={2}>Media</option><option value={3}>Alta</option>
             </select>
           </div>
+          <input
+            type="datetime-local"
+            className="w-full border rounded p-2"
+            value={toLocalDateTimeInput(newIntervention.openedAt)}
+            onChange={(e) => setNewIntervention((p) => ({ ...p, openedAt: new Date(e.target.value).toISOString() }))}
+          />
           <textarea className="w-full border rounded p-2" placeholder="Descrizione" value={newIntervention.description} onChange={(e) => setNewIntervention((p) => ({ ...p, description: e.target.value }))} />
           {newIntervention.type === 'riparazione' && (
             <div className="grid md:grid-cols-4 gap-3">
@@ -1859,7 +1994,7 @@ const buildBackup = () => ({
         </div>
 
         <div className="bg-white rounded-xl shadow border border-slate-200 p-4 space-y-3">
-          <h3 className="font-semibold text-slate-700">Nuovo ticket {meta.label.toLowerCase().slice(0, -1)}</h3>
+          <h3 className="font-semibold text-slate-700">Nuova {meta.singularLabel?.toLowerCase() || 'attività'}</h3>
           <input
             className="w-full border rounded p-2"
             placeholder="Cerca cliente per nome, email o telefono"
@@ -1890,8 +2025,14 @@ const buildBackup = () => ({
               <option value={1}>Bassa</option><option value={2}>Media</option><option value={3}>Alta</option>
             </select>
           </div>
+          <input
+            type="datetime-local"
+            className="w-full border rounded p-2"
+            value={toLocalDateTimeInput(newIntervention.openedAt)}
+            onChange={(e) => setNewIntervention((p) => ({ ...p, type: typeKey, openedAt: new Date(e.target.value).toISOString() }))}
+          />
           <textarea className="w-full border rounded p-2" placeholder="Descrizione" value={newIntervention.description} onChange={(e) => setNewIntervention((p) => ({ ...p, type: typeKey, description: e.target.value }))} />
-          <button onClick={() => handleAddIntervention(typeKey)} className="bg-indigo-600 text-white px-4 py-2 rounded">Aggiungi {meta.label.toLowerCase().slice(0, -1)}</button>
+          <button onClick={() => handleAddIntervention(typeKey)} className="bg-indigo-600 text-white px-4 py-2 rounded">Aggiungi {meta.singularLabel?.toLowerCase() || 'attività'}</button>
         </div>
 
         <div className="bg-white rounded-xl shadow border border-slate-200 overflow-hidden">
@@ -2031,6 +2172,31 @@ const buildBackup = () => ({
   const SettingsPanel = () => (
     <div className="space-y-6">
       <div className="bg-white rounded shadow p-4 border border-slate-200">
+        <h2 className="text-lg font-bold text-slate-800 mb-2">Accreditamento operatore</h2>
+        <p className="text-sm text-slate-500 mb-4">Ogni operatore ha un codice univoco usato nel tracciamento modifiche interventi.</p>
+        <div className="grid gap-3 md:grid-cols-2">
+          <div>
+            <label className="text-xs font-semibold text-slate-700">Codice operatore</label>
+            <input className="w-full border rounded p-2 text-sm bg-slate-50" value={operatorProfile.code} readOnly />
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-slate-700">Nome operatore</label>
+            <input
+              className="w-full border rounded p-2 text-sm"
+              value={operatorProfile.name}
+              onChange={(e) => setOperatorProfile((prev) => ({ ...prev, name: e.target.value }))}
+            />
+          </div>
+        </div>
+        <button
+          onClick={() => setOperatorProfile((prev) => ({ ...prev, code: generateUserCode() }))}
+          className="mt-3 px-3 py-2 text-sm bg-slate-100 border rounded"
+        >
+          Genera nuovo codice
+        </button>
+      </div>
+
+      <div className="bg-white rounded shadow p-4 border border-slate-200">
         <h2 className="text-lg font-bold text-slate-800 mb-2">Token API</h2>
         <p className="text-sm text-slate-500 mb-4">Gestisci il token API per l'accesso al backend. Il token viene salvato in cookie HttpOnly.</p>
         <div className="flex flex-col gap-3 md:flex-row md:items-center">
@@ -2123,7 +2289,7 @@ const buildBackup = () => ({
           <div className="flex gap-2">
             <button onClick={() => changeMonth(-1)} className="p-2 hover:bg-slate-100 rounded"><ChevronLeft/></button>
             <button onClick={() => changeMonth(1)} className="p-2 hover:bg-slate-100 rounded"><ChevronRight/></button>
-            <button onClick={() => switchToTab('chiamate')} className="bg-blue-600 text-white px-4 py-2 rounded flex gap-2"><Plus/> Nuovo Intervento</button>
+            <button onClick={() => openInterventionComposer(focusedDay.toISOString(), 'chiamata')} className="bg-blue-600 text-white px-4 py-2 rounded flex gap-2"><Plus/> Nuovo intervento</button>
           </div>
         </div>
 
@@ -2145,7 +2311,17 @@ const buildBackup = () => ({
                 <div
                   key={idx}
                   className={`h-32 border rounded p-2 flex flex-col gap-1 overflow-y-auto ${isToday ? 'border-blue-500 bg-blue-50' : 'border-slate-200 hover:bg-slate-50'} ${isFocused ? 'ring-2 ring-indigo-300' : ''}`}
-                  onClick={() => setCalendarFocusDate(new Date(day))}
+                  onClick={(e) => {
+                    const target = e.target;
+                    const clickedEventCard = Boolean(target?.closest?.('[data-calendar-event-card="true"]'));
+                    if (clickedEventCard) {
+                      setCalendarFocusDate(new Date(day));
+                      return;
+                    }
+                    const selectedDate = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 9, 0, 0, 0);
+                    setCalendarFocusDate(new Date(day));
+                    openInterventionComposer(selectedDate.toISOString(), 'chiamata');
+                  }}
                   onDragOver={(e) => e.preventDefault()}
                   onDrop={(e) => {
                     e.preventDefault();
@@ -2180,6 +2356,7 @@ const buildBackup = () => ({
                           setCalendarEditorItem(item);
                           openInterventionDetails(item);
                         }}
+                        data-calendar-event-card="true"
                         className="text-xs bg-white border-l-4 border-indigo-500 p-1 rounded shadow-sm cursor-move hover:bg-indigo-50"
                       >
                         <div className="font-bold">{openedDate.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' })} • {item.type}</div>
@@ -2226,6 +2403,7 @@ const buildBackup = () => ({
                       return (
                         <div
                           key={`slot-item-${item.id}`}
+                          data-calendar-event-card="true"
                           className="bg-white border border-indigo-200 rounded px-2 py-1 text-xs cursor-move hover:bg-indigo-50"
                           draggable
                           onDragStart={(e) => {
@@ -2294,82 +2472,6 @@ const buildBackup = () => ({
         </header>
         <main className="flex-1 overflow-y-auto p-4 md:p-8">
           <div className="max-w-6xl mx-auto pb-20">
-            {storageWarning && (
-              <div className="bg-amber-50 border border-amber-200 text-amber-800 text-sm p-3 rounded mb-4">
-                {storageWarning}
-              </div>
-            )}
-            {exportNotice && (
-              <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm p-3 rounded mb-4">
-                {exportNotice}
-              </div>
-            )}
-            <div className="bg-white rounded shadow p-4 mb-6 border border-slate-200">
-              <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-                <div className="space-y-1">
-                  <p className="text-sm font-semibold text-slate-700 flex items-center gap-2"><Zap size={16}/> Backend &amp; sincronizzazione</p>
-                  <p className="text-xs text-slate-500">Imposta il token per accedere alle API e aggiorna il database con i dati locali quando necessario.</p>
-                  <p className={`text-xs ${backendOnline ? 'text-emerald-600' : 'text-red-600'}`}>
-                    {backendOnline ? 'Backend online' : 'Backend offline: modalità locale attiva'}
-                  </p>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <button onClick={refreshFromBackend} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded hover:bg-slate-200 border" disabled={isSyncing}>
-                    <RefreshCw size={16} className={isSyncing ? 'animate-spin' : ''}/> Aggiorna da backend
-                  </button>
-                  <button onClick={handleImportLocalData} className="flex items-center gap-2 px-3 py-2 text-sm bg-emerald-50 text-emerald-700 rounded hover:bg-emerald-100 border border-emerald-200"><Upload size={16}/> Importa dati locali</button>
-                </div>
-              </div>
-              {retryStatus && (
-                <div className="mt-3 text-xs text-slate-500">
-                  Retry in corso ({retryStatus.attempt}/{retryStatus.maxAttempts}) per {retryStatus.path}.
-                  <div className="mt-1 h-1 bg-slate-200 rounded">
-                    <div
-                      className="h-1 bg-blue-500 rounded"
-                      style={{ width: `${Math.round((retryStatus.attempt / retryStatus.maxAttempts) * 100)}%` }}
-                    />
-                  </div>
-                </div>
-              )}
-              <div className="mt-4 grid gap-2 md:grid-cols-2">
-                <div className="flex flex-col gap-2">
-                  <label className="text-xs font-semibold text-slate-700">Token API</label>
-                  <div className="text-sm text-slate-600">
-                    {maskedToken ? `Token configurato: ${maskedToken}` : 'Token non configurato.'}
-                  </div>
-                  <button onClick={() => switchToTab('settings')} className="text-xs text-blue-600 underline w-fit">Gestisci token</button>
-                </div>
-                <div className="text-xs text-slate-500 flex items-center">
-                  {syncStatus || 'Sincronizzazione pronta.'}
-                </div>
-              </div>
-            </div>
-            <div className="bg-white rounded shadow p-4 mb-6 border border-slate-200">
-              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                <div>
-                  <p className="text-sm font-semibold text-slate-700 flex items-center gap-2"><FileSpreadsheet size={16}/> Backup e Export</p>
-                  <p className="text-xs text-slate-500">Scarica un JSON di backup per conservarlo su Drive/Cloud, oppure esporta CSV apribili in Excel per storico o assenza di connessione.</p>
-                </div>
-                <div className="flex flex-wrap gap-2 justify-end">
-                  <button onClick={handleDownloadBackup} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-800 text-white rounded hover:bg-slate-700"><Download size={16}/> Backup JSON</button>
-                  <button onClick={handleDownloadAutoBackup} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded hover:bg-slate-200 border"><Download size={16}/> Ultimo Backup</button>
-                  <button onClick={handleRestoreLatestBackup} className="flex items-center gap-2 px-3 py-2 text-sm bg-amber-50 text-amber-700 rounded hover:bg-amber-100 border border-amber-200">Ripristina Backup</button>
-                  <button onClick={handleSelectBackupFile} className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded hover:bg-slate-200 border"><Upload size={16}/> Importa Backup</button>
-                  <button onClick={handlePersistStorage} className="flex items-center gap-2 px-3 py-2 text-sm bg-emerald-600 text-white rounded hover:bg-emerald-500" disabled={isPersistingStorage}>
-                    {isPersistingStorage ? <RefreshCw size={16} className="animate-spin"/> : <Download size={16}/>} Blocca dati nel browser
-                  </button>
-                  <button onClick={handleExportTickets} className="flex items-center gap-2 px-3 py-2 text-sm bg-blue-50 text-blue-700 rounded hover:bg-blue-100 border border-blue-200"><FileSpreadsheet size={16}/> Ticket CSV</button>
-                  <button onClick={handleExportInventory} className="flex items-center gap-2 px-3 py-2 text-sm bg-purple-50 text-purple-700 rounded hover:bg-purple-100 border border-purple-200"><FileSpreadsheet size={16}/> Magazzino CSV</button>
-                  <button onClick={handleExportCustomers} className="flex items-center gap-2 px-3 py-2 text-sm bg-green-50 text-green-700 rounded hover:bg-green-100 border border-green-200"><FileSpreadsheet size={16}/> Clienti CSV</button>
-                  <input ref={fileInputRef} type="file" accept="application/json" className="hidden" onChange={handleImportBackup} />
-                </div>
-              </div>
-              <div className="mt-3 text-xs text-slate-500">
-                Backup automatico: {autoBackupAt ? `ultimo salvataggio ${autoBackupAt}` : 'non disponibile'}.
-              </div>
-              {backupStatus && <p className="mt-2 text-xs text-amber-600">{backupStatus}</p>}
-              {importError && <p className="mt-2 text-sm text-red-600">{importError}</p>}
-            </div>
             {activeTab === 'dashboard' && <DashboardView />}
             {activeTab === 'calendar' && <CalendarView />}
             {activeTab === 'customers' && <CustomerListView />}
@@ -2618,7 +2720,42 @@ const buildBackup = () => ({
                 <option value={1}>Bassa</option><option value={2}>Media</option><option value={3}>Alta</option>
               </select>
             </div>
-            <textarea className="w-full border p-2 rounded mt-3" rows={5} value={selectedIntervention.description || ''} onChange={(e) => setSelectedIntervention((prev) => ({ ...prev, description: e.target.value }))} />
+            <div className="mt-3 space-y-2">
+              <p className="text-sm font-semibold text-slate-700">Storico scritte</p>
+              <div className="max-h-52 overflow-y-auto border rounded p-2 bg-slate-50 space-y-2">
+                {(selectedIntervention.descriptionEntries || []).length === 0 && (
+                  <p className="text-xs text-slate-500">Nessuna nota disponibile.</p>
+                )}
+                {(selectedIntervention.descriptionEntries || []).map((entry) => {
+                  const isOriginal = entry.source === 'original';
+                  return (
+                    <div
+                      key={entry.id}
+                      className={`group relative rounded border px-3 py-2 transition-colors ${isOriginal ? 'bg-slate-100 border-slate-300 text-slate-700' : 'bg-amber-50 border-amber-300 text-amber-900 hover:bg-amber-100'}`}
+                    >
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        <span className={`text-[10px] uppercase tracking-wide font-bold px-2 py-0.5 rounded ${isOriginal ? 'bg-slate-300 text-slate-800' : 'bg-amber-300 text-amber-950'}`}>
+                          {isOriginal ? 'Originale' : 'Modifica'}
+                        </span>
+                        <span className="text-[11px] text-slate-500">{formatAuditDate(entry.createdAt)}</span>
+                      </div>
+                      <p className="text-sm whitespace-pre-wrap">{entry.text}</p>
+                      <div className="pointer-events-none absolute left-0 -top-11 z-20 hidden min-w-[260px] rounded bg-slate-900 px-2 py-1 text-xs text-white shadow-lg group-hover:block">
+                        <strong>{entry.authorName || 'Operatore'}</strong> ({entry.authorCode || 'N/D'}) • {formatAuditDate(entry.createdAt)}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <textarea
+                className="w-full border p-2 rounded"
+                rows={4}
+                placeholder="Aggiungi una nuova nota/intervento..."
+                value={selectedIntervention.newNote || ''}
+                onChange={(e) => setSelectedIntervention((prev) => ({ ...prev, newNote: e.target.value }))}
+              />
+              <p className="text-xs text-slate-500">Le nuove note sono colorate e mostrano autore/data passando con il mouse.</p>
+            </div>
             <div className="flex justify-end gap-2 mt-4">
               <button onClick={() => setSelectedIntervention(null)} className="px-4 py-2 text-slate-500">Chiudi</button>
               <button onClick={handleSaveInterventionDetails} className="px-4 py-2 bg-indigo-600 text-white rounded">Salva modifiche</button>
