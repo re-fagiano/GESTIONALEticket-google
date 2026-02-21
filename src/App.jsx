@@ -1227,6 +1227,68 @@ export default function App() {
     }
   };
 
+  const openInterventionDetails = (intervention) => {
+    const safe = sanitizeIntervention(intervention);
+    if (!safe) return;
+    setSelectedIntervention({
+      ...safe,
+      descriptionEntries: getDescriptionEntries(safe),
+      newNote: ''
+    });
+  };
+
+  const handleSaveInterventionDetails = async () => {
+    if (!selectedIntervention) return;
+
+    const noteText = (selectedIntervention.newNote || '').trim();
+    const nextEntries = [...(selectedIntervention.descriptionEntries || [])];
+
+    if (noteText) {
+      nextEntries.push({
+        id: crypto?.randomUUID?.() || `${Date.now()}`,
+        text: noteText,
+        authorCode: operatorProfile.code,
+        authorName: operatorProfile.name || 'Operatore',
+        createdAt: nowIso(),
+        source: 'note'
+      });
+    }
+
+    const payload = sanitizeIntervention({
+      ...selectedIntervention,
+      description: buildDescriptionFromEntries(nextEntries),
+      additionalData: {
+        ...(selectedIntervention.additionalData || {}),
+        descriptionEntries: nextEntries,
+        lastEditor: {
+          code: operatorProfile.code,
+          name: operatorProfile.name || 'Operatore',
+          at: nowIso()
+        }
+      },
+      updatedAt: nowIso()
+    });
+
+    try {
+      const saved = await apiFetchWithRetry(`/api/interventions/${selectedIntervention.id}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload)
+      });
+      const sanitized = sanitizeIntervention(saved);
+      setInterventions((prev) => prev.map((entry) => (entry.id === selectedIntervention.id ? sanitized : entry)));
+      setSelectedIntervention(null);
+      addToast('Dettagli intervento aggiornati.', 'success');
+    } catch (error) {
+      if (shouldFallbackToLocal(error)) {
+        setInterventions((prev) => prev.map((entry) => (entry.id === selectedIntervention.id ? payload : entry)));
+        setSelectedIntervention(null);
+        addToast('Intervento aggiornato in locale.', 'success');
+      } else {
+        handleApiError(error, 'Impossibile salvare i dettagli intervento.');
+      }
+    }
+  };
+
   const handleCreatePart = async () => {
     if (!newPart.name.trim()) {
       addToast('Inserisci almeno il nome del ricambio.', 'error');
@@ -1416,6 +1478,38 @@ const buildBackup = () => ({
   settings
 });
 
+  const persistMbiSnapshot = async (backupPayload) => {
+    try {
+      await Promise.all([
+        idbSet('mbi_snapshot', JSON.stringify(backupPayload)),
+        idbSet('mbi_snapshot_at', backupPayload.exportedAt)
+      ]);
+      setMbiStatus(`Snapshot MBI locale aggiornato (${new Date(backupPayload.exportedAt).toLocaleTimeString('it-IT')}).`);
+    } catch {
+      setMbiStatus('Snapshot MBI locale non disponibile: verifica permessi storage browser.');
+    }
+  };
+
+  const handleMbiSyncNow = async () => {
+    const backup = buildBackup();
+    await persistMbiSnapshot(backup);
+    try {
+      await apiFetch('/api/import', {
+        method: 'POST',
+        body: JSON.stringify(backup)
+      });
+      setMbiStatus(`MBI remoto sincronizzato alle ${new Date().toLocaleTimeString('it-IT')}.`);
+      addToast('Sincronizzazione MBI completata.', 'success');
+    } catch (error) {
+      if (shouldFallbackToLocal(error)) {
+        setMbiStatus('MBI: backend non raggiungibile, snapshot locale comunque salvato.');
+        addToast('MBI locale salvato, remoto non disponibile.', 'success');
+      } else {
+        handleApiError(error, 'Sincronizzazione MBI non riuscita.');
+      }
+    }
+  };
+
   const saveAutoBackup = () => {
     const backup = buildBackup();
     const payload = JSON.stringify(backup);
@@ -1436,6 +1530,12 @@ const buildBackup = () => ({
     }, 600000);
     return () => clearInterval(interval);
   }, [customers, tickets, inventory, settings]);
+
+  useEffect(() => {
+    if (!mbiEnabled) return;
+    const backup = buildBackup();
+    persistMbiSnapshot(backup);
+  }, [mbiEnabled, customers, tickets, interventions, inventory, settings]);
 
   const handleExportTickets = () => {
     exportToCsv('tickets_export.csv',
