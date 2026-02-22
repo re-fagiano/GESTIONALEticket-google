@@ -133,6 +133,57 @@ export const apiFetchWithRetry = async (input, maybeOptions = {}, maybeConfig = 
   throw lastError;
 };
 
+
+const toEntityState = (rows = []) => {
+  const normalized = (Array.isArray(rows) ? rows : [])
+    .map((row) => ({
+      id: String(row?.id || ''),
+      updatedAt: typeof row?.updatedAt === 'string' ? row.updatedAt : '',
+      version: Number.isFinite(Number(row?.version)) ? Number(row.version) : 0,
+    }))
+    .sort((a, b) => a.id.localeCompare(b.id));
+
+  const version = normalized.reduce((sum, item) => sum + item.version, 0);
+  const source = JSON.stringify(normalized);
+  let checksum = '';
+  for (let i = 0; i < source.length; i += 1) {
+    checksum = ((checksum << 5) - checksum + source.charCodeAt(i)) | 0;
+  }
+
+  return { version, checksum: String(checksum) };
+};
+
+export const syncData = async ({
+  protocolVersion = 1,
+  clientId = 'web-client',
+  lastSyncAt = null,
+  changes = {},
+  localData = {},
+  apiToken = ''
+} = {}) => {
+  const state = {
+    customers: toEntityState(localData.customers),
+    tickets: toEntityState(localData.tickets),
+    inventory: toEntityState(localData.inventory),
+    interventions: toEntityState(localData.interventions),
+  };
+
+  return apiFetchWithRetry({
+    path: '/api/sync',
+    options: {
+      method: 'POST',
+      body: JSON.stringify({
+        protocolVersion,
+        clientId,
+        lastSyncAt,
+        state,
+        changes,
+      })
+    },
+    apiToken,
+  });
+};
+
 export const callDeepSeekApi = async ({ endpoint, requestHeaders, safeSubject, safeDescription }) => {
   const systemPrompt = 'Sei un tecnico esperto di elettrodomestici. Analizza il problema e fornisci: 1) Possibile Causa 2) Diagnosi 3) Ricambi.';
 
