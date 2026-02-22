@@ -44,6 +44,8 @@ import {
   loadBackupAtFromIdb,
   loadBackupAtSync,
   loadBackupFromIdb,
+  getLastSyncAtSync,
+  getOperatorProfileSync,
   loadLatestValidBackup,
   loadBackupSync,
   loadCache,
@@ -52,6 +54,9 @@ import {
   saveBackup,
   saveCache,
   saveMbiSnapshot,
+  saveOperatorProfile,
+  setLastSyncAt,
+  subscribeStorageUpdates,
   writeRaw
 } from '../services/clientStorage';
 import Sidebar from '../components/Sidebar';
@@ -127,17 +132,16 @@ export default function AppPage() {
   // Stato che indica se la storage persistente è in fase di richiesta
   const [isPersistingStorage, setIsPersistingStorage] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
-  const [lastSyncAt, setLastSyncAt] = useState(() => readRawSync('sync_last_at', null));
+  const [lastSyncAt, setLastSyncAtState] = useState(() => getLastSyncAtSync());
 
   // Stato per le notifiche toast
   const [toasts, setToasts] = useState([]);
 
   const [operatorProfile, setOperatorProfile] = useState(() => {
-    const savedCode = readRawSync('operatorCode', '');
-    const savedName = readRawSync('operatorName', '');
+    const savedProfile = getOperatorProfileSync();
     return {
-      code: savedCode || generateUserCode(),
-      name: savedName || 'Operatore'
+      code: savedProfile.code || generateUserCode(),
+      name: savedProfile.name || 'Operatore'
     };
   });
 
@@ -196,8 +200,7 @@ export default function AppPage() {
   }, [settings]);
 
   useEffect(() => {
-    writeRaw('operatorCode', operatorProfile.code);
-    writeRaw('operatorName', operatorProfile.name);
+    saveOperatorProfile(operatorProfile);
   }, [operatorProfile]);
 
   useEffect(() => {
@@ -237,6 +240,31 @@ export default function AppPage() {
       };
       loadFallback();
     }
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = subscribeStorageUpdates((key) => {
+      if (![ 'cache_customers', 'cache_tickets', 'cache_interventions', 'cache_inventory', 'cache_settings' ].includes(key)) {
+        return;
+      }
+      if (key === 'cache_customers') {
+        setCustomers(sanitizeCustomers(loadCache('customers', initialCustomers), initialCustomers));
+      }
+      if (key === 'cache_tickets') {
+        setTickets(sanitizeTickets(loadCache('tickets', initialTickets), initialTickets));
+      }
+      if (key === 'cache_interventions') {
+        setInterventions(sanitizeInterventions(loadCache('interventions', initialInterventions), initialInterventions));
+      }
+      if (key === 'cache_inventory') {
+        setInventory(sanitizeInventoryList(loadCache('inventory', initialInventory), initialInventory));
+      }
+      if (key === 'cache_settings') {
+        const next = loadCache('settings', []);
+        setSettings(Array.isArray(next) ? next : []);
+      }
+    });
+    return unsubscribe;
   }, []);
 
   useEffect(() => {
@@ -316,8 +344,8 @@ export default function AppPage() {
       setSyncStatus('Dati sincronizzati con il backend.');
       setBackendOnline(true);
       if (data?.serverTime) {
+        setLastSyncAtState(data.serverTime);
         setLastSyncAt(data.serverTime);
-        writeRaw('sync_last_at', data.serverTime);
       }
     } catch (error) {
       console.error('Errore sincronizzazione backend', error);
