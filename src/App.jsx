@@ -267,6 +267,7 @@ export default function App() {
   // Modal & AI State
   const [showNewTicket, setShowNewTicket] = useState(false);
   const [showNewCustomer, setShowNewCustomer] = useState(false);
+  const [editingCustomerId, setEditingCustomerId] = useState(null);
   const [showNewPart, setShowNewPart] = useState(false); 
   
   const [aiSuggestion, setAiSuggestion] = useState(null);
@@ -495,21 +496,71 @@ export default function App() {
     addToast('Logout effettuato.', 'success');
   };
 
-  const handleCreateCustomer = async () => {
+  const closeCustomerModal = () => {
+    setShowNewCustomer(false);
+    setEditingCustomerId(null);
+    setNewCustomer({ name: '', email: '', phone: '', address: '' });
+    if (returnToTicketAfterCustomer) {
+      setShowNewTicket(true);
+      setReturnToTicketAfterCustomer(false);
+    }
+    if (returnToInterventionAfterCustomer) {
+      setReturnToInterventionAfterCustomer(false);
+    }
+  };
+
+  const openNewCustomerModal = () => {
+    setEditingCustomerId(null);
+    setNewCustomer({ name: '', email: '', phone: '', address: '' });
+    setShowNewCustomer(true);
+  };
+
+  const openCustomerEditor = (customer) => {
+    if (!customer) return;
+    setEditingCustomerId(customer.id);
+    setNewCustomer({
+      name: customer.name || '',
+      email: customer.email || '',
+      phone: customer.phone || '',
+      address: customer.address || ''
+    });
+    setShowNewCustomer(true);
+  };
+
+  const handleSaveCustomer = async () => {
     if (!newCustomer.name.trim()) {
       addToast('Inserisci almeno il nome cliente.', 'error');
       return;
     }
-    const customer = sanitizeCustomer({ ...newCustomer, id: crypto?.randomUUID?.() || Date.now().toString() }, customers.length);
+
+    const existingCustomer = customers.find((item) => item.id === editingCustomerId);
+    const customer = sanitizeCustomer(
+      editingCustomerId
+        ? { ...existingCustomer, ...newCustomer, id: editingCustomerId }
+        : { ...newCustomer, id: crypto?.randomUUID?.() || Date.now().toString() },
+      customers.length
+    );
+
     try {
       setIsSavingCustomer(true);
+      if (editingCustomerId) {
+        const updated = await apiFetch(`/api/customers/${editingCustomerId}`, {
+          method: 'PUT',
+          body: JSON.stringify(customer)
+        });
+        setCustomers((prev) => sanitizeCustomers(prev.map((item) => (item.id === editingCustomerId ? updated : item)), initialCustomers));
+        closeCustomerModal();
+        setSyncStatus('Cliente aggiornato nel backend.');
+        addToast('Cliente aggiornato con successo.', 'success');
+        return;
+      }
+
       const created = await apiFetch('/api/customers', {
         method: 'POST',
         body: JSON.stringify(customer)
       });
       setCustomers((prev) => sanitizeCustomers([...prev, created], initialCustomers));
-      setNewCustomer({ name: '', email: '', phone: '', address: '' });
-      setShowNewCustomer(false);
+      closeCustomerModal();
       if (returnToTicketAfterCustomer) {
         setShowNewTicket(true);
         setNewTicket((prev) => ({ ...prev, customerId: created.id }));
@@ -523,21 +574,28 @@ export default function App() {
       addToast('Cliente aggiunto con successo.', 'success');
     } catch (error) {
       if (shouldFallbackToLocal(error)) {
-        setCustomers((prev) => sanitizeCustomers([...prev, customer], initialCustomers));
-        setShowNewCustomer(false);
-        if (returnToTicketAfterCustomer) {
-          setShowNewTicket(true);
-          setNewTicket((prev) => ({ ...prev, customerId: customer.id }));
-          setReturnToTicketAfterCustomer(false);
+        if (editingCustomerId) {
+          setCustomers((prev) => sanitizeCustomers(prev.map((item) => (item.id === editingCustomerId ? customer : item)), initialCustomers));
+          closeCustomerModal();
+          addToast('Cliente aggiornato in locale (token mancante/non valido).', 'success');
+          setSyncStatus('Modalità locale: cliente aggiornato solo nel browser.');
+        } else {
+          setCustomers((prev) => sanitizeCustomers([...prev, customer], initialCustomers));
+          closeCustomerModal();
+          if (returnToTicketAfterCustomer) {
+            setShowNewTicket(true);
+            setNewTicket((prev) => ({ ...prev, customerId: customer.id }));
+            setReturnToTicketAfterCustomer(false);
+          }
+          if (returnToInterventionAfterCustomer) {
+            setNewIntervention((prev) => ({ ...prev, clientId: customer.id }));
+            setReturnToInterventionAfterCustomer(false);
+          }
+          addToast('Cliente salvato in locale (token mancante/non valido).', 'success');
+          setSyncStatus('Modalità locale: cliente salvato solo nel browser.');
         }
-        if (returnToInterventionAfterCustomer) {
-          setNewIntervention((prev) => ({ ...prev, clientId: customer.id }));
-          setReturnToInterventionAfterCustomer(false);
-        }
-        addToast('Cliente salvato in locale (token mancante/non valido).', 'success');
-        setSyncStatus('Modalità locale: cliente salvato solo nel browser.');
       } else {
-        handleApiError(error, 'Impossibile salvare il cliente.');
+        handleApiError(error, editingCustomerId ? 'Impossibile aggiornare il cliente.' : 'Impossibile salvare il cliente.');
       }
     } finally {
       setIsSavingCustomer(false);
@@ -1642,7 +1700,7 @@ const buildBackup = () => ({
               onChange={(e) => {
                 if (e.target.value === '__add_new_customer__') {
                   setReturnToInterventionAfterCustomer(true);
-                  setShowNewCustomer(true);
+                  openNewCustomerModal();
                   return;
                 }
                 setNewIntervention((p) => ({ ...p, clientId: e.target.value }));
@@ -1782,7 +1840,7 @@ const buildBackup = () => ({
               onChange={(e) => {
                 if (e.target.value === '__add_new_customer__') {
                   setReturnToInterventionAfterCustomer(true);
-                  setShowNewCustomer(true);
+                  openNewCustomerModal();
                   return;
                 }
                 setNewIntervention((p) => ({ ...p, type: typeKey, clientId: e.target.value }));
@@ -1836,7 +1894,7 @@ const buildBackup = () => ({
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-bold text-slate-800">Rubrica Clienti</h2>
-        <button onClick={() => setShowNewCustomer(true)} className="bg-green-600 text-white px-4 py-2 rounded flex gap-2"><Plus/> Nuovo Cliente</button>
+        <button onClick={openNewCustomerModal} className="bg-green-600 text-white px-4 py-2 rounded flex gap-2"><Plus/> Nuovo Cliente</button>
       </div>
       <div className="bg-white rounded shadow overflow-hidden">
         <table className="w-full text-left">
@@ -1864,8 +1922,16 @@ const buildBackup = () => ({
           {customers.map((c) => {
             const customerInterventions = interventions.filter((i) => i.clientId === c.id);
             return (
-              <div key={`history-${c.id}`} className="p-4">
-                <p className="font-semibold text-slate-700">{c.name} <span className="text-xs text-slate-400">({customerInterventions.length})</span></p>
+              <div key={`history-${c.id}`} className="p-4 hover:bg-slate-50 transition-colors">
+                <div className="flex items-start justify-between gap-3">
+                  <p className="font-semibold text-slate-700">{c.name} <span className="text-xs text-slate-400">({customerInterventions.length})</span></p>
+                  <button
+                    className="text-xs px-2 py-1 rounded border border-slate-300 text-slate-700 hover:bg-slate-100"
+                    onClick={() => openCustomerEditor(c)}
+                  >
+                    Modifica cliente
+                  </button>
+                </div>
                 <div className="text-xs text-slate-500 mt-1">
                   {customerInterventions.slice(0, 5).map((i) => `${i.id} • ${i.type} • ${i.status}`).join(' | ') || 'Nessun intervento'}
                 </div>
@@ -2497,7 +2563,7 @@ const buildBackup = () => ({
                         if (e.target.value === '__add_new_customer__') {
                           setReturnToTicketAfterCustomer(true);
                           setShowNewTicket(false);
-                          setShowNewCustomer(true);
+                          openNewCustomerModal();
                           return;
                         }
                         setNewTicket({...newTicket, customerId: e.target.value});
@@ -2538,18 +2604,9 @@ const buildBackup = () => ({
       )}
 
       {showNewCustomer && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => {
-          setShowNewCustomer(false);
-          if (returnToTicketAfterCustomer) {
-            setShowNewTicket(true);
-            setReturnToTicketAfterCustomer(false);
-          }
-          if (returnToInterventionAfterCustomer) {
-            setReturnToInterventionAfterCustomer(false);
-          }
-        }}>
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={closeCustomerModal}>
             <div className="bg-white p-6 rounded-lg w-full max-w-md" onClick={(e) => e.stopPropagation()}>
-                <h3 className="text-xl font-bold mb-4">Nuovo Cliente</h3>
+                <h3 className="text-xl font-bold mb-4">{editingCustomerId ? 'Modifica Cliente' : 'Nuovo Cliente'}</h3>
                 <div className="space-y-3">
                     <input className="w-full border p-2 rounded" placeholder="Nome Completo" value={newCustomer.name} onChange={e => setNewCustomer({...newCustomer, name: e.target.value})} />
                     <input className="w-full border p-2 rounded" placeholder="Telefono" value={newCustomer.phone} onChange={e => setNewCustomer({...newCustomer, phone: e.target.value})} />
@@ -2557,18 +2614,9 @@ const buildBackup = () => ({
                     <input className="w-full border p-2 rounded" placeholder="Indirizzo" value={newCustomer.address} onChange={e => setNewCustomer({...newCustomer, address: e.target.value})} />
                 </div>
                 <div className="flex justify-end gap-2 mt-4">
-                  <button onClick={() => {
-                    setShowNewCustomer(false);
-                    if (returnToTicketAfterCustomer) {
-                      setShowNewTicket(true);
-                      setReturnToTicketAfterCustomer(false);
-                    }
-                    if (returnToInterventionAfterCustomer) {
-                      setReturnToInterventionAfterCustomer(false);
-                    }
-                  }} className="px-4 py-2 text-slate-500">Annulla</button>
-                  <button onClick={handleCreateCustomer} className="px-4 py-2 bg-green-600 text-white rounded flex items-center gap-2" disabled={isSavingCustomer}>
-                    {isSavingCustomer && <RefreshCw size={16} className="animate-spin"/>} Salva
+                  <button onClick={closeCustomerModal} className="px-4 py-2 text-slate-500">Annulla</button>
+                  <button onClick={handleSaveCustomer} className="px-4 py-2 bg-green-600 text-white rounded flex items-center gap-2" disabled={isSavingCustomer}>
+                    {isSavingCustomer && <RefreshCw size={16} className="animate-spin"/>} {editingCustomerId ? 'Aggiorna' : 'Salva'}
                   </button>
                 </div>
             </div>
