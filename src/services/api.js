@@ -221,12 +221,23 @@ export const callDeepSeekApi = async ({ endpoint, requestHeaders, safeSubject, s
   return content;
 };
 
-export const login = async ({ username, password }) => {
+export const login = async ({ email, password }) => {
   return apiFetch({
     path: '/api/auth/login',
     options: {
       method: 'POST',
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ email, password }),
+    },
+    allowRefresh: false,
+  });
+};
+
+export const register = async ({ email, password }) => {
+  return apiFetch({
+    path: '/api/auth/register',
+    options: {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
     },
     allowRefresh: false,
   });
