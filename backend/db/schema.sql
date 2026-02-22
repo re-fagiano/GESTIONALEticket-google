@@ -1,0 +1,26 @@
+CREATE TABLE IF NOT EXISTS clienti (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  nome TEXT NOT NULL,
+  telefono TEXT,
+  email TEXT,
+  indirizzo TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS tickets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  cliente_id INTEGER,
+  tipo TEXT,
+  stato TEXT,
+  descrizione TEXT,
+  urgenza INTEGER,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(cliente_id) REFERENCES clienti(id)
+);
+
+CREATE TABLE IF NOT EXISTS magazzino (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  nome TEXT NOT NULL,
+  quantita INTEGER DEFAULT 0,
+  prezzo REAL
+);
