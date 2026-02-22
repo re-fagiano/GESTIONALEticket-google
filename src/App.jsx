@@ -682,13 +682,13 @@ export default function App() {
   };
 
   const handleInterventionScheduleChange = async (intervention, openedAt) => {
-    if (!intervention || !openedAt) return;
+    if (!intervention || !openedAt) return false;
     const updated = sanitizeIntervention({
       ...intervention,
       openedAt,
       updatedAt: nowIso()
     });
-    if (!updated) return;
+    if (!updated) return false;
     try {
       const saved = await apiFetchWithRetry(`/api/interventions/${intervention.id}`, {
         method: 'PUT',
@@ -697,14 +697,16 @@ export default function App() {
       setInterventions((prev) => prev.map((entry) => (entry.id === intervention.id ? sanitizeIntervention(saved) : entry)));
       setSyncStatus('Data intervento aggiornata.');
       addToast('Data intervento aggiornata.', 'success');
+      return true;
     } catch (error) {
       if (shouldFallbackToLocal(error)) {
         setInterventions((prev) => prev.map((entry) => (entry.id === updated.id ? updated : entry)));
         setSyncStatus('Modalità locale: data intervento aggiornata solo nel browser.');
         addToast('Data intervento aggiornata in locale (token mancante/non valido).', 'success');
-      } else {
-        handleApiError(error, 'Impossibile aggiornare la data intervento.');
+        return true;
       }
+      handleApiError(error, 'Impossibile aggiornare la data intervento.');
+      return false;
     }
   };
 
@@ -1952,12 +1954,23 @@ const buildBackup = () => ({
   const CalendarView = () => {
     const calendarEvents = interventions.map((item) => {
       const customer = customers.find((entry) => entry.id === item.clientId);
-      const title = `${interventionTypeMeta[item.type]?.singularLabel || 'Intervento'} • ${customer?.name || 'Cliente non assegnato'}`;
+      const typeLabel = interventionTypeMeta[item.type]?.singularLabel || 'Intervento';
+      const title = `${typeLabel} • ${customer?.name || 'Cliente non assegnato'}`;
+      const statusColors = {
+        pendente: '#2563eb',
+        in_corso: '#d97706',
+        completato: '#16a34a',
+        chiuso: '#64748b'
+      };
+      const eventColor = statusColors[item.status] || '#334155';
       return {
         id: item.id,
         title,
         start: item.openedAt,
         allDay: false,
+        backgroundColor: eventColor,
+        borderColor: eventColor,
+        textColor: '#ffffff',
         extendedProps: {
           interventionId: item.id,
           type: item.type,
@@ -1988,18 +2001,19 @@ const buildBackup = () => ({
         selectable: true,
         dayMaxEvents: true,
         events: calendarEvents,
-        eventDrop: (info) => {
+        eventDrop: async (info) => {
           const intervention = interventions.find((entry) => entry.id === info.event.id);
           if (!intervention) {
             info.revert();
             return;
           }
-          handleInterventionScheduleChange(intervention, info.event.start?.toISOString());
+          const saved = await handleInterventionScheduleChange(intervention, info.event.start?.toISOString());
+          if (!saved) info.revert();
         },
         eventClick: (info) => {
           const intervention = interventions.find((entry) => entry.id === info.event.id);
           if (!intervention) return;
-          setSelectedIntervention(intervention);
+          openInterventionDetails(intervention);
         },
         select: (selectionInfo) => {
           openInterventionComposer(selectionInfo.start.toISOString(), 'chiamata', { keepCalendarOpen: true });
