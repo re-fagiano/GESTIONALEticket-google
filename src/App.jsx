@@ -19,10 +19,9 @@ import {
   apiFetchWithRetry as apiFetchWithRetryRequest,
   callDeepSeekApi,
   getHealthStatus,
-  getTokenStatus,
+  getMe,
+  login,
   logout,
-  requestNewToken,
-  saveToken,
   syncData
 } from './services/api';
 import {
@@ -45,8 +44,7 @@ import ToastList from './components/ToastList';
 import ActiveTabContent from './pages/ActiveTabContent';
 import {
   isBrowser,
-  isLocalhost,
-  forcedProxyEndpoint,
+    forcedProxyEndpoint,
   nowIso,
   toDateKey,
   toLocalDateTimeInput,
@@ -92,11 +90,8 @@ export default function App() {
   const [settings, setSettings] = useState(() => loadCache('settings', []));
   const [storageWarning, setStorageWarning] = useState(null);
   const [conflictState, setConflictState] = useState(null);
-  const [apiToken, setApiToken] = useState('');
-  const [tokenInput, setTokenInput] = useState('');
-  const [maskedToken, setMaskedToken] = useState('');
-  const [currentRole, setCurrentRole] = useState('');
-  const [showTokenPrompt, setShowTokenPrompt] = useState(false);
+  const [authState, setAuthState] = useState({ checked: false, user: null });
+  const [loginForm, setLoginForm] = useState({ username: '', password: '' });
   const [syncStatus, setSyncStatus] = useState(null);
   const [exportNotice, setExportNotice] = useState(null);
   // Stato di connettività del backend (assume offline di default)
@@ -230,23 +225,15 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const loadTokenStatus = async () => {
+    const loadSession = async () => {
       try {
-        const data = await getTokenStatus();
-        if (!data) {
-          setShowTokenPrompt(true);
-          return;
-        }
-        if (data?.maskedToken) {
-          setMaskedToken(data.maskedToken);
-          setCurrentRole(data?.user?.role || '');
-          setShowTokenPrompt(false);
-        }
+        const data = await getMe();
+        setAuthState({ checked: true, user: data?.user || null });
       } catch {
-        setShowTokenPrompt(true);
+        setAuthState({ checked: true, user: null });
       }
     };
-    loadTokenStatus();
+    loadSession();
   }, []);
 
   useEffect(() => {
@@ -266,23 +253,19 @@ export default function App() {
   const [aiError, setAiError] = useState(null);
   const endpoint = forcedProxyEndpoint;
 
-  const apiFetch = (path, options = {}) => apiFetchRequest(path, options, apiToken);
-  const apiFetchWithRetry = (path, options = {}) => apiFetchWithRetryRequest(path, options, { apiToken, onRetryStatus: setRetryStatus });
+  const apiFetch = (path, options = {}) => apiFetchRequest(path, options);
+  const apiFetchWithRetry = (path, options = {}) => apiFetchWithRetryRequest(path, options, { onRetryStatus: setRetryStatus });
   const requestHeaders = {
     'Content-Type': 'application/json',
   };
   const aiEnabled = true;
 
   const refreshFromBackend = async () => {
-    if (!apiToken && !maskedToken && !isLocalhost) {
-      setStorageWarning('Configura un token API per sincronizzare i dati.');
-      return;
-    }
+    if (!authState.user) return;
     try {
       setSyncStatus('Sincronizzazione dati in corso...');
       setIsSyncing(true);
       const data = await syncData({
-        apiToken,
         clientId: 'web-app',
         lastSyncAt,
         localData: {
@@ -317,7 +300,7 @@ export default function App() {
 
   useEffect(() => {
     refreshFromBackend();
-  }, [apiToken]);
+  }, [authState.user]);
 
   useEffect(() => {
     const interval = setInterval(async () => {
@@ -336,7 +319,7 @@ export default function App() {
       refreshFromBackend();
     }, 3600000);
     return () => clearInterval(interval);
-  }, [apiToken]);
+  }, [authState.user]);
 
 
   // Forms
@@ -443,8 +426,9 @@ export default function App() {
   // --- AZIONI ---
   const handleApiError = (error, fallback) => {
     if (error?.status === 401) {
-      setStorageWarning('Token API mancante o non valido. Verifica il token nelle impostazioni.');
-      addToast('Token non valido o mancante.', 'error');
+      setAuthState({ checked: true, user: null });
+      setStorageWarning('Sessione non valida. Effettua nuovamente il login.');
+      addToast('Sessione scaduta.', 'error');
       return;
     }
     const message = error?.message || fallback;
@@ -458,52 +442,28 @@ export default function App() {
     return !status || status === 401 || status === 403 || status >= 500;
   };
 
-  const handleSaveToken = async () => {
-    const trimmedToken = tokenInput.trim();
-    if (!trimmedToken) {
-      addToast('Inserisci un token valido.', 'error');
+  const handleLogin = async () => {
+    if (!loginForm.username.trim() || !loginForm.password.trim()) {
+      addToast('Inserisci username e password.', 'error');
       return;
     }
     try {
-      setSyncStatus('Salvataggio token...');
-      const data = await saveToken(trimmedToken);
-      setApiToken(data?.accessToken || '');
-      setMaskedToken(data?.maskedToken || '');
-      setCurrentRole(data?.role || '');
-      setTokenInput('');
-      setShowTokenPrompt(false);
+      setSyncStatus('Login in corso...');
+      const data = await login({ username: loginForm.username.trim(), password: loginForm.password });
+      setAuthState({ checked: true, user: data?.user || null });
+      setLoginForm({ username: '', password: '' });
       setStorageWarning(null);
-      setSyncStatus('Token salvato.');
-      addToast('Token salvato con successo.', 'success');
+      setSyncStatus('Login effettuato.');
+      addToast('Login effettuato.', 'success');
     } catch (error) {
       setSyncStatus(null);
-      handleApiError(error, 'Impossibile salvare il token.');
-    }
-  };
-
-  const handleRequestNewToken = async () => {
-    try {
-      setSyncStatus('Richiesta nuovo token...');
-      const data = await requestNewToken();
-      setApiToken(data?.token || '');
-      setMaskedToken(data?.maskedToken || '');
-      setTokenInput(data?.token || '');
-      setShowTokenPrompt(false);
-      setStorageWarning(null);
-      setSyncStatus('Nuovo token generato.');
-      addToast('Nuovo token generato. Copialo e salvalo al sicuro.', 'success');
-    } catch (error) {
-      setSyncStatus(null);
-      handleApiError(error, 'Impossibile richiedere un nuovo token.');
+      handleApiError(error, 'Impossibile eseguire il login.');
     }
   };
 
   const handleLogout = async () => {
     await logout().catch(() => null);
-    setApiToken('');
-    setMaskedToken('');
-    setCurrentRole('');
-    setShowTokenPrompt(true);
+    setAuthState({ checked: true, user: null });
     addToast('Logout effettuato.', 'success');
   };
 
@@ -1303,7 +1263,7 @@ const buildBackup = () => ({
           location: entry.location || existing.location,
           qty: Number(existing.qty) + Number(entry.quantity),
           price: entry.price ?? existing.price,
-          pendingSync: !apiToken || existing.pendingSync
+          pendingSync: !authState.user || existing.pendingSync
         });
         const existingIndex = updatedInventory.findIndex((item) => item.id === existing.id);
         if (existingIndex >= 0) {
@@ -1322,7 +1282,7 @@ const buildBackup = () => ({
           qty: entry.quantity,
           price: entry.price,
           minQty: 0,
-          pendingSync: !apiToken
+          pendingSync: !authState.user
         }, updatedInventory.length);
         updatedInventory.push(newItem);
         creations.push(newItem);
@@ -1332,7 +1292,7 @@ const buildBackup = () => ({
     setInventory(sanitizeInventoryList(updatedInventory, initialInventory));
     setSyncStatus(`Importazione completata: ${validEntries.length} righe valide.`);
 
-    if (apiToken) {
+    if (authState.user) {
       try {
         await Promise.all([
           ...creations.map((item) => apiFetch('/api/inventory', {
@@ -1459,6 +1419,36 @@ const buildBackup = () => ({
       setAiError(message);
     } finally { setLoadingAi(false); }
   };
+
+
+  if (!authState.checked) {
+    return <div className="min-h-screen flex items-center justify-center text-slate-600">Verifica sessione in corso...</div>;
+  }
+
+  if (!authState.user) {
+    return (
+      <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
+        <div className="w-full max-w-md bg-white rounded-xl shadow border border-slate-200 p-6 space-y-4">
+          <h1 className="text-xl font-bold text-slate-800">Login</h1>
+          <input
+            className="w-full border rounded p-2 text-sm"
+            placeholder="Username"
+            value={loginForm.username}
+            onChange={(e) => setLoginForm((prev) => ({ ...prev, username: e.target.value }))}
+          />
+          <input
+            type="password"
+            className="w-full border rounded p-2 text-sm"
+            placeholder="Password"
+            value={loginForm.password}
+            onChange={(e) => setLoginForm((prev) => ({ ...prev, password: e.target.value }))}
+          />
+          <button onClick={handleLogin} className="w-full px-4 py-2 bg-slate-800 text-white rounded">Accedi</button>
+          {storageWarning && <p className="text-sm text-red-600">{storageWarning}</p>}
+        </div>
+      </div>
+    );
+  }
 
 
   // --- VISTE AGGIUNTIVE ---
@@ -1948,23 +1938,11 @@ const buildBackup = () => ({
       </div>
 
       <div className="bg-white rounded shadow p-4 border border-slate-200">
-        <h2 className="text-lg font-bold text-slate-800 mb-2">Autenticazione</h2>
-        <p className="text-sm text-slate-500 mb-4">Inserisci credenziali nel formato username:password (es. admin:admin123!). I token JWT sono gestiti con cookie HttpOnly.</p>
-        <div className="flex flex-col gap-3 md:flex-row md:items-center">
-          <input
-            type="password"
-            className="w-full border rounded p-2 text-sm"
-            placeholder="username:password"
-            value={tokenInput}
-            onChange={(e) => setTokenInput(e.target.value)}
-          />
-          <button onClick={handleSaveToken} className="px-4 py-2 bg-slate-800 text-white rounded">Login</button>
-          <button onClick={handleRequestNewToken} className="px-4 py-2 bg-slate-100 text-slate-700 rounded border">Richiedi nuovo token</button>
-        </div>
-        <p className="text-xs text-slate-500 mt-2">Sessione: {maskedToken || 'non autenticato'} {currentRole ? `• ruolo ${currentRole}` : ''}.</p>
-        <button onClick={handleLogout} className="mt-2 px-3 py-1 text-xs bg-slate-100 border rounded">Logout</button>
+        <h2 className="text-lg font-bold text-slate-800 mb-2">Sessione</h2>
+        <p className="text-sm text-slate-500 mb-3">Utente autenticato: <strong>{authState.user?.username}</strong> • ruolo <strong>{authState.user?.role}</strong></p>
+        <button onClick={handleLogout} className="px-3 py-1 text-xs bg-slate-100 border rounded">Logout</button>
       </div>
-      <div className="bg-white rounded shadow p-4 border border-slate-200">
+            <div className="bg-white rounded shadow p-4 border border-slate-200">
         <h2 className="text-lg font-bold text-slate-800 mb-2">Configurazione AI DeepSeek</h2>
         <p className="text-sm text-slate-500">
           La configurazione AI è gestita dal server. Assicurati che <code className="font-mono">DEEPSEEK_API_KEY</code> sia impostata.
@@ -2131,7 +2109,10 @@ const buildBackup = () => ({
       <div className="flex-1 flex flex-col overflow-hidden">
         <header className="bg-white shadow-sm z-30 p-4 flex justify-between items-center md:hidden">
            <span className="font-bold text-slate-700 flex items-center gap-2"><Zap className="text-yellow-500 w-5 h-5"/> FIXLAB</span>
-           <button onClick={() => setIsSidebarOpen(!isSidebarOpen)}><Menu className="w-6 h-6 text-slate-600" /></button>
+           <div className="flex items-center gap-2">
+             <button onClick={handleLogout} className="px-2 py-1 text-xs bg-slate-100 border rounded">Logout</button>
+             <button onClick={() => setIsSidebarOpen(!isSidebarOpen)}><Menu className="w-6 h-6 text-slate-600" /></button>
+           </div>
         </header>
         <main className="flex-1 overflow-y-auto p-4 md:p-8">
           <div className="max-w-6xl mx-auto pb-20">

@@ -41,8 +41,7 @@ export const config = {
   JWT_REFRESH_SECRET: (process.env.JWT_REFRESH_SECRET || '').trim() || crypto.randomBytes(32).toString('hex'),
   ACCESS_TOKEN_TTL_SECONDS: Number(process.env.ACCESS_TOKEN_TTL_SECONDS || 900),
   REFRESH_TOKEN_TTL_SECONDS: Number(process.env.REFRESH_TOKEN_TTL_SECONDS || 60 * 60 * 24 * 14),
-  ADMIN_DEFAULT_PASSWORD: (process.env.ADMIN_DEFAULT_PASSWORD || 'admin123!').trim(),
-  TECH_DEFAULT_PASSWORD: (process.env.TECH_DEFAULT_PASSWORD || 'tecnico123!').trim(),
-  READ_DEFAULT_PASSWORD: (process.env.READ_DEFAULT_PASSWORD || 'lettura123!').trim(),
+  ADMIN_USER: (process.env.ADMIN_USER || 'admin').trim(),
+  ADMIN_PASS: (process.env.ADMIN_PASS || '').trim(),
   DB_PATH: process.env.DB_PATH || path.join(__dirname, 'data', 'gestionale.db'),
 }

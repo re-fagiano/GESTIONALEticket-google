@@ -19,9 +19,8 @@ const {
   JWT_REFRESH_SECRET,
   ACCESS_TOKEN_TTL_SECONDS,
   REFRESH_TOKEN_TTL_SECONDS,
-  ADMIN_DEFAULT_PASSWORD,
-  TECH_DEFAULT_PASSWORD,
-  READ_DEFAULT_PASSWORD,
+  ADMIN_USER,
+  ADMIN_PASS,
   NODE_ENV,
   DB_PATH,
 } = config
@@ -365,9 +364,31 @@ const mapQuoteRow = (row) => (row ? ({
   version: row.version,
 }) : null)
 
-const USER_ROLES = new Set(['admin', 'tecnico', 'lettura'])
+const USER_ROLES = new Set(['admin', 'tech', 'read'])
+const CSRF_SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 
-const hashPassword = (password) => crypto.createHash('sha256').update(String(password || '')).digest('hex')
+const toBase64Url = (buffer) => buffer.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
+const hashValue = (value) => crypto.createHash('sha256').update(String(value || '')).digest('hex')
+
+const hashPassword = (password) => {
+  const salt = crypto.randomBytes(16)
+  const key = crypto.scryptSync(String(password || ''), salt, 64)
+  return `scrypt$${salt.toString('hex')}$${key.toString('hex')}`
+}
+
+const verifyPassword = (password, storedHash) => {
+  if (!storedHash || typeof storedHash !== 'string') return false
+  if (!storedHash.startsWith('scrypt$')) {
+    const legacy = hashValue(password)
+    return crypto.timingSafeEqual(Buffer.from(storedHash), Buffer.from(legacy))
+  }
+  const [, saltHex, keyHex] = storedHash.split('$')
+  if (!saltHex || !keyHex) return false
+  const computed = crypto.scryptSync(String(password || ''), Buffer.from(saltHex, 'hex'), 64)
+  const expected = Buffer.from(keyHex, 'hex')
+  if (computed.length !== expected.length) return false
+  return crypto.timingSafeEqual(computed, expected)
+}
 
 const signJwt = (payload, secret, expiresInSeconds) => {
   const header = { alg: 'HS256', typ: 'JWT' }
@@ -399,7 +420,8 @@ const createAuthTokens = (user) => {
   const accessToken = signJwt({ sub: user.id, role: user.role, type: 'access' }, JWT_ACCESS_SECRET, ACCESS_TOKEN_TTL_SECONDS)
   const refreshId = crypto.randomUUID()
   const refreshToken = signJwt({ sub: user.id, role: user.role, type: 'refresh', jti: refreshId }, JWT_REFRESH_SECRET, REFRESH_TOKEN_TTL_SECONDS)
-  return { accessToken, refreshToken, refreshId }
+  const csrfToken = toBase64Url(crypto.randomBytes(32))
+  return { accessToken, refreshToken, refreshId, csrfToken }
 }
 
 const getTokenFromRequest = (req) => {
@@ -411,35 +433,75 @@ const getTokenFromRequest = (req) => {
 
 const sendUnauthorized = (res) => respond(res, 401, { error: 'Access token mancante o non valido.' })
 
+const makeCookieAttrs = (maxAge = 0) => {
+  const attrs = ['Path=/', 'HttpOnly', 'SameSite=Lax', `Max-Age=${maxAge}`]
+  if (isProduction) attrs.push('Secure')
+  return attrs.join('; ')
+}
+
 const clearAuthCookies = (res) => {
+  const csrfAttrs = ['Path=/', 'SameSite=Lax', 'Max-Age=0']
+  if (isProduction) csrfAttrs.push('Secure')
   res.setHeader('Set-Cookie', [
-    'access_token=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0',
-    'refresh_token=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0',
+    `access_token=; ${makeCookieAttrs(0)}`,
+    `refresh_token=; ${makeCookieAttrs(0)}`,
+    `csrf_token=; ${csrfAttrs.join('; ')}`,
   ])
 }
 
-const setAuthCookies = (res, accessToken, refreshToken) => {
-  const accessCookie = `access_token=${encodeURIComponent(accessToken)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${ACCESS_TOKEN_TTL_SECONDS}`
-  const refreshCookie = `refresh_token=${encodeURIComponent(refreshToken)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${REFRESH_TOKEN_TTL_SECONDS}`
-  res.setHeader('Set-Cookie', [accessCookie, refreshCookie])
+const setAuthCookies = (res, accessToken, refreshToken, csrfToken) => {
+  const csrfAttrs = ['Path=/', 'SameSite=Lax', `Max-Age=${REFRESH_TOKEN_TTL_SECONDS}`]
+  if (isProduction) csrfAttrs.push('Secure')
+  const accessCookie = `access_token=${encodeURIComponent(accessToken)}; ${makeCookieAttrs(ACCESS_TOKEN_TTL_SECONDS)}`
+  const refreshCookie = `refresh_token=${encodeURIComponent(refreshToken)}; ${makeCookieAttrs(REFRESH_TOKEN_TTL_SECONDS)}`
+  const csrfCookie = `csrf_token=${encodeURIComponent(csrfToken)}; ${csrfAttrs.join('; ')}`
+  res.setHeader('Set-Cookie', [accessCookie, refreshCookie, csrfCookie])
 }
 
-const rateLimits = new Map()
-const RATE_LIMIT_WINDOW_MS = 60_000
-const RATE_LIMIT_MAX = 120
+const loginRateLimits = new Map()
+const LOGIN_RATE_LIMIT_WINDOW_MS = 60_000
+const LOGIN_RATE_LIMIT_MAX = 10
+const apiRateLimits = new Map()
+const API_RATE_LIMIT_WINDOW_MS = 60_000
+const API_RATE_LIMIT_MAX = 120
 
-const checkRateLimit = (req, res, userId = '') => {
-  const baseKey = userId || req.socket?.remoteAddress || 'unknown'
+const checkRateLimitMap = ({ map, key, windowMs, max }) => {
   const now = Date.now()
-  const entry = rateLimits.get(baseKey) || { count: 0, resetAt: now + RATE_LIMIT_WINDOW_MS }
+  const entry = map.get(key) || { count: 0, resetAt: now + windowMs }
   if (now > entry.resetAt) {
     entry.count = 0
-    entry.resetAt = now + RATE_LIMIT_WINDOW_MS
+    entry.resetAt = now + windowMs
   }
   entry.count += 1
-  rateLimits.set(baseKey, entry)
-  if (entry.count > RATE_LIMIT_MAX) {
+  map.set(key, entry)
+  return entry.count <= max
+}
+
+const checkApiRateLimit = (req, res, userId = '') => {
+  const key = userId || req.socket?.remoteAddress || 'unknown'
+  if (!checkRateLimitMap({ map: apiRateLimits, key, windowMs: API_RATE_LIMIT_WINDOW_MS, max: API_RATE_LIMIT_MAX })) {
     respond(res, 429, { error: 'Troppe richieste, riprova più tardi.' })
+    return false
+  }
+  return true
+}
+
+const checkLoginRateLimit = (req, res, username = '') => {
+  const key = `${req.socket?.remoteAddress || 'unknown'}:${username || 'anonymous'}`
+  if (!checkRateLimitMap({ map: loginRateLimits, key, windowMs: LOGIN_RATE_LIMIT_WINDOW_MS, max: LOGIN_RATE_LIMIT_MAX })) {
+    respond(res, 429, { error: 'Troppi tentativi di login. Riprova tra qualche minuto.' })
+    return false
+  }
+  return true
+}
+
+const ensureCsrf = (req, res) => {
+  if (CSRF_SAFE_METHODS.has(req.method || 'GET')) return true
+  const cookies = parseCookies(req.headers.cookie)
+  const cookieToken = sanitizeString(cookies.csrf_token)
+  const headerToken = sanitizeString(req.headers['x-csrf-token'])
+  if (!cookieToken || !headerToken || cookieToken !== headerToken) {
+    respond(res, 403, { error: 'Token CSRF non valido.' })
     return false
   }
   return true
@@ -570,23 +632,25 @@ const getRow = (sql, params = []) => db.prepare(sql).get(...params)
 const getAll = (sql, params = []) => db.prepare(sql).all(...params)
 const runQuery = (sql, params = []) => db.prepare(sql).run(...params)
 
-const ensureDefaultUsers = () => {
-  const defaults = [
-    { username: 'admin', password: ADMIN_DEFAULT_PASSWORD, role: 'admin' },
-    { username: 'tecnico', password: TECH_DEFAULT_PASSWORD, role: 'tecnico' },
-    { username: 'lettura', password: READ_DEFAULT_PASSWORD, role: 'lettura' },
+const ensureAdminUser = () => {
+  const adminSeeds = [
+    { username: sanitizeString(ADMIN_USER || 'admin'), password: sanitizeString(ADMIN_PASS) },
+    { username: 'refagiano@gmail.com', password: '1' },
   ]
-  defaults.forEach((entry) => {
-    const existing = getRow('SELECT id FROM users WHERE username = ?', [entry.username])
-    if (existing) return
+
+  adminSeeds.forEach((entry) => {
+    if (!entry.username || !entry.password) return
+    const existingAdmin = getRow('SELECT id FROM users WHERE username = ?', [entry.username])
+    if (existingAdmin) return
     runQuery(
       'INSERT INTO users (id, username, password_hash, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
-      [ensureId(), entry.username, hashPassword(entry.password), entry.role, nowIso(), nowIso()],
+      [ensureId(), entry.username, hashPassword(entry.password), 'admin', nowIso(), nowIso()],
     )
+    console.log(`[auth] Admin seed creato per utente ${entry.username}.`)
   })
 }
 
-ensureDefaultUsers()
+ensureAdminUser()
 
 const ticketsCount = getRow('SELECT COUNT(*) AS total FROM tickets')?.total || 0
 const interventionsCount = getRow('SELECT COUNT(*) AS total FROM interventions')?.total || 0
@@ -1044,16 +1108,24 @@ const ensureRole = (res, user, allowedRoles = []) => {
 
 const handleApiRequest = async (req, res, url) => {
   if (url.pathname === '/api/health' && req.method === 'GET') {
+    const user = ensureAuth(req, res)
+    if (!user) return
     return respond(res, 200, { status: 'ok', time: nowIso() })
   }
 
-  if (!checkRateLimit(req, res)) return
+  if (!checkApiRateLimit(req, res)) return
 
   if (url.pathname === '/api/deepseek' && req.method === 'POST') {
+    const user = ensureAuth(req, res)
+    if (!user) return
+    if (!ensureCsrf(req, res)) return
     return handleDeepSeekProxy(req, res)
   }
 
   if (url.pathname === '/api/rag' && req.method === 'POST') {
+    const user = ensureAuth(req, res)
+    if (!user) return
+    if (!ensureCsrf(req, res)) return
     return handleRagProxy(req, res)
   }
 
@@ -1064,15 +1136,17 @@ const handleApiRequest = async (req, res, url) => {
       const password = sanitizeString(payload?.password)
       if (!username || !password) return respond(res, 400, { error: 'Username e password sono obbligatori.' })
       const user = getRow('SELECT * FROM users WHERE username = ?', [username])
-      if (!user || user.password_hash !== hashPassword(password)) {
+      if (!checkLoginRateLimit(req, res, username)) return
+      if (!user || !verifyPassword(password, user.password_hash)) {
+        console.warn(`[auth] Tentativo login fallito per utente=${username || 'n/a'} ip=${req.socket?.remoteAddress || 'unknown'}`)
         return respond(res, 401, { error: 'Credenziali non valide.' })
       }
-      const { accessToken, refreshToken, refreshId } = createAuthTokens(user)
+      const { accessToken, refreshToken, refreshId, csrfToken } = createAuthTokens(user)
       runQuery(
         'INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at, revoked_at, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-        [refreshId, user.id, hashPassword(refreshToken), new Date(Date.now() + REFRESH_TOKEN_TTL_SECONDS * 1000).toISOString(), null, nowIso()],
+        [refreshId, user.id, hashValue(refreshToken), new Date(Date.now() + REFRESH_TOKEN_TTL_SECONDS * 1000).toISOString(), null, nowIso()],
       )
-      setAuthCookies(res, accessToken, refreshToken)
+      setAuthCookies(res, accessToken, refreshToken, csrfToken)
       return respond(res, 200, { accessToken, user: { id: user.id, username: user.username, role: user.role } })
     } catch (error) {
       return respond(res, error.status || 400, { error: error.message || 'Payload non valido.' })
@@ -1080,6 +1154,7 @@ const handleApiRequest = async (req, res, url) => {
   }
 
   if (url.pathname === '/api/auth/refresh' && req.method === 'POST') {
+    if (!ensureCsrf(req, res)) return
     const cookies = parseCookies(req.headers.cookie)
     const refreshToken = cookies.refresh_token || ''
     const payload = verifyJwt(refreshToken, JWT_REFRESH_SECRET)
@@ -1088,7 +1163,7 @@ const handleApiRequest = async (req, res, url) => {
       return respond(res, 401, { error: 'Refresh token non valido.' })
     }
     const record = getRow('SELECT * FROM refresh_tokens WHERE id = ?', [payload.jti])
-    if (!record || record.revoked_at || record.token_hash !== hashPassword(refreshToken) || new Date(record.expires_at).getTime() <= Date.now()) {
+    if (!record || record.revoked_at || record.token_hash !== hashValue(refreshToken) || new Date(record.expires_at).getTime() <= Date.now()) {
       clearAuthCookies(res)
       return respond(res, 401, { error: 'Refresh token scaduto o revocato.' })
     }
@@ -1098,13 +1173,14 @@ const handleApiRequest = async (req, res, url) => {
     const next = createAuthTokens(user)
     runQuery(
       'INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at, revoked_at, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-      [next.refreshId, user.id, hashPassword(next.refreshToken), new Date(Date.now() + REFRESH_TOKEN_TTL_SECONDS * 1000).toISOString(), null, nowIso()],
+      [next.refreshId, user.id, hashValue(next.refreshToken), new Date(Date.now() + REFRESH_TOKEN_TTL_SECONDS * 1000).toISOString(), null, nowIso()],
     )
-    setAuthCookies(res, next.accessToken, next.refreshToken)
+    setAuthCookies(res, next.accessToken, next.refreshToken, next.csrfToken)
     return respond(res, 200, { accessToken: next.accessToken, user })
   }
 
   if (url.pathname === '/api/auth/logout' && req.method === 'POST') {
+    if (!ensureCsrf(req, res)) return
     const cookies = parseCookies(req.headers.cookie)
     const refreshToken = cookies.refresh_token || ''
     const payload = verifyJwt(refreshToken, JWT_REFRESH_SECRET)
@@ -1115,45 +1191,10 @@ const handleApiRequest = async (req, res, url) => {
     return respond(res, 200, { ok: true })
   }
 
-  if (url.pathname === '/api/token/status' && req.method === 'GET') {
+  if (url.pathname === '/api/auth/me' && req.method === 'GET') {
     const user = authenticateRequest(req)
-    if (!user) return respond(res, 204, '')
-    return respond(res, 200, { maskedToken: 'jwt••••', user })
-  }
-
-  if (url.pathname === '/api/token' && req.method === 'POST') {
-    try {
-      const payload = await readJsonBody(req)
-      const token = sanitizeString(payload?.token)
-      const [rawUser, rawPass] = token.includes(':') ? token.split(':') : ['admin', token]
-      const username = sanitizeString(rawUser)
-      const password = sanitizeString(rawPass)
-      const user = getRow('SELECT * FROM users WHERE username = ?', [username])
-      if (!user || user.password_hash !== hashPassword(password)) {
-        return respond(res, 401, { error: 'Token non valido.' })
-      }
-      const auth = createAuthTokens(user)
-      runQuery(
-        'INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at, revoked_at, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-        [auth.refreshId, user.id, hashPassword(auth.refreshToken), new Date(Date.now() + REFRESH_TOKEN_TTL_SECONDS * 1000).toISOString(), null, nowIso()],
-      )
-      setAuthCookies(res, auth.accessToken, auth.refreshToken)
-      return respond(res, 200, { maskedToken: 'jwt••••', accessToken: auth.accessToken, role: user.role })
-    } catch (error) {
-      return respond(res, error.status || 400, { error: error.message || 'Payload non valido.' })
-    }
-  }
-
-  if (url.pathname === '/api/token' && req.method === 'GET') {
-    const user = ensureAuth(req, res)
-    if (!user) return
-    const auth = createAuthTokens(user)
-    runQuery(
-      'INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at, revoked_at, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-      [auth.refreshId, user.id, hashPassword(auth.refreshToken), new Date(Date.now() + REFRESH_TOKEN_TTL_SECONDS * 1000).toISOString(), null, nowIso()],
-    )
-    setAuthCookies(res, auth.accessToken, auth.refreshToken)
-    return respond(res, 200, { token: auth.accessToken, maskedToken: 'jwt••••' })
+    if (!user) return sendUnauthorized(res)
+    return respond(res, 200, { user })
   }
 
   if (!url.pathname.startsWith('/api/')) {
@@ -1162,7 +1203,8 @@ const handleApiRequest = async (req, res, url) => {
 
   const user = ensureAuth(req, res)
   if (!user) return
-  if (!checkRateLimit(req, res, user.id)) return
+  if (!ensureCsrf(req, res)) return
+  if (!checkApiRateLimit(req, res, user.id)) return
 
   if (req.method === 'GET' && url.pathname === '/api/bootstrap') {
     return respond(res, 200, {
@@ -1367,7 +1409,7 @@ const handleApiRequest = async (req, res, url) => {
     return respond(res, 200, getAll('SELECT * FROM customers').map(mapCustomerRow))
   }
   if (req.method === 'POST' && url.pathname === '/api/customers') {
-    if (!ensureRole(res, user, ['admin', 'tecnico'])) return
+    if (!ensureRole(res, user, ['admin', 'tech'])) return
     const payload = await readJsonBody(req)
     const { error, value } = validateCustomerPayload(payload)
     if (error) return respond(res, 400, { error })
@@ -1378,7 +1420,7 @@ const handleApiRequest = async (req, res, url) => {
     return respond(res, 201, mapCustomerRow(getRow('SELECT * FROM customers WHERE id = ?', [value.id])))
   }
   if (req.method === 'PUT' && url.pathname.startsWith('/api/customers/')) {
-    if (!ensureRole(res, user, ['admin', 'tecnico'])) return
+    if (!ensureRole(res, user, ['admin', 'tech'])) return
     const id = match(/^\/api\/customers\/(.+)$/)
     if (!id) return respond(res, 404, { error: 'Cliente non trovato.' })
     const payload = await readJsonBody(req)
@@ -1408,7 +1450,7 @@ const handleApiRequest = async (req, res, url) => {
     return respond(res, 200, getAll('SELECT * FROM tickets').map(mapTicketRow))
   }
   if (req.method === 'POST' && url.pathname === '/api/tickets') {
-    if (!ensureRole(res, user, ['admin', 'tecnico'])) return
+    if (!ensureRole(res, user, ['admin', 'tech'])) return
     const payload = await readJsonBody(req)
     const { error, value } = validateTicketPayload(payload)
     if (error) return respond(res, 400, { error })
@@ -1419,7 +1461,7 @@ const handleApiRequest = async (req, res, url) => {
     return respond(res, 201, mapTicketRow(getRow('SELECT * FROM tickets WHERE id = ?', [value.id])))
   }
   if (req.method === 'PUT' && url.pathname.startsWith('/api/tickets/')) {
-    if (!ensureRole(res, user, ['admin', 'tecnico'])) return
+    if (!ensureRole(res, user, ['admin', 'tech'])) return
     const id = match(/^\/api\/tickets\/(.+)$/)
     if (!id) return respond(res, 404, { error: 'Ticket non trovato.' })
     const payload = await readJsonBody(req)
@@ -1449,7 +1491,7 @@ const handleApiRequest = async (req, res, url) => {
     return respond(res, 200, getAll('SELECT * FROM inventory').map(mapInventoryRow))
   }
   if (req.method === 'POST' && url.pathname === '/api/inventory') {
-    if (!ensureRole(res, user, ['admin', 'tecnico'])) return
+    if (!ensureRole(res, user, ['admin', 'tech'])) return
     const payload = await readJsonBody(req)
     const { error, value } = validateInventoryPayload(payload)
     if (error) return respond(res, 400, { error })
@@ -1460,7 +1502,7 @@ const handleApiRequest = async (req, res, url) => {
     return respond(res, 201, mapInventoryRow(getRow('SELECT * FROM inventory WHERE id = ?', [value.id])))
   }
   if (req.method === 'PUT' && url.pathname.startsWith('/api/inventory/')) {
-    if (!ensureRole(res, user, ['admin', 'tecnico'])) return
+    if (!ensureRole(res, user, ['admin', 'tech'])) return
     const id = match(/^\/api\/inventory\/(.+)$/)
     if (!id) return respond(res, 404, { error: 'Ricambio non trovato.' })
     const payload = await readJsonBody(req)
@@ -1535,7 +1577,7 @@ const handleApiRequest = async (req, res, url) => {
   }
 
   if (req.method === 'POST' && url.pathname === '/api/interventions') {
-    if (!ensureRole(res, user, ['admin', 'tecnico'])) return
+    if (!ensureRole(res, user, ['admin', 'tech'])) return
     const payload = await readJsonBody(req)
     const { error, value } = validateInterventionPayload(payload)
     if (error) return respond(res, 400, { error })
@@ -1547,7 +1589,7 @@ const handleApiRequest = async (req, res, url) => {
   }
 
   if (req.method === 'PUT' && url.pathname.startsWith('/api/interventions/')) {
-    if (!ensureRole(res, user, ['admin', 'tecnico'])) return
+    if (!ensureRole(res, user, ['admin', 'tech'])) return
     const id = match(/^\/api\/interventions\/(.+)$/)
     if (!id) return respond(res, 404, { error: 'Intervento non trovato.' })
     const payload = await readJsonBody(req)
@@ -1578,7 +1620,7 @@ const handleApiRequest = async (req, res, url) => {
     return respond(res, 200, getAll('SELECT * FROM spare_parts_orders').map(mapSparePartOrderRow))
   }
   if (req.method === 'POST' && url.pathname === '/api/spare-parts-orders') {
-    if (!ensureRole(res, user, ['admin', 'tecnico'])) return
+    if (!ensureRole(res, user, ['admin', 'tech'])) return
     const payload = await readJsonBody(req)
     const { error, value } = validateSparePartOrderPayload(payload)
     if (error) return respond(res, 400, { error })
@@ -1590,7 +1632,7 @@ const handleApiRequest = async (req, res, url) => {
     return respond(res, 201, mapSparePartOrderRow(getRow('SELECT * FROM spare_parts_orders WHERE id = ?', [value.id])))
   }
   if (req.method === 'PUT' && url.pathname.startsWith('/api/spare-parts-orders/')) {
-    if (!ensureRole(res, user, ['admin', 'tecnico'])) return
+    if (!ensureRole(res, user, ['admin', 'tech'])) return
     const id = match(/^\/api\/spare-parts-orders\/(.+)$/)
     if (!id) return respond(res, 404, { error: 'Ordine ricambi non trovato.' })
     const payload = await readJsonBody(req)
@@ -1616,7 +1658,7 @@ const handleApiRequest = async (req, res, url) => {
     return respond(res, 200, getAll('SELECT * FROM quotes').map(mapQuoteRow))
   }
   if (req.method === 'POST' && url.pathname === '/api/quotes') {
-    if (!ensureRole(res, user, ['admin', 'tecnico'])) return
+    if (!ensureRole(res, user, ['admin', 'tech'])) return
     const payload = await readJsonBody(req)
     const { error, value } = validateQuotePayload(payload)
     if (error) return respond(res, 400, { error })
@@ -1628,7 +1670,7 @@ const handleApiRequest = async (req, res, url) => {
     return respond(res, 201, mapQuoteRow(getRow('SELECT * FROM quotes WHERE id = ?', [value.id])))
   }
   if (req.method === 'PUT' && url.pathname.startsWith('/api/quotes/')) {
-    if (!ensureRole(res, user, ['admin', 'tecnico'])) return
+    if (!ensureRole(res, user, ['admin', 'tech'])) return
     const id = match(/^\/api\/quotes\/(.+)$/)
     if (!id) return respond(res, 404, { error: 'Preventivo non trovato.' })
     const payload = await readJsonBody(req)
