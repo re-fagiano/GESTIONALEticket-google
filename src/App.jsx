@@ -26,13 +26,7 @@ import { INVENTORY_HEADERS, parseInventoryFile } from './utils/inventoryImport';
 
 const isBrowser = typeof window !== 'undefined';
 const isLocalhost = isBrowser && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
-const allowLocalOverrides = isLocalhost;
 const forcedProxyEndpoint = '/api/deepseek';
-
-const DEEPSEEK_API_URL = (import.meta.env.VITE_DEEPSEEK_API_URL || 'https://api.deepseek.com').replace(/\/$/, '');
-const DEEPSEEK_API_KEY = (import.meta.env.VITE_DEEPSEEK_API_KEY || '').trim();
-const HAS_ENV_DEEPSEEK_KEY = Boolean(DEEPSEEK_API_KEY && DEEPSEEK_API_KEY.trim());
-const ENV_DEEPSEEK_API_URL = DEEPSEEK_API_URL;
 const RAG_API_URL = (import.meta.env.VITE_RAG_API_URL || '').trim().replace(/\/$/, '');
 const RAG_ENDPOINT = RAG_API_URL || '/api/rag';
 
@@ -610,34 +604,11 @@ export default function App() {
   const [loadingAi, setLoadingAi] = useState(false);
   const [currentTicketForAi, setCurrentTicketForAi] = useState(null);
   const [aiError, setAiError] = useState(null);
-  const [runtimeApiKey, setRuntimeApiKey] = useState(() => {
-    if (!allowLocalOverrides) return '';
-    const stored = safeGetItem('deepseekApiKey', '');
-    return stored ? stored.trim() : '';
-  });
-  const [runtimeApiUrl, setRuntimeApiUrl] = useState(() => {
-    if (!allowLocalOverrides) return forcedProxyEndpoint;
-    const stored = safeGetItem('deepseekApiUrl', '');
-    return (stored || ENV_DEEPSEEK_API_URL || '').trim();
-  });
-
-  const apiKeyToUse = allowLocalOverrides ? (runtimeApiKey || DEEPSEEK_API_KEY).trim() : '';
-  const apiUrlToUse = allowLocalOverrides ? (runtimeApiUrl || DEEPSEEK_API_URL).trim() : forcedProxyEndpoint;
-  const hasClientKey = Boolean(apiKeyToUse);
-  const shouldUseProxy = !allowLocalOverrides || apiUrlToUse.startsWith('/');
-  const endpoint = shouldUseProxy ? forcedProxyEndpoint : `${apiUrlToUse}/chat/completions`;
+  const endpoint = forcedProxyEndpoint;
   const requestHeaders = {
     'Content-Type': 'application/json',
-    ...(!shouldUseProxy && hasClientKey ? { Authorization: `Bearer ${apiKeyToUse}` } : {})
   };
-  const keyModeLabel = !allowLocalOverrides
-    ? 'Proxy backend (chiavi gestite lato server)'
-    : runtimeApiKey
-      ? 'Usando chiave locale'
-      : HAS_ENV_DEEPSEEK_KEY
-        ? 'Usando chiave da build'
-        : 'Nessuna chiave';
-  const aiEnabled = shouldUseProxy || hasClientKey;
+  const aiEnabled = true;
 
   const apiFetch = async (path, options = {}) => {
     const headers = {
@@ -738,19 +709,6 @@ export default function App() {
     return () => clearInterval(interval);
   }, [apiToken]);
 
-  useEffect(() => {
-    if (!allowLocalOverrides) return;
-    if (!safeSetItem('deepseekApiKey', runtimeApiKey)) {
-      setStorageWarning('Impossibile salvare la chiave DeepSeek nel browser: storage disabilitato.');
-    }
-  }, [runtimeApiKey]);
-
-  useEffect(() => {
-    if (!allowLocalOverrides) return;
-    if (runtimeApiUrl && !safeSetItem('deepseekApiUrl', runtimeApiUrl)) {
-      setStorageWarning('Impossibile salvare l\'endpoint DeepSeek nel browser: storage disabilitato.');
-    }
-  }, [runtimeApiUrl]);
 
   // Forms
   const [newCustomer, setNewCustomer] = useState({ name: '', email: '', phone: '', address: '' });
@@ -1860,26 +1818,14 @@ const buildBackup = () => ({
   };
 
   const getDeepSeekAnalysis = async (ticketDescription, ticketSubject) => {
-    const hasKey = shouldUseProxy ? true : Boolean(apiKeyToUse);
     const safeSubject = (ticketSubject || '').trim() || 'Intervento senza oggetto';
     const safeDescription = (ticketDescription || '').trim() || 'Nessuna descrizione fornita.';
 
-    if (!apiUrlToUse && !shouldUseProxy) {
-      setAiError("Imposta un endpoint valido per DeepSeek (VITE_DEEPSEEK_API_URL).");
-      return;
-    }
 
     setLoadingAi(true);
     setAiSuggestion(null);
     setAiError(null);
 
-    if (!hasKey) {
-      const offline = buildOfflineSuggestion(ticketSubject, ticketDescription);
-      setAiSuggestion({ text: offline, confidence: "Offline" });
-      setAiError("Configura la chiave API di DeepSeek (VITE_DEEPSEEK_API_KEY) o inserisci una chiave locale nel browser.");
-      setLoadingAi(false);
-      return;
-    }
 
     const systemPrompt = "Sei un tecnico esperto di elettrodomestici. Analizza il problema e fornisci: 1) Possibile Causa 2) Diagnosi 3) Ricambi.";
 
@@ -1893,14 +1839,12 @@ const buildBackup = () => ({
       const data = await response.json();
       const content = data?.choices?.[0]?.message?.content;
       if (!content) throw new Error("Risposta AI non valida.");
-      setAiSuggestion({ text: content, confidence: shouldUseProxy || hasClientKey ? "DeepSeek AI" : "Offline" });
+      setAiSuggestion({ text: content, confidence: "DeepSeek AI" });
     } catch (error) {
       const offline = buildOfflineSuggestion(ticketSubject, ticketDescription);
       let message = error?.message || "Errore connessione AI.";
       if (message.toLowerCase().includes("failed to fetch")) {
-        message = shouldUseProxy
-          ? "Impossibile contattare il proxy DeepSeek (/api/deepseek). Verifica che il server sia avviato e che la variabile DEEPSEEK_API_KEY sia impostata lato backend."
-          : "Impossibile contattare DeepSeek. Conferma l'endpoint (VITE_DEEPSEEK_API_URL) HTTPS e verifica che la chiave VITE_DEEPSEEK_API_KEY/DEEPSEEK_API_KEY sia presente (o incollata qui sotto).";
+        message = "Impossibile contattare il proxy DeepSeek (/api/deepseek). Verifica che il server sia avviato e che la variabile DEEPSEEK_API_KEY sia impostata lato backend.";
       }
       setAiSuggestion({ text: offline, confidence: "Offline" });
       setAiError(message);
@@ -2438,36 +2382,9 @@ const buildBackup = () => ({
       </div>
       <div className="bg-white rounded shadow p-4 border border-slate-200">
         <h2 className="text-lg font-bold text-slate-800 mb-2">Configurazione AI DeepSeek</h2>
-        {allowLocalOverrides ? (
-          <div className="space-y-3">
-            <div>
-              <label className="text-xs font-semibold text-slate-700">Chiave DeepSeek</label>
-              <input
-                type="password"
-                className="w-full border rounded p-2 text-sm"
-                placeholder="Incolla la chiave DeepSeek"
-                value={runtimeApiKey}
-                onChange={(e) => setRuntimeApiKey(e.target.value)}
-              />
-            </div>
-            <div>
-              <label className="text-xs font-semibold text-slate-700">Endpoint DeepSeek</label>
-              <input
-                className="w-full border rounded p-2 text-sm"
-                placeholder="https://api.deepseek.com"
-                value={runtimeApiUrl}
-                onChange={(e) => setRuntimeApiUrl(e.target.value)}
-              />
-            </div>
-            <p className="text-xs text-slate-500">
-              Usa queste impostazioni solo per test locali. In produzione il proxy <code className="font-mono">/api/deepseek</code> gestisce le chiavi lato server.
-            </p>
-          </div>
-        ) : (
-          <p className="text-sm text-slate-500">
-            La configurazione AI è gestita dal server. Assicurati che <code className="font-mono">DEEPSEEK_API_KEY</code> sia impostata.
-          </p>
-        )}
+        <p className="text-sm text-slate-500">
+          La configurazione AI è gestita dal server. Assicurati che <code className="font-mono">DEEPSEEK_API_KEY</code> sia impostata.
+        </p>
       </div>
     </div>
   );
@@ -2833,7 +2750,7 @@ const buildBackup = () => ({
                               )}
                               {!aiEnabled && (
                                 <div className="mt-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 p-2 rounded">
-                                  AI non configurata: imposta la chiave nelle impostazioni o verifica il proxy backend.
+                                  AI non configurata: verifica che il proxy backend sia attivo e che DEEPSEEK_API_KEY sia configurata lato server.
                                 </div>
                               )}
                               <div className="mt-4">
