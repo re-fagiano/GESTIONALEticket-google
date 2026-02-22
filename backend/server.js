@@ -6,7 +6,6 @@ import db from './db/database.js';
 import ticketsRouter from './routes/tickets.js';
 import clientiRouter from './routes/clienti.js';
 import magazzinoRouter from './routes/magazzino.js';
-import authRouter from './routes/auth.js';
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -16,33 +15,11 @@ const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, '..');
 const distDir = path.join(rootDir, 'dist');
 
-
-const parseCookies = (cookieHeader = '') => {
-  return String(cookieHeader)
-    .split(';')
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .reduce((acc, part) => {
-      const idx = part.indexOf('=');
-      if (idx <= 0) return acc;
-      const key = decodeURIComponent(part.slice(0, idx).trim());
-      const value = decodeURIComponent(part.slice(idx + 1).trim());
-      acc[key] = value;
-      return acc;
-    }, {});
-};
-
 const schema = fs.readFileSync(path.join(__dirname, 'db', 'schema.sql'), 'utf8');
 db.exec(schema);
 
 app.use(express.json());
-app.use((req, _res, next) => {
-  req.cookies = parseCookies(req.headers.cookie || '');
-  next();
-});
 
-
-app.use('/api/auth', authRouter);
 app.use('/api/tickets', ticketsRouter);
 app.use('/api/clienti', clientiRouter);
 app.use('/api/magazzino', magazzinoRouter);
