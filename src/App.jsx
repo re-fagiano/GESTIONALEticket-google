@@ -26,16 +26,17 @@ import {
 } from './services/api';
 import {
   getStorageState,
-  idbSet,
   loadBackupAtFromIdb,
   loadBackupAtSync,
   loadBackupFromIdb,
+  loadLatestValidBackup,
   loadBackupSync,
   loadCache,
   loadCacheFromIdb,
   readRawSync,
   saveBackup,
   saveCache,
+  saveMbiSnapshot,
   writeRaw
 } from './services/clientStorage';
 import Sidebar from './components/Sidebar';
@@ -209,7 +210,17 @@ export default function App() {
           if (backupRaw) setLatestBackup(backupRaw);
           if (backupAt) setAutoBackupAt(backupAt);
         } catch (error) {
-          console.warn('Fallback IndexedDB non disponibile', error);
+          const recoveredBackup = await loadLatestValidBackup();
+          if (recoveredBackup) {
+            setCustomers(sanitizeCustomers(recoveredBackup.customers, initialCustomers));
+            setTickets(sanitizeTickets(recoveredBackup.tickets, initialTickets));
+            setInterventions(sanitizeInterventions(recoveredBackup.interventions, initialInterventions));
+            setInventory(sanitizeInventoryList(recoveredBackup.inventory, initialInventory));
+            setSettings(Array.isArray(recoveredBackup.settings) ? recoveredBackup.settings : []);
+            setLatestBackup(recoveredBackup);
+            setAutoBackupAt(recoveredBackup.exportedAt || null);
+            setStorageWarning('Storage locale ripristinato dall’ultimo backup valido.');
+          }
         }
       };
       loadFallback();
@@ -1005,10 +1016,8 @@ const buildBackup = () => ({
 
   const persistMbiSnapshot = async (backupPayload) => {
     try {
-      await Promise.all([
-        idbSet('mbi_snapshot', JSON.stringify(backupPayload)),
-        idbSet('mbi_snapshot_at', backupPayload.exportedAt)
-      ]);
+      const isSaved = await saveMbiSnapshot(backupPayload);
+      if (!isSaved) throw new Error('snapshot_not_saved');
       setMbiStatus(`Snapshot MBI locale aggiornato (${new Date(backupPayload.exportedAt).toLocaleTimeString('it-IT')}).`);
     } catch {
       setMbiStatus('Snapshot MBI locale non disponibile: verifica permessi storage browser.');

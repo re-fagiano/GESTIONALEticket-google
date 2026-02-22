@@ -2,6 +2,7 @@ import React, { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App'
 import './index.css'
+import { clearAllClientData } from './services/clientStorage'
 
 class RootErrorBoundary extends React.Component {
   constructor(props) {
@@ -17,8 +18,8 @@ class RootErrorBoundary extends React.Component {
     console.error('Errore inatteso render:', error, info)
   }
 
-  handleReload = () => {
-    try { localStorage.clear() } catch (e) { console.warn('Impossibile svuotare lo storage', e) }
+  handleReload = async () => {
+    await clearAllClientData()
     window.location.reload()
   }
 
