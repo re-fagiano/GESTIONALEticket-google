@@ -1502,9 +1502,14 @@ const handleApiRequest = async (req, res, url) => {
   }
 
   if (url.pathname === '/api/auth/me' && req.method === 'GET') {
-    const user = authenticateRequest(req)
-    if (!user) return respond(res, 401, { error: 'Sessione scaduta.', code: 'session_expired' })
-    return respond(res, 200, { user })
+    try {
+      const user = authenticateRequest(req)
+      if (!user) return respond(res, 401, { error: 'Sessione scaduta.', code: 'session_expired' })
+      return respond(res, 200, { user })
+    } catch (error) {
+      console.warn('[auth] /api/auth/me non disponibile temporaneamente', error)
+      return respond(res, 503, { error: 'Servizio autenticazione temporaneamente non disponibile.', code: 'auth_temporarily_unavailable' })
+    }
   }
 
   if (!url.pathname.startsWith('/api/')) {
