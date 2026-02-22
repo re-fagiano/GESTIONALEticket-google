@@ -95,6 +95,8 @@ export default function AppPage() {
   // --- STATO CALENDARIO ---
   const calendarRef = useRef(null);
   const calendarApiRef = useRef(null);
+  const calendarViewRef = useRef('dayGridMonth');
+  const calendarDateRef = useRef(nowIso());
   const [showCalendarQuickAdd, setShowCalendarQuickAdd] = useState(false);
 
   // --- STATO APP ---
@@ -2101,7 +2103,8 @@ const buildBackup = () => ({
       if (!calendarRef.current || !window.FullCalendar?.Calendar) return;
       const calendar = new window.FullCalendar.Calendar(calendarRef.current, {
         locale: 'it',
-        initialView: 'dayGridMonth',
+        initialView: calendarViewRef.current,
+        initialDate: calendarDateRef.current,
         headerToolbar: {
           left: 'prev,next today',
           center: 'title',
@@ -2114,9 +2117,18 @@ const buildBackup = () => ({
           day: 'Giorno'
         },
         editable: true,
+        eventStartEditable: true,
         selectable: true,
+        nowIndicator: true,
+        navLinks: true,
+        selectMirror: true,
         dayMaxEvents: true,
+        eventTimeFormat: { hour: '2-digit', minute: '2-digit', hour12: false },
         events: calendarEvents,
+        datesSet: (info) => {
+          calendarViewRef.current = info.view.type;
+          calendarDateRef.current = info.startStr || info.view.currentStart?.toISOString() || nowIso();
+        },
         eventDrop: async (info) => {
           const intervention = interventions.find((entry) => entry.id === info.event.id);
           if (!intervention) {
@@ -2125,6 +2137,10 @@ const buildBackup = () => ({
           }
           const saved = await handleInterventionScheduleChange(intervention, info.event.start?.toISOString());
           if (!saved) info.revert();
+        },
+        eventResize: (info) => {
+          info.revert();
+          addToast('La durata non è ancora modificabile: puoi spostare solo data e ora di inizio.', 'warning');
         },
         eventClick: (info) => {
           const intervention = interventions.find((entry) => entry.id === info.event.id);
