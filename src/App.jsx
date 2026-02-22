@@ -1,35 +1,28 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
-  LayoutDashboard,
-  Users,
-  Ticket,
-  Wrench,
-  Plus,
-  Bot,
   Menu,
-  X,
   Trash2,
   RefreshCw,
-  Zap,
-  Calendar as CalendarIcon,
   ChevronLeft,
   ChevronRight,
-  Package, // Icona Magazzino
-  AlertTriangle, // Icona Avvisi
-  Phone,
+  AlertTriangle,
   MapPin,
   Download,
   Upload,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Bot,
+  Plus,
+  Zap
 } from 'lucide-react';
 import { INVENTORY_HEADERS, parseInventoryFile } from './utils/inventoryImport';
+import { apiFetch as apiFetchRequest, apiFetchWithRetry as apiFetchWithRetryRequest, callDeepSeekApi } from './services/api';
+import Sidebar from './components/Sidebar';
+import ToastList from './components/ToastList';
+import ActiveTabContent from './pages/ActiveTabContent';
 
 const isBrowser = typeof window !== 'undefined';
 const isLocalhost = isBrowser && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
 const forcedProxyEndpoint = '/api/deepseek';
-const RAG_API_URL = (import.meta.env.VITE_RAG_API_URL || '').trim().replace(/\/$/, '');
-const RAG_ENDPOINT = RAG_API_URL || '/api/rag';
-
 const storageAvailable = typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
 const storageFallbackState = { active: false };
 const IDB_DB_NAME = 'gestionale_storage';
@@ -140,44 +133,6 @@ const safeSetItem = (key, value) => {
     idbSet(key, value).catch((error) => console.warn('Fallback IndexedDB fallito', error));
     console.warn('Impossibile scrivere su storage, i dati non saranno salvati', e);
     return false;
-  }
-};
-
-const callRagApi = async (payload = {}) => {
-  if (!payload || typeof payload !== 'object') {
-    throw new Error('Payload RAG non valido.');
-  }
-
-  try {
-    const response = await fetch(RAG_ENDPOINT, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-
-    const text = await response.text();
-    let parsed = text;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      parsed = text;
-    }
-
-    if (!response.ok) {
-      const message = parsed?.error || `Errore RAG: ${response.status}`;
-      if (typeof message === 'string' && message.toLowerCase().includes('rag_api_url')) {
-        throw new Error('RAG non configurata. Imposta VITE_RAG_API_URL (client) o RAG_API_URL (server).');
-      }
-      throw new Error(message);
-    }
-
-    return parsed;
-  } catch (error) {
-    const message = error?.message || 'Errore durante la chiamata RAG.';
-    if (message.toLowerCase().includes('rag non configurata')) {
-      throw error;
-    }
-    throw new Error(message);
   }
 };
 
@@ -605,59 +560,13 @@ export default function App() {
   const [currentTicketForAi, setCurrentTicketForAi] = useState(null);
   const [aiError, setAiError] = useState(null);
   const endpoint = forcedProxyEndpoint;
+
+  const apiFetch = (path, options = {}) => apiFetchRequest(path, options, apiToken);
+  const apiFetchWithRetry = (path, options = {}) => apiFetchWithRetryRequest(path, options, { apiToken, onRetryStatus: setRetryStatus });
   const requestHeaders = {
     'Content-Type': 'application/json',
   };
   const aiEnabled = true;
-
-  const apiFetch = async (path, options = {}) => {
-    const headers = {
-      'Content-Type': 'application/json',
-      ...(options.headers || {})
-    };
-    if (apiToken) {
-      headers.Authorization = `Bearer ${apiToken}`;
-    }
-    const response = await fetch(path, { ...options, headers, credentials: 'include' });
-    const payload = response.status === 204 ? null : await response.json().catch(() => null);
-    if (!response.ok) {
-      const error = new Error(payload?.error || `Errore API: ${response.status}`);
-      error.status = response.status;
-      error.payload = payload;
-      throw error;
-    }
-    return payload;
-  };
-
-  const apiFetchWithRetry = async (path, options = {}) => {
-    const method = (options.method || 'GET').toUpperCase();
-    const retryable = ['GET', 'PUT'].includes(method);
-    const maxAttempts = 3;
-    let attempt = 0;
-    let lastError;
-    while (attempt < maxAttempts) {
-      attempt += 1;
-      try {
-        if (attempt > 1) {
-          setRetryStatus({ attempt, maxAttempts, path });
-        }
-        const result = await apiFetch(path, options);
-        setRetryStatus(null);
-        return result;
-      } catch (error) {
-        lastError = error;
-        const status = error?.status;
-        if (!retryable || ![502, 503].includes(status) || attempt >= maxAttempts) {
-          setRetryStatus(null);
-          throw error;
-        }
-        const delay = 500 * 2 ** (attempt - 1);
-        await new Promise((resolve) => setTimeout(resolve, delay));
-      }
-    }
-    setRetryStatus(null);
-    throw lastError;
-  };
 
   const refreshFromBackend = async () => {
     if (!apiToken && !maskedToken && !isLocalhost) {
@@ -1827,18 +1736,8 @@ const buildBackup = () => ({
     setAiError(null);
 
 
-    const systemPrompt = "Sei un tecnico esperto di elettrodomestici. Analizza il problema e fornisci: 1) Possibile Causa 2) Diagnosi 3) Ricambi.";
-
     try {
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: requestHeaders,
-        body: JSON.stringify({ model: "deepseek-chat", messages: [{ role: "system", content: systemPrompt }, { role: "user", content: `Oggetto: ${safeSubject}. Descrizione: ${safeDescription}` }], stream: false })
-      });
-      if (!response.ok) throw new Error(`Errore API: ${response.status}`);
-      const data = await response.json();
-      const content = data?.choices?.[0]?.message?.content;
-      if (!content) throw new Error("Risposta AI non valida.");
+      const content = await callDeepSeekApi({ endpoint, requestHeaders, safeSubject, safeDescription });
       setAiSuggestion({ text: content, confidence: "DeepSeek AI" });
     } catch (error) {
       const offline = buildOfflineSuggestion(ticketSubject, ticketDescription);
@@ -2389,26 +2288,7 @@ const buildBackup = () => ({
     </div>
   );
 
-  const Sidebar = () => (
-    <div className={`fixed inset-y-0 left-0 z-40 w-64 bg-slate-900 text-white transition-transform duration-300 transform ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} md:relative md:translate-x-0 flex flex-col`}>
-      <div className="flex items-center justify-between p-4 border-b border-slate-700 h-16">
-        <h1 className="text-xl font-bold flex items-center gap-2"><Zap className="w-6 h-6 text-yellow-400" /> FIXLAB AI</h1>
-        <button onClick={() => setIsSidebarOpen(false)} className="md:hidden"><X className="w-6 h-6" /></button>
-      </div>
-      <nav className="p-4 space-y-2 flex-1">
-        <button onClick={() => switchToTab('dashboard')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'dashboard' ? 'bg-slate-800 text-yellow-400' : ''}`}><LayoutDashboard size={20}/> Dashboard</button>
-        <button onClick={() => switchToTab('customers')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'customers' ? 'bg-slate-800 text-yellow-400' : ''}`}><Users size={20}/> Clienti</button>
-        <button onClick={() => switchToTab('chiamate')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'chiamate' ? 'bg-slate-800 text-yellow-400' : ''}`}><Phone size={20}/> Chiamate</button>
-        <button onClick={() => switchToTab('riparazioni')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'riparazioni' ? 'bg-slate-800 text-yellow-400' : ''}`}><Wrench size={20}/> Riparazioni</button>
-        <button onClick={() => switchToTab('ordine-ricambi')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'ordine-ricambi' ? 'bg-slate-800 text-yellow-400' : ''}`}><Package size={20}/> Ordine Ricambi</button>
-        <button onClick={() => switchToTab('preventivi-nuovi')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'preventivi-nuovi' ? 'bg-slate-800 text-yellow-400' : ''}`}><Ticket size={20}/> Preventivi Nuovi</button>
-        <button onClick={() => switchToTab('calendar')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'calendar' ? 'bg-slate-800 text-yellow-400' : ''}`}><CalendarIcon size={20}/> Calendario</button>
-        <button onClick={() => switchToTab('inventory')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'inventory' ? 'bg-slate-800 text-yellow-400' : ''}`}><Package size={20}/> Magazzino</button>
-        <button onClick={() => switchToTab('settings')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'settings' ? 'bg-slate-800 text-yellow-400' : ''}`}><Bot size={20}/> Impostazioni</button>
-      </nav>
-      <div className="p-4 border-t border-slate-700"><button onClick={handleResetData} className="w-full text-xs bg-red-900/50 text-red-200 p-2 rounded">Reset Dati</button></div>
-    </div>
-  );
+
 
   const CalendarView = () => {
     const days = getDaysInMonth(currentDate);
@@ -2643,7 +2523,13 @@ const buildBackup = () => ({
 
   return (
     <div className="flex h-screen bg-slate-100 font-sans text-slate-900 overflow-hidden">
-      <Sidebar />
+      <Sidebar
+        isSidebarOpen={isSidebarOpen}
+        activeTab={activeTab}
+        onClose={() => setIsSidebarOpen(false)}
+        onSwitchTab={switchToTab}
+        onResetData={handleResetData}
+      />
       <div className="flex-1 flex flex-col overflow-hidden">
         <header className="bg-white shadow-sm z-30 p-4 flex justify-between items-center md:hidden">
            <span className="font-bold text-slate-700 flex items-center gap-2"><Zap className="text-yellow-500 w-5 h-5"/> FIXLAB</span>
@@ -2651,18 +2537,17 @@ const buildBackup = () => ({
         </header>
         <main className="flex-1 overflow-y-auto p-4 md:p-8">
           <div className="max-w-6xl mx-auto pb-20">
-            {activeTab === 'dashboard' && <DashboardView />}
-            {activeTab === 'calendar' && <CalendarView />}
-            {activeTab === 'customers' && <CustomerListView />}
-            {activeTab === 'interventions' && <InterventionsView />}
-            {activeTab === 'inventory' && <InventoryView />}
-            {activeTab === 'settings' && <SettingsPanel />}
-            {(activeTab === 'chiamate' || activeTab === 'riparazioni' || activeTab === 'ordine-ricambi' || activeTab === 'preventivi-nuovi') && (
-              <DedicatedInterventionDashboard tabKey={activeTab} />
-            )}
-
-            {activeTab === 'tickets' && (
-              <div className="space-y-6">
+            <ActiveTabContent
+              activeTab={activeTab}
+              DashboardView={DashboardView}
+              CalendarView={CalendarView}
+              CustomerListView={CustomerListView}
+              InterventionsView={InterventionsView}
+              InventoryView={InventoryView}
+              SettingsPanel={SettingsPanel}
+              DedicatedInterventionDashboard={DedicatedInterventionDashboard}
+              ticketsContent={(
+                <div className="space-y-6">
                 <div className="flex flex-wrap items-center justify-between gap-4">
                   <div>
                     <h2 className="text-3xl font-bold text-slate-800">Gestione Ticket</h2>
@@ -2776,25 +2661,13 @@ const buildBackup = () => ({
                   </div>
                 </div>
               </div>
-            )}
+              )}
+            />
           </div>
         </main>
       </div>
 
-      {toasts.length > 0 && (
-        <div className="fixed bottom-4 right-4 z-50 space-y-2">
-          {toasts.map((toast) => (
-            <div
-              key={toast.id}
-              className={`px-4 py-2 rounded shadow text-sm ${
-                toast.tone === 'error' ? 'bg-red-600 text-white' : 'bg-emerald-600 text-white'
-              }`}
-            >
-              {toast.message}
-            </div>
-          ))}
-        </div>
-      )}
+      <ToastList toasts={toasts} />
 
       {conflictState && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
