@@ -3,8 +3,6 @@ import {
   Menu,
   Trash2,
   RefreshCw,
-  ChevronLeft,
-  ChevronRight,
   AlertTriangle,
   MapPin,
   Download,
@@ -386,10 +384,8 @@ export default function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
 
   // --- STATO CALENDARIO ---
-  const [currentDate, setCurrentDate] = useState(new Date());
-  const [draggingInterventionId, setDraggingInterventionId] = useState(null);
-  const [calendarEditorItem, setCalendarEditorItem] = useState(null);
-  const [calendarFocusDate, setCalendarFocusDate] = useState(() => new Date());
+  const calendarRef = useRef(null);
+  const calendarApiRef = useRef(null);
   const [showCalendarQuickAdd, setShowCalendarQuickAdd] = useState(false);
 
   // --- STATO APP ---
@@ -714,7 +710,6 @@ export default function App() {
       openedAt: scheduledAt || prev.openedAt || nowIso()
     }));
     if (options.keepCalendarOpen) {
-      setCalendarFocusDate(new Date(scheduledAt || nowIso()));
       setShowCalendarQuickAdd(true);
       return;
     }
@@ -1750,32 +1745,6 @@ const buildBackup = () => ({
     } finally { setLoadingAi(false); }
   };
 
-  // --- CALENDAR HELPERS ---
-  const getDaysInMonth = (date) => {
-    if (!isValidDate(date)) return [];
-    const year = date.getFullYear();
-    const month = date.getMonth();
-    const daysInMonth = new Date(year, month + 1, 0).getDate();
-    const firstDayOfMonth = new Date(year, month, 1).getDay(); 
-    const startingDay = firstDayOfMonth === 0 ? 6 : firstDayOfMonth - 1;
-    const days = [];
-    for (let i = 0; i < startingDay; i++) days.push(null);
-    for (let i = 1; i <= daysInMonth; i++) days.push(new Date(year, month, i));
-    return days;
-  };
-
-  const changeMonth = (offset) => {
-    setCurrentDate((prev) => {
-      const next = new Date(prev);
-      next.setMonth(prev.getMonth() + offset);
-      setCalendarFocusDate((focusPrev) => {
-        const focusNext = new Date(focusPrev);
-        focusNext.setFullYear(next.getFullYear(), next.getMonth(), Math.min(focusNext.getDate(), 28));
-        return focusNext;
-      });
-      return next;
-    });
-  };
 
   // --- VISTE AGGIUNTIVE ---
   
@@ -2290,227 +2259,128 @@ const buildBackup = () => ({
 
 
 
+
+
   const CalendarView = () => {
-    const days = getDaysInMonth(currentDate);
-    const monthName = currentDate.toLocaleString('it-IT', { month: 'long', year: 'numeric' });
-    const focusedDay = isValidDate(calendarFocusDate) ? calendarFocusDate : new Date();
-    const focusedDayString = toDateKey(focusedDay);
-    const focusedInterventions = interventions
-      .filter((item) => toDateKey(item.openedAt) === focusedDayString)
-      .sort((a, b) => new Date(a.openedAt).getTime() - new Date(b.openedAt).getTime());
-    const slotHours = Array.from({ length: 14 }, (_, idx) => idx + 7);
+    const calendarEvents = interventions.map((item) => {
+      const customer = customers.find((entry) => entry.id === item.clientId);
+      const title = `${interventionTypeMeta[item.type]?.singularLabel || 'Intervento'} • ${customer?.name || 'Cliente non assegnato'}`;
+      return {
+        id: item.id,
+        title,
+        start: item.openedAt,
+        allDay: false,
+        extendedProps: {
+          interventionId: item.id,
+          type: item.type,
+          status: item.status,
+          urgency: item.urgency,
+          customerName: customer?.name || 'Cliente non assegnato'
+        }
+      };
+    });
+
+    useEffect(() => {
+      if (!calendarRef.current || !window.FullCalendar?.Calendar) return;
+      const calendar = new window.FullCalendar.Calendar(calendarRef.current, {
+        locale: 'it',
+        initialView: 'dayGridMonth',
+        headerToolbar: {
+          left: 'prev,next today',
+          center: 'title',
+          right: 'dayGridMonth,timeGridWeek,timeGridDay'
+        },
+        buttonText: {
+          today: 'Oggi',
+          month: 'Mese',
+          week: 'Settimana',
+          day: 'Giorno'
+        },
+        editable: true,
+        selectable: true,
+        dayMaxEvents: true,
+        events: calendarEvents,
+        eventDrop: (info) => {
+          const intervention = interventions.find((entry) => entry.id === info.event.id);
+          if (!intervention) {
+            info.revert();
+            return;
+          }
+          handleInterventionScheduleChange(intervention, info.event.start?.toISOString());
+        },
+        eventClick: (info) => {
+          const intervention = interventions.find((entry) => entry.id === info.event.id);
+          if (!intervention) return;
+          setSelectedIntervention(intervention);
+        },
+        select: (selectionInfo) => {
+          openInterventionComposer(selectionInfo.start.toISOString(), 'chiamata', { keepCalendarOpen: true });
+        },
+        height: 'auto'
+      });
+      calendar.render();
+      calendarApiRef.current = calendar;
+
+      return () => {
+        calendarApiRef.current = null;
+        calendar.destroy();
+      };
+    }, [calendarEvents, interventions]);
 
     return (
       <div className="space-y-4">
         <div className="flex justify-between items-center bg-white p-4 rounded shadow">
-          <h2 className="text-2xl font-bold capitalize text-slate-800">{monthName}</h2>
-          <div className="flex gap-2">
-            <button onClick={() => changeMonth(-1)} className="p-2 hover:bg-slate-100 rounded"><ChevronLeft/></button>
-            <button onClick={() => changeMonth(1)} className="p-2 hover:bg-slate-100 rounded"><ChevronRight/></button>
-            <button onClick={() => openInterventionComposer(focusedDay.toISOString(), 'chiamata', { keepCalendarOpen: true })} className="bg-blue-600 text-white px-4 py-2 rounded flex gap-2"><Plus/> Nuovo intervento</button>
+          <div>
+            <h2 className="text-2xl font-bold text-slate-800">Calendario interventi</h2>
+            <p className="text-sm text-slate-500">Vista mese, settimana e giorno con drag & drop stile Google Calendar.</p>
           </div>
+          <button
+            onClick={() => {
+              const currentDate = calendarApiRef.current?.getDate() || new Date();
+              openInterventionComposer(currentDate.toISOString(), 'chiamata', { keepCalendarOpen: true });
+            }}
+            className="bg-blue-600 text-white px-4 py-2 rounded flex gap-2 items-center"
+          >
+            <Plus /> Nuovo intervento
+          </button>
         </div>
 
         <div className="bg-white rounded shadow p-4">
-          <div className="grid grid-cols-7 gap-2 mb-2 text-center font-bold text-slate-500 uppercase text-sm">
-            <div>Lun</div><div>Mar</div><div>Mer</div><div>Gio</div><div>Ven</div><div>Sab</div><div>Dom</div>
-          </div>
-          <div className="grid grid-cols-7 gap-2">
-            {days.map((day, idx) => {
-              if (!day || !isValidDate(day)) return <div key={idx} className="bg-slate-50 h-32 rounded"></div>;
-              const dayString = toDateKey(day);
-              const dayInterventions = interventions.filter((i) => toDateKey(i.openedAt) === dayString);
-              const isToday = dayString === toDateKey(new Date());
-              const isFocused = dayString === focusedDayString;
-              return (
-                <div
-                  key={idx}
-                  className={`h-32 border rounded p-2 flex flex-col gap-1 overflow-y-auto ${isToday ? 'border-blue-500 bg-blue-50' : 'border-slate-200 hover:bg-slate-50'} ${isFocused ? 'ring-2 ring-indigo-300' : ''}`}
-                  onClick={(e) => {
-                    const target = e.target;
-                    const clickedEventCard = Boolean(target?.closest?.('[data-calendar-event-card="true"]'));
-                    if (clickedEventCard) {
-                      setCalendarFocusDate(new Date(day));
-                      return;
-                    }
-                    setCalendarFocusDate(new Date(day));
-                    openInterventionComposer(day.toISOString(), 'chiamata', { keepCalendarOpen: true });
-                  }}
-                  onDragOver={(e) => e.preventDefault()}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    const interventionId = e.dataTransfer.getData('text/intervention-id') || draggingInterventionId;
-                    if (!interventionId) return;
-                    const intervention = interventions.find((entry) => entry.id === interventionId);
-                    if (!intervention) return;
-                    const slotHour = Number(e.dataTransfer.getData('text/slot-hour'));
-                    const currentTime = new Date(intervention.openedAt);
-                    const [year, month, dayNum] = dayString.split('-').map(Number);
-                    const newDate = new Date(year, month - 1, dayNum, Number.isFinite(slotHour) ? slotHour : currentTime.getHours(), currentTime.getMinutes(), 0, 0);
-                    handleInterventionScheduleChange(intervention, newDate.toISOString());
-                    setDraggingInterventionId(null);
-                  }}
+          <div ref={calendarRef} />
+        </div>
+
+        {showCalendarQuickAdd && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div className="bg-white w-full max-w-xl rounded-xl shadow-2xl p-6">
+              <h3 className="text-xl font-bold mb-1">Nuova chiamata</h3>
+              <p className="text-sm text-slate-500 mb-4">{new Date(newIntervention.openedAt || nowIso()).toLocaleString('it-IT')}</p>
+              <div className="space-y-3">
+                <select
+                  className="w-full border rounded p-2"
+                  value={newIntervention.clientId}
+                  onChange={(e) => setNewIntervention((prev) => ({ ...prev, type: 'chiamata', clientId: e.target.value }))}
                 >
-                  <div className="text-right text-sm font-semibold text-slate-400">{day.getDate()}</div>
-                  {dayInterventions.map((item) => {
-                    const openedDate = new Date(item.openedAt);
-                    const customerName = customers.find((c) => c.id === item.clientId)?.name || 'Cliente non assegnato';
-                    return (
-                      <div
-                        key={item.id}
-                        draggable
-                        onDragStart={(e) => {
-                          e.dataTransfer.setData('text/intervention-id', item.id);
-                          e.dataTransfer.setData('text/slot-hour', String(openedDate.getHours()));
-                          setDraggingInterventionId(item.id);
-                        }}
-                        onDragEnd={() => setDraggingInterventionId(null)}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setCalendarEditorItem(item);
-                          openInterventionDetails(item);
-                        }}
-                        data-calendar-event-card="true"
-                        className="text-xs bg-white border-l-4 border-indigo-500 p-1 rounded shadow-sm cursor-move hover:bg-indigo-50"
-                      >
-                        <div className="font-bold">{openedDate.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' })} • {item.type}</div>
-                        <div className="truncate">{customerName}</div>
-                      </div>
-                    );
-                  })}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
-        <div className="bg-white rounded shadow p-4 border border-slate-200">
-          <div className="mb-3">
-            <h3 className="font-semibold text-slate-800">Agenda giornaliera • {focusedDay.toLocaleDateString('it-IT')}</h3>
-            <p className="text-xs text-slate-500">Clicca su un giorno per vedere gli interventi. Trascina gli interventi tra le fasce orarie per cambiare giorno e ora (stile Google Calendar).</p>
-          </div>
-          <div className="space-y-2 max-h-[420px] overflow-y-auto pr-1">
-            {slotHours.map((hour) => {
-              const slotItems = focusedInterventions.filter((item) => new Date(item.openedAt).getHours() === hour);
-              return (
-                <div
-                  key={`slot-${hour}`}
-                  className="border rounded p-2 bg-slate-50"
-                  onClick={(e) => {
-                    const target = e.target;
-                    const clickedEventCard = Boolean(target?.closest?.('[data-calendar-event-card="true"]'));
-                    if (clickedEventCard) return;
-                    const selectedDate = new Date(focusedDay.getFullYear(), focusedDay.getMonth(), focusedDay.getDate(), hour, 0, 0, 0);
-                    openInterventionComposer(selectedDate.toISOString(), 'chiamata', { keepCalendarOpen: true });
-                  }}
-                  onDragOver={(e) => e.preventDefault()}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    const interventionId = e.dataTransfer.getData('text/intervention-id') || draggingInterventionId;
-                    if (!interventionId) return;
-                    const intervention = interventions.find((entry) => entry.id === interventionId);
-                    if (!intervention) return;
-                    const sourceDate = new Date(intervention.openedAt);
-                    const newDate = new Date(focusedDay.getFullYear(), focusedDay.getMonth(), focusedDay.getDate(), hour, sourceDate.getMinutes(), 0, 0);
-                    handleInterventionScheduleChange(intervention, newDate.toISOString());
-                    setDraggingInterventionId(null);
-                  }}
-                >
-                  <div className="text-xs font-semibold text-slate-500 mb-2">{`${String(hour).padStart(2, '0')}:00`}</div>
-                  {slotItems.length === 0 && <div className="text-xs text-slate-400">Nessun intervento</div>}
-                  <div className="space-y-1">
-                    {slotItems.map((item) => {
-                      const customerName = customers.find((c) => c.id === item.clientId)?.name || 'Cliente non assegnato';
-                      return (
-                        <div
-                          key={`slot-item-${item.id}`}
-                          data-calendar-event-card="true"
-                          className="bg-white border border-indigo-200 rounded px-2 py-1 text-xs cursor-move hover:bg-indigo-50"
-                          draggable
-                          onDragStart={(e) => {
-                            e.dataTransfer.setData('text/intervention-id', item.id);
-                            e.dataTransfer.setData('text/slot-hour', String(hour));
-                            setDraggingInterventionId(item.id);
-                          }}
-                          onDragEnd={() => setDraggingInterventionId(null)}
-                          onClick={() => openInterventionDetails(item)}
-                        >
-                          <div className="font-semibold text-indigo-700">{item.type} • {new Date(item.openedAt).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' })}</div>
-                          <div className="truncate text-slate-600">{customerName}</div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
-
-
-      {showCalendarQuickAdd && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setShowCalendarQuickAdd(false)}>
-          <div className="bg-white p-6 rounded-lg w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-xl font-bold mb-1">Nuova chiamata</h3>
-            <p className="text-sm text-slate-500 mb-4">{new Date(newIntervention.openedAt || nowIso()).toLocaleString('it-IT')}</p>
-            <div className="space-y-3">
-              <select
-                className="w-full border rounded p-2"
-                value={newIntervention.clientId}
-                onChange={(e) => setNewIntervention((prev) => ({ ...prev, type: 'chiamata', clientId: e.target.value }))}
-              >
-                <option value="">Cliente...</option>
-                {customers.map((c) => <option key={c.id} value={c.id}>{c.name} {c.phone ? `• ${c.phone}` : ''}</option>)}
-              </select>
-              <input
-                type="datetime-local"
-                className="w-full border rounded p-2"
-                value={toLocalDateTimeInput(newIntervention.openedAt)}
-                onChange={(e) => setNewIntervention((prev) => ({ ...prev, type: 'chiamata', openedAt: new Date(e.target.value).toISOString() }))}
-              />
-              <textarea
-                className="w-full border rounded p-2"
-                rows={4}
-                placeholder="Descrizione chiamata"
-                value={newIntervention.description}
-                onChange={(e) => setNewIntervention((prev) => ({ ...prev, type: 'chiamata', description: e.target.value }))}
-              />
-            </div>
-            <div className="flex justify-end gap-2 mt-4">
-              <button onClick={() => setShowCalendarQuickAdd(false)} className="px-4 py-2 text-slate-500">Chiudi</button>
-              <button onClick={() => handleAddIntervention('chiamata')} className="px-4 py-2 bg-indigo-600 text-white rounded">Aggiungi chiamata</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-        {calendarEditorItem && (
-          <div className="bg-white rounded shadow p-4 border border-slate-200">
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="font-semibold text-slate-800">Modifica data/ora intervento</h3>
-              <button className="text-sm text-slate-500" onClick={() => setCalendarEditorItem(null)}>Chiudi</button>
-            </div>
-            <p className="text-sm text-slate-600 mb-3">{calendarEditorItem.id} • {calendarEditorItem.type}</p>
-            <div className="flex gap-3 items-end">
-              <div>
-                <label className="block text-xs text-slate-500 mb-1">Nuova data e ora</label>
+                  <option value="">Cliente...</option>
+                  {customers.map((c) => <option key={c.id} value={c.id}>{c.name} {c.phone ? `• ${c.phone}` : ''}</option>)}
+                </select>
                 <input
                   type="datetime-local"
-                  className="border rounded p-2"
-                  value={toLocalDateTimeInput(calendarEditorItem.openedAt)}
-                  onChange={(e) => setCalendarEditorItem((prev) => ({ ...prev, openedAt: new Date(e.target.value).toISOString() }))}
+                  className="w-full border rounded p-2"
+                  value={toLocalDateTimeInput(newIntervention.openedAt)}
+                  onChange={(e) => setNewIntervention((prev) => ({ ...prev, type: 'chiamata', openedAt: new Date(e.target.value).toISOString() }))}
+                />
+                <textarea
+                  className="w-full border rounded p-2"
+                  rows={4}
+                  placeholder="Descrizione chiamata"
+                  value={newIntervention.description}
+                  onChange={(e) => setNewIntervention((prev) => ({ ...prev, type: 'chiamata', description: e.target.value }))}
                 />
               </div>
-              <button
-                className="bg-indigo-600 text-white px-3 py-2 rounded"
-                onClick={() => {
-                  handleInterventionScheduleChange(calendarEditorItem, calendarEditorItem.openedAt);
-                  setCalendarEditorItem(null);
-                }}
-              >
-                Salva spostamento
-              </button>
+              <div className="flex justify-end gap-2 mt-4">
+                <button onClick={() => setShowCalendarQuickAdd(false)} className="px-4 py-2 text-slate-500">Chiudi</button>
+                <button onClick={() => handleAddIntervention('chiamata')} className="px-4 py-2 bg-indigo-600 text-white rounded">Aggiungi chiamata</button>
+              </div>
             </div>
           </div>
         )}
