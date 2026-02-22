@@ -237,8 +237,11 @@ export default function App() {
       try {
         const data = await getMe();
         setAuthState({ checked: true, user: data?.user || null });
-      } catch {
-        setAuthState({ checked: true, user: null });
+      } catch (error) {
+        setAuthState((prev) => ({
+          checked: true,
+          user: error?.status === 401 ? null : prev.user,
+        }));
       }
     };
     loadSession();
