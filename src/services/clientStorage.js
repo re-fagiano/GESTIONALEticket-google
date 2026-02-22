@@ -15,9 +15,9 @@ const notify = (key) => {
 
 const readRawSync = (key, fallback = null) => (memoryStore.has(key) ? memoryStore.get(key) : fallback);
 
-const writeRaw = (key, value) => {
+const writeRaw = (key, value, shouldNotify = false) => {
   memoryStore.set(key, value);
-  notify(key);
+  if (shouldNotify) notify(key);
   return true;
 };
 
