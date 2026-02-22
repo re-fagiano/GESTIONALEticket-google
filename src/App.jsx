@@ -1392,7 +1392,7 @@ export default function App() {
     link.href = URL.createObjectURL(blob);
     link.download = filename;
     link.click();
-    setExportNotice(`File scaricato con successo. Cerca \"${filename}\" nella cartella Download.`);
+    setExportNotice(`File scaricato con successo. Cerca "${filename}" nella cartella Download.`);
   };
 
 const buildBackup = () => ({
