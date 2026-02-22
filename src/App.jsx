@@ -22,6 +22,7 @@ import {
   getMe,
   login,
   logout,
+  register,
   syncData
 } from './services/api';
 import {
@@ -91,7 +92,8 @@ export default function App() {
   const [storageWarning, setStorageWarning] = useState(null);
   const [conflictState, setConflictState] = useState(null);
   const [authState, setAuthState] = useState({ checked: false, user: null });
-  const [loginForm, setLoginForm] = useState({ username: '', password: '' });
+  const [loginForm, setLoginForm] = useState({ email: '', password: '' });
+  const [authMode, setAuthMode] = useState('login');
   const [syncStatus, setSyncStatus] = useState(null);
   const [exportNotice, setExportNotice] = useState(null);
   // Stato di connettività del backend (assume offline di default)
@@ -426,9 +428,13 @@ export default function App() {
   // --- AZIONI ---
   const handleApiError = (error, fallback) => {
     if (error?.status === 401) {
-      setAuthState({ checked: true, user: null });
-      setStorageWarning('Sessione non valida. Effettua nuovamente il login.');
-      addToast('Sessione scaduta.', 'error');
+      if (error?.payload?.code === 'session_expired' || error?.payload?.code === 'session_invalid') {
+        setAuthState({ checked: true, user: null });
+        setStorageWarning('Sessione scaduta. Effettua nuovamente il login.');
+        addToast('Sessione scaduta.', 'error');
+      } else {
+        setStorageWarning('Accesso non autorizzato.');
+      }
       return;
     }
     const message = error?.message || fallback;
@@ -442,22 +448,24 @@ export default function App() {
     return !status || status === 401 || status === 403 || status >= 500;
   };
 
-  const handleLogin = async () => {
-    if (!loginForm.username.trim() || !loginForm.password.trim()) {
-      addToast('Inserisci username e password.', 'error');
+  const handleAuthSubmit = async () => {
+    if (!loginForm.email.trim() || !loginForm.password.trim()) {
+      addToast('Inserisci email e password.', 'error');
       return;
     }
     try {
-      setSyncStatus('Login in corso...');
-      const data = await login({ username: loginForm.username.trim(), password: loginForm.password });
-      setAuthState({ checked: true, user: data?.user || null });
-      setLoginForm({ username: '', password: '' });
+      setSyncStatus(authMode === 'register' ? 'Registrazione in corso...' : 'Login in corso...');
+      const action = authMode === 'register' ? register : login;
+      const data = await action({ email: loginForm.email.trim(), password: loginForm.password });
+      const me = await getMe();
+      setAuthState({ checked: true, user: me?.user || data?.user || null });
+      setLoginForm({ email: '', password: '' });
       setStorageWarning(null);
-      setSyncStatus('Login effettuato.');
-      addToast('Login effettuato.', 'success');
+      setSyncStatus(authMode === 'register' ? 'Registrazione completata.' : 'Login effettuato.');
+      addToast(authMode === 'register' ? 'Registrazione completata.' : 'Login effettuato.', 'success');
     } catch (error) {
       setSyncStatus(null);
-      handleApiError(error, 'Impossibile eseguire il login.');
+      handleApiError(error, authMode === 'register' ? 'Impossibile completare la registrazione.' : 'Impossibile eseguire il login.');
     }
   };
 
@@ -1432,9 +1440,9 @@ const buildBackup = () => ({
           <h1 className="text-xl font-bold text-slate-800">Login</h1>
           <input
             className="w-full border rounded p-2 text-sm"
-            placeholder="Username"
-            value={loginForm.username}
-            onChange={(e) => setLoginForm((prev) => ({ ...prev, username: e.target.value }))}
+            placeholder="Email"
+            value={loginForm.email}
+            onChange={(e) => setLoginForm((prev) => ({ ...prev, email: e.target.value }))}
           />
           <input
             type="password"
@@ -1443,7 +1451,11 @@ const buildBackup = () => ({
             value={loginForm.password}
             onChange={(e) => setLoginForm((prev) => ({ ...prev, password: e.target.value }))}
           />
-          <button onClick={handleLogin} className="w-full px-4 py-2 bg-slate-800 text-white rounded">Accedi</button>
+          <div className="grid grid-cols-2 gap-2">
+            <button onClick={() => setAuthMode('login')} className={`px-3 py-2 rounded text-sm ${authMode === 'login' ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-700'}`}>Login</button>
+            <button onClick={() => setAuthMode('register')} className={`px-3 py-2 rounded text-sm ${authMode === 'register' ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-700'}`}>Registrati</button>
+          </div>
+          <button onClick={handleAuthSubmit} className="w-full px-4 py-2 bg-slate-800 text-white rounded">{authMode === 'register' ? 'Registrati' : 'Accedi'}</button>
           {storageWarning && <p className="text-sm text-red-600">{storageWarning}</p>}
         </div>
       </div>

@@ -364,7 +364,7 @@ const mapQuoteRow = (row) => (row ? ({
   version: row.version,
 }) : null)
 
-const USER_ROLES = new Set(['admin', 'tech', 'read'])
+const USER_ROLES = new Set(['admin', 'tech', 'read', 'operator'])
 const CSRF_SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 
 const toBase64Url = (buffer) => buffer.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
@@ -389,6 +389,10 @@ const verifyPassword = (password, storedHash) => {
   if (computed.length !== expected.length) return false
   return crypto.timingSafeEqual(computed, expected)
 }
+
+const normalizeEmail = (value) => sanitizeString(value).toLowerCase()
+
+const isValidEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
 
 const signJwt = (payload, secret, expiresInSeconds) => {
   const header = { alg: 'HS256', typ: 'JWT' }
@@ -597,8 +601,11 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
     username TEXT NOT NULL UNIQUE,
+    email TEXT UNIQUE,
     password_hash TEXT NOT NULL,
     role TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    approved INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
@@ -614,6 +621,12 @@ db.exec(`
 `)
 
 try { db.exec('ALTER TABLE inventory ADD COLUMN price_date TEXT') } catch { /* Column may already exist in migrated databases. */ }
+try { db.exec('ALTER TABLE users ADD COLUMN email TEXT UNIQUE') } catch { /* Column may already exist in migrated databases. */ }
+try { db.exec("ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active'") } catch { /* Column may already exist in migrated databases. */ }
+try { db.exec('ALTER TABLE users ADD COLUMN approved INTEGER NOT NULL DEFAULT 1') } catch { /* Column may already exist in migrated databases. */ }
+db.exec('UPDATE users SET email = LOWER(username) WHERE email IS NULL OR email = ""')
+db.exec('UPDATE users SET status = COALESCE(NULLIF(status, ""), "active")')
+db.exec('UPDATE users SET approved = COALESCE(approved, 1)')
 db.exec(`
   CREATE TABLE IF NOT EXISTS sync_logs (
     id TEXT PRIMARY KEY,
@@ -638,8 +651,8 @@ const ensureAdminUser = () => {
   const existingAdmin = getRow('SELECT id FROM users WHERE username = ?', [adminUsername])
   if (!existingAdmin && adminPassword) {
     runQuery(
-      'INSERT INTO users (id, username, password_hash, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
-      [ensureId(), adminUsername, hashPassword(adminPassword), 'admin', nowIso(), nowIso()],
+      'INSERT INTO users (id, username, email, password_hash, role, status, approved, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [ensureId(), adminUsername, normalizeEmail(adminUsername), hashPassword(adminPassword), 'admin', 'active', 1, nowIso(), nowIso()],
     )
     console.log(`[auth] Admin seed creato per utente ${adminUsername}.`)
   }
@@ -1079,8 +1092,10 @@ const authenticateRequest = (req) => {
   const token = getTokenFromRequest(req)
   const payload = verifyJwt(token, JWT_ACCESS_SECRET)
   if (!payload || payload.type !== 'access') return null
-  const user = getRow('SELECT id, username, role FROM users WHERE id = ?', [payload.sub])
+  const user = getRow('SELECT id, username, email, role, status, approved FROM users WHERE id = ?', [payload.sub])
   if (!user || !USER_ROLES.has(user.role)) return null
+  if (!user.approved) return null
+  if (!['active', 'pending'].includes(sanitizeString(user.status, 'active'))) return null
   return user
 }
 
@@ -1104,7 +1119,7 @@ const ensureRole = (res, user, allowedRoles = []) => {
 const ensureRouteAuthorization = (req, res, user, pathname) => {
   if (user.role === 'admin') return true
 
-  if (user.role === 'tech') {
+  if (user.role === 'tech' || user.role === 'operator') {
     if (pathname.startsWith('/api/import')) {
       respond(res, 403, { error: 'Permessi insufficienti per questa operazione.' })
       return false
@@ -1151,13 +1166,22 @@ const handleApiRequest = async (req, res, url) => {
     try {
       const payload = await readJsonBody(req)
       const username = sanitizeString(payload?.username)
+      const email = normalizeEmail(payload?.email)
+      const identifier = username || email
       const password = sanitizeString(payload?.password)
-      if (!username || !password) return respond(res, 400, { error: 'Username e password sono obbligatori.' })
-      const user = getRow('SELECT * FROM users WHERE username = ?', [username])
-      if (!checkLoginRateLimit(req, res, username)) return
-      if (!user || !verifyPassword(password, user.password_hash)) {
-        console.warn(`[auth] Tentativo login fallito per utente=${username || 'n/a'} ip=${req.socket?.remoteAddress || 'unknown'}`)
-        return respond(res, 401, { error: 'Credenziali non valide.' })
+      if (!identifier || !password) return respond(res, 400, { error: 'Email e password sono obbligatorie.', code: 'missing_credentials' })
+      const user = getRow('SELECT * FROM users WHERE LOWER(username) = LOWER(?) OR LOWER(COALESCE(email, "")) = LOWER(?)', [identifier, identifier])
+      if (!checkLoginRateLimit(req, res, identifier)) return
+      if (!user) {
+        return respond(res, 404, { error: 'Utente non trovato.', code: 'user_not_found' })
+      }
+      if (!verifyPassword(password, user.password_hash)) {
+        console.warn(`[auth] Tentativo login fallito per utente=${identifier || 'n/a'} ip=${req.socket?.remoteAddress || 'unknown'}`)
+        return respond(res, 401, { error: 'Credenziali errate.', code: 'invalid_credentials' })
+      }
+      if (!user.approved) return respond(res, 403, { error: 'Utente non approvato.', code: 'user_not_approved' })
+      if (!['active', 'pending'].includes(sanitizeString(user.status, 'active'))) {
+        return respond(res, 403, { error: 'Utente non attivo.', code: 'user_inactive' })
       }
       const { accessToken, refreshToken, refreshId, csrfToken } = createAuthTokens(user)
       runQuery(
@@ -1165,7 +1189,48 @@ const handleApiRequest = async (req, res, url) => {
         [refreshId, user.id, hashValue(refreshToken), new Date(Date.now() + REFRESH_TOKEN_TTL_SECONDS * 1000).toISOString(), null, nowIso()],
       )
       setAuthCookies(res, accessToken, refreshToken, csrfToken)
-      return respond(res, 200, { accessToken, user: { id: user.id, username: user.username, role: user.role } })
+      return respond(res, 200, { accessToken, user: { id: user.id, username: user.username, email: user.email || user.username, role: user.role, status: user.status, approved: Boolean(user.approved) } })
+    } catch (error) {
+      return respond(res, error.status || 400, { error: error.message || 'Payload non valido.' })
+    }
+  }
+
+  if (url.pathname === '/api/auth/register' && req.method === 'POST') {
+    try {
+      const payload = await readJsonBody(req)
+      const email = normalizeEmail(payload?.email)
+      const password = sanitizeString(payload?.password)
+      if (!email || !password) {
+        return respond(res, 400, { error: 'Email e password sono obbligatorie.', code: 'missing_credentials' })
+      }
+      if (!isValidEmail(email)) {
+        return respond(res, 400, { error: 'Email non valida.', code: 'invalid_email' })
+      }
+      if (password.length < 8) {
+        return respond(res, 400, { error: 'La password deve avere almeno 8 caratteri.', code: 'weak_password' })
+      }
+      if (getRow('SELECT id FROM users WHERE LOWER(username) = LOWER(?) OR LOWER(COALESCE(email, "")) = LOWER(?)', [email, email])) {
+        return respond(res, 409, { error: 'Utente già registrato.', code: 'user_exists' })
+      }
+      const user = {
+        id: ensureId(),
+        username: email,
+        email,
+        role: 'operator',
+        status: 'pending',
+        approved: 1,
+      }
+      runQuery(
+        'INSERT INTO users (id, username, email, password_hash, role, status, approved, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [user.id, user.username, user.email, hashPassword(password), user.role, user.status, user.approved, nowIso(), nowIso()],
+      )
+      const { accessToken, refreshToken, refreshId, csrfToken } = createAuthTokens(user)
+      runQuery(
+        'INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at, revoked_at, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+        [refreshId, user.id, hashValue(refreshToken), new Date(Date.now() + REFRESH_TOKEN_TTL_SECONDS * 1000).toISOString(), null, nowIso()],
+      )
+      setAuthCookies(res, accessToken, refreshToken, csrfToken)
+      return respond(res, 201, { accessToken, user: { id: user.id, username: user.username, email: user.email, role: user.role, status: user.status, approved: true } })
     } catch (error) {
       return respond(res, error.status || 400, { error: error.message || 'Payload non valido.' })
     }
@@ -1178,15 +1243,19 @@ const handleApiRequest = async (req, res, url) => {
     const payload = verifyJwt(refreshToken, JWT_REFRESH_SECRET)
     if (!payload || payload.type !== 'refresh' || !payload.jti) {
       clearAuthCookies(res)
-      return respond(res, 401, { error: 'Refresh token non valido.' })
+      return respond(res, 401, { error: 'Sessione scaduta.', code: 'session_expired' })
     }
     const record = getRow('SELECT * FROM refresh_tokens WHERE id = ?', [payload.jti])
     if (!record || record.revoked_at || record.token_hash !== hashValue(refreshToken) || new Date(record.expires_at).getTime() <= Date.now()) {
       clearAuthCookies(res)
-      return respond(res, 401, { error: 'Refresh token scaduto o revocato.' })
+      return respond(res, 401, { error: 'Sessione scaduta.', code: 'session_expired' })
     }
-    const user = getRow('SELECT id, username, role FROM users WHERE id = ?', [record.user_id])
-    if (!user) return respond(res, 401, { error: 'Utente non trovato.' })
+    const user = getRow('SELECT id, username, email, role, status, approved FROM users WHERE id = ?', [record.user_id])
+    if (!user) return respond(res, 404, { error: 'Utente non trovato.', code: 'user_not_found' })
+    if (!user.approved || !['active', 'pending'].includes(sanitizeString(user.status, 'active'))) {
+      clearAuthCookies(res)
+      return respond(res, 401, { error: 'Sessione non valida.', code: 'session_invalid' })
+    }
     runQuery('UPDATE refresh_tokens SET revoked_at = ? WHERE id = ?', [nowIso(), record.id])
     const next = createAuthTokens(user)
     runQuery(
@@ -1194,7 +1263,7 @@ const handleApiRequest = async (req, res, url) => {
       [next.refreshId, user.id, hashValue(next.refreshToken), new Date(Date.now() + REFRESH_TOKEN_TTL_SECONDS * 1000).toISOString(), null, nowIso()],
     )
     setAuthCookies(res, next.accessToken, next.refreshToken, next.csrfToken)
-    return respond(res, 200, { accessToken: next.accessToken, user })
+    return respond(res, 200, { accessToken: next.accessToken, user: { ...user, approved: Boolean(user.approved) } })
   }
 
   if (url.pathname === '/api/auth/logout' && req.method === 'POST') {
@@ -1211,7 +1280,7 @@ const handleApiRequest = async (req, res, url) => {
 
   if (url.pathname === '/api/auth/me' && req.method === 'GET') {
     const user = authenticateRequest(req)
-    if (!user) return sendUnauthorized(res)
+    if (!user) return respond(res, 401, { error: 'Sessione scaduta.', code: 'session_expired' })
     return respond(res, 200, { user })
   }
 
