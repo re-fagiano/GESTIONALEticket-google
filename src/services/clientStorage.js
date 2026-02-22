@@ -5,7 +5,9 @@ const IDB_DB_NAME = 'gestionale_storage';
 const IDB_STORE = 'keyval';
 const STORAGE_VERSION = 2;
 const SCHEMA_VERSION = 2;
+const DATA_VERSION = 1;
 const BACKUP_HISTORY_LIMIT = 5;
+const CHANNEL_NAME = 'gestionale_storage_channel';
 
 const fallbackState = {
   active: false,
@@ -22,6 +24,37 @@ const cacheKeys = {
   quotes: 'cache_quotes',
   inventory: 'cache_inventory',
   settings: 'cache_settings'
+};
+
+const backupFieldByCache = {
+  [cacheKeys.customers]: 'customers',
+  [cacheKeys.tickets]: 'tickets',
+  [cacheKeys.interventions]: 'interventions',
+  [cacheKeys.sparePartsOrders]: 'sparePartsOrders',
+  [cacheKeys.quotes]: 'quotes',
+  [cacheKeys.inventory]: 'inventory',
+  [cacheKeys.settings]: 'settings',
+};
+
+let broadcastChannel = null;
+
+
+const getBroadcastChannel = () => {
+  if (!isBrowser || typeof window.BroadcastChannel === 'undefined') return null;
+  if (!broadcastChannel) {
+    broadcastChannel = new window.BroadcastChannel(CHANNEL_NAME);
+  }
+  return broadcastChannel;
+};
+
+const notifyStorageUpdate = (key) => {
+  const channel = getBroadcastChannel();
+  if (!channel) return;
+  try {
+    channel.postMessage({ type: 'storage_updated', key, at: Date.now() });
+  } catch (error) {
+    issueStorage(`broadcast_${key}`, 'Notifica multi-tab non disponibile', error);
+  }
 };
 
 const issueStorage = (code, message, error) => {
@@ -118,6 +151,7 @@ const parseVersionedPayload = (raw, fallback, key = 'unknown') => {
 const wrapVersionedPayload = (data) => JSON.stringify({
   storageVersion: STORAGE_VERSION,
   schemaVersion: SCHEMA_VERSION,
+  dataVersion: DATA_VERSION,
   savedAt: new Date().toISOString(),
   data
 });
@@ -157,12 +191,30 @@ const writeRaw = (key, value) => {
   }
 
   idbSet(key, value).catch((error) => issueStorage(`write_idb_${key}`, 'Scrittura su IndexedDB fallita', error));
+  notifyStorageUpdate(key);
   return written;
 };
 
 const writeVersioned = (key, value) => writeRaw(key, wrapVersionedPayload(value));
 
-const readJsonSync = (key, fallback) => parseVersionedPayload(readRawSync(key, null), fallback, key);
+const restoreCacheFromBackupSync = (rawKey, fallback) => {
+  const backup = loadBackupSync();
+  const backupField = backupFieldByCache[rawKey];
+  if (!backup || !backupField) return fallback;
+  const restored = backup?.[backupField];
+  if (typeof restored === 'undefined') return fallback;
+  writeVersioned(rawKey, restored);
+  return restored;
+};
+
+const readJsonSync = (key, fallback) => {
+  const raw = readRawSync(key, null);
+  const parsed = parseVersionedPayload(raw, fallback, key);
+  if (parsed === fallback && raw) {
+    return restoreCacheFromBackupSync(key, fallback);
+  }
+  return parsed;
+};
 const readJsonFromIdb = async (key, fallback) => parseVersionedPayload(await readRawFromIdb(key, null), fallback, key);
 
 const saveCache = (key, value) => writeVersioned(cacheKeys[key], value);
@@ -289,9 +341,48 @@ const getStorageState = () => ({
   lastError: fallbackState.lastError
 });
 
+const getOperatorProfileSync = () => ({
+  code: readRawSync('operatorCode', ''),
+  name: readRawSync('operatorName', '')
+});
+
+const saveOperatorProfile = (profile = {}) => {
+  writeRaw('operatorCode', profile.code || '');
+  writeRaw('operatorName', profile.name || '');
+};
+
+const getLastSyncAtSync = () => readRawSync('sync_last_at', null);
+const setLastSyncAt = (value) => writeRaw('sync_last_at', value || '');
+
+const subscribeStorageUpdates = (listener) => {
+  if (!isBrowser || typeof listener !== 'function') return () => {};
+
+  const onStorage = (event) => {
+    if (!event?.key) return;
+    listener(event.key);
+  };
+  window.addEventListener('storage', onStorage);
+
+  const channel = getBroadcastChannel();
+  const onMessage = (event) => {
+    const key = event?.data?.key;
+    if (!key) return;
+    listener(key);
+  };
+  if (channel) channel.addEventListener('message', onMessage);
+
+  return () => {
+    window.removeEventListener('storage', onStorage);
+    if (channel) channel.removeEventListener('message', onMessage);
+  };
+};
+
+
 export {
   cacheKeys,
   clearAllClientData,
+  getLastSyncAtSync,
+  getOperatorProfileSync,
   getStorageState,
   idbGet,
   idbSet,
@@ -305,6 +396,9 @@ export {
   readRawSync,
   saveBackup,
   saveCache,
+  saveOperatorProfile,
   saveMbiSnapshot,
+  setLastSyncAt,
+  subscribeStorageUpdates,
   writeRaw
 };
