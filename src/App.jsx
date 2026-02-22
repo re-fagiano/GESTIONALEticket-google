@@ -317,6 +317,7 @@ export default function App() {
   const [apiToken, setApiToken] = useState('');
   const [tokenInput, setTokenInput] = useState('');
   const [maskedToken, setMaskedToken] = useState('');
+  const [currentRole, setCurrentRole] = useState('');
   const [showTokenPrompt, setShowTokenPrompt] = useState(false);
   const [syncStatus, setSyncStatus] = useState(null);
   const [exportNotice, setExportNotice] = useState(null);
@@ -450,6 +451,7 @@ export default function App() {
         const data = await response.json().catch(() => null);
         if (data?.maskedToken) {
           setMaskedToken(data.maskedToken);
+          setCurrentRole(data?.user?.role || '');
           setShowTokenPrompt(false);
         }
       } catch {
@@ -671,8 +673,9 @@ export default function App() {
       if (!response.ok) {
         throw new Error(data?.error || 'Impossibile salvare il token.');
       }
-      setApiToken(trimmedToken);
+      setApiToken(data?.accessToken || '');
       setMaskedToken(data?.maskedToken || '');
+      setCurrentRole(data?.role || '');
       setTokenInput('');
       setShowTokenPrompt(false);
       setStorageWarning(null);
@@ -703,6 +706,15 @@ export default function App() {
       setSyncStatus(null);
       handleApiError(error, 'Impossibile richiedere un nuovo token.');
     }
+  };
+
+  const handleLogout = async () => {
+    await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }).catch(() => null);
+    setApiToken('');
+    setMaskedToken('');
+    setCurrentRole('');
+    setShowTokenPrompt(true);
+    addToast('Logout effettuato.', 'success');
   };
 
   const handleCreateCustomer = async () => {
@@ -2146,20 +2158,21 @@ const buildBackup = () => ({
       </div>
 
       <div className="bg-white rounded shadow p-4 border border-slate-200">
-        <h2 className="text-lg font-bold text-slate-800 mb-2">Token API</h2>
-        <p className="text-sm text-slate-500 mb-4">Gestisci il token API per l'accesso al backend. Il token viene salvato in cookie HttpOnly.</p>
+        <h2 className="text-lg font-bold text-slate-800 mb-2">Autenticazione</h2>
+        <p className="text-sm text-slate-500 mb-4">Inserisci credenziali nel formato username:password (es. admin:admin123!). I token JWT sono gestiti con cookie HttpOnly.</p>
         <div className="flex flex-col gap-3 md:flex-row md:items-center">
           <input
             type="password"
             className="w-full border rounded p-2 text-sm"
-            placeholder="Inserisci il token API"
+            placeholder="username:password"
             value={tokenInput}
             onChange={(e) => setTokenInput(e.target.value)}
           />
-          <button onClick={handleSaveToken} className="px-4 py-2 bg-slate-800 text-white rounded">Salva token</button>
+          <button onClick={handleSaveToken} className="px-4 py-2 bg-slate-800 text-white rounded">Login</button>
           <button onClick={handleRequestNewToken} className="px-4 py-2 bg-slate-100 text-slate-700 rounded border">Richiedi nuovo token</button>
         </div>
-        <p className="text-xs text-slate-500 mt-2">Token attuale: {maskedToken || 'non configurato'}.</p>
+        <p className="text-xs text-slate-500 mt-2">Sessione: {maskedToken || 'non autenticato'} {currentRole ? `• ruolo ${currentRole}` : ''}.</p>
+        <button onClick={handleLogout} className="mt-2 px-3 py-1 text-xs bg-slate-100 border rounded">Logout</button>
       </div>
       <div className="bg-white rounded shadow p-4 border border-slate-200">
         <h2 className="text-lg font-bold text-slate-800 mb-2">Configurazione AI DeepSeek</h2>
