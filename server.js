@@ -911,10 +911,28 @@ if (ticketsCount > 0 && interventionsCount === 0) {
 
 const parseVersion = (value) => {
   const parsed = Number(value)
-  return Number.isFinite(parsed) ? parsed : null
+  if (!Number.isFinite(parsed)) return null
+  return Math.max(0, Math.trunc(parsed))
 }
 
 const ensureUpdatedAt = (value) => normalizeIso(value) || nowIso()
+
+const compareSyncFreshness = (existing, incoming) => {
+  const existingUpdatedAt = normalizeIso(existing?.updated_at)
+  const incomingUpdatedAt = normalizeIso(incoming?.updatedAt)
+
+  if (incomingUpdatedAt && existingUpdatedAt) {
+    if (incomingUpdatedAt > existingUpdatedAt) return 1
+    if (incomingUpdatedAt < existingUpdatedAt) return -1
+  }
+
+  const existingVersion = parseVersion(existing?.version) ?? 0
+  const incomingVersion = parseVersion(incoming?.version) ?? 0
+  if (incomingVersion > existingVersion) return 1
+  if (incomingVersion < existingVersion) return -1
+
+  return 0
+}
 
 const resolveConflict = (existing, incoming) => {
   const incomingVersion = parseVersion(incoming.version)
@@ -1008,11 +1026,11 @@ const syncEntities = {
     map: mapCustomerRow,
     insert: (value) => runQuery(
       'INSERT INTO customers (id, name, email, phone, address, created_at, updated_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      [value.id, value.name, value.email, value.phone, value.address, nowIso(), value.updatedAt, 1],
+      [value.id, value.name, value.email, value.phone, value.address, nowIso(), value.updatedAt, Math.max(1, parseVersion(value.version) || 1)],
     ),
     update: (existing, value) => runQuery(
       'UPDATE customers SET name = ?, email = ?, phone = ?, address = ?, updated_at = ?, version = ? WHERE id = ?',
-      [value.name, value.email, value.phone, value.address, value.updatedAt, existing.version + 1, value.id],
+      [value.name, value.email, value.phone, value.address, value.updatedAt, Math.max((parseVersion(existing.version) || 0) + 1, parseVersion(value.version) || 1), value.id],
     ),
   },
   tickets: {
@@ -1022,11 +1040,11 @@ const syncEntities = {
     map: mapTicketRow,
     insert: (value) => runQuery(
       'INSERT INTO tickets (id, subject, description, customer_id, status, date, time, created_at, updated_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [value.id, value.subject, value.description, value.customerId, value.status, value.date, value.time, nowIso(), value.updatedAt, 1],
+      [value.id, value.subject, value.description, value.customerId, value.status, value.date, value.time, nowIso(), value.updatedAt, Math.max(1, parseVersion(value.version) || 1)],
     ),
     update: (existing, value) => runQuery(
       'UPDATE tickets SET subject = ?, description = ?, customer_id = ?, status = ?, date = ?, time = ?, updated_at = ?, version = ? WHERE id = ?',
-      [value.subject, value.description, value.customerId, value.status, value.date, value.time, value.updatedAt, existing.version + 1, value.id],
+      [value.subject, value.description, value.customerId, value.status, value.date, value.time, value.updatedAt, Math.max((parseVersion(existing.version) || 0) + 1, parseVersion(value.version) || 1), value.id],
     ),
   },
   inventory: {
@@ -1036,11 +1054,11 @@ const syncEntities = {
     map: mapInventoryRow,
     insert: (value) => runQuery(
       'INSERT INTO inventory (id, name, location, qty, price, min_qty, price_date, created_at, updated_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [value.id, value.name, value.location, value.qty, value.price, value.minQty, value.priceDate, nowIso(), value.updatedAt, 1],
+      [value.id, value.name, value.location, value.qty, value.price, value.minQty, value.priceDate, nowIso(), value.updatedAt, Math.max(1, parseVersion(value.version) || 1)],
     ),
     update: (existing, value) => runQuery(
       'UPDATE inventory SET name = ?, location = ?, qty = ?, price = ?, min_qty = ?, price_date = ?, updated_at = ?, version = ? WHERE id = ?',
-      [value.name, value.location, value.qty, value.price, value.minQty, value.priceDate, value.updatedAt, existing.version + 1, value.id],
+      [value.name, value.location, value.qty, value.price, value.minQty, value.priceDate, value.updatedAt, Math.max((parseVersion(existing.version) || 0) + 1, parseVersion(value.version) || 1), value.id],
     ),
   },
   interventions: {
@@ -1051,7 +1069,7 @@ const syncEntities = {
     insert: (value) => runQuery(
       `INSERT INTO interventions (id, client_id, type, status, urgency, opened_at, closed_at, description, parent_intervention_id, additional_data, created_at, updated_at, version)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [value.id, value.clientId, value.type, value.status, value.urgency, value.openedAt, value.closedAt, value.description, value.parentInterventionId, value.additionalData, nowIso(), value.updatedAt, 1],
+      [value.id, value.clientId, value.type, value.status, value.urgency, value.openedAt, value.closedAt, value.description, value.parentInterventionId, value.additionalData, nowIso(), value.updatedAt, Math.max(1, parseVersion(value.version) || 1)],
     ),
     update: (existing, value) => runQuery(
       `UPDATE interventions
@@ -1068,7 +1086,7 @@ const syncEntities = {
         value.parentInterventionId,
         value.additionalData,
         value.updatedAt,
-        existing.version + 1,
+        Math.max((parseVersion(existing.version) || 0) + 1, parseVersion(value.version) || 1),
         value.id,
       ],
     ),
@@ -1159,9 +1177,6 @@ const applySyncChanges = (syncInput) => {
         return
       }
 
-      const existingUpdatedAt = normalizeIso(existing.updated_at)
-      const incomingUpdatedAt = normalizeIso(value.updatedAt)
-
       if (areRecordsEquivalent(entityName, existing, value)) {
         const current = config.map(existing)
         applied[entityName].push(current)
@@ -1176,7 +1191,8 @@ const applySyncChanges = (syncInput) => {
         return
       }
 
-      if (existingUpdatedAt && incomingUpdatedAt && incomingUpdatedAt <= existingUpdatedAt) {
+      const freshness = compareSyncFreshness(existing, value)
+      if (freshness <= 0) {
         const current = config.map(existing)
         conflicts[entityName].push({ id: value.id, reason: 'timestamp', current })
         logSyncOperation({
@@ -1185,8 +1201,8 @@ const applySyncChanges = (syncInput) => {
           entity: entityName,
           recordId: value.id,
           action: 'update',
-          result: 'conflict',
-          detail: { reason: 'timestamp', winner: 'server' },
+          result: 'resolved_conflict',
+          detail: { reason: 'last_write_wins', winner: 'server' },
         })
         return
       }
