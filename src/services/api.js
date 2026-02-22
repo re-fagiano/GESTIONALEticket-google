@@ -166,35 +166,22 @@ const toEntityState = (rows = []) => {
   return { version, checksum: String(checksum) };
 };
 
-export const syncData = async ({
-  protocolVersion = 1,
-  clientId = 'web-client',
-  lastSyncAt = null,
-  changes = {},
-  localData = {},
-  apiToken = ''
-} = {}) => {
-  const state = {
-    customers: toEntityState(localData.customers),
-    tickets: toEntityState(localData.tickets),
-    inventory: toEntityState(localData.inventory),
-    interventions: toEntityState(localData.interventions),
-  };
+export const syncData = async () => {
+  const [customers, tickets, inventory] = await Promise.all([
+    apiFetch({ path: '/api/customers', options: { method: 'GET' }, allowRefresh: false }),
+    apiFetch({ path: '/api/tickets', options: { method: 'GET' }, allowRefresh: false }),
+    apiFetch({ path: '/api/inventory', options: { method: 'GET' }, allowRefresh: false }),
+  ]);
 
-  return apiFetchWithRetry({
-    path: '/api/sync',
-    options: {
-      method: 'POST',
-      body: JSON.stringify({
-        protocolVersion,
-        clientId,
-        lastSyncAt,
-        state,
-        changes,
-      })
+  return {
+    serverTime: new Date().toISOString(),
+    pulled: {
+      customers: Array.isArray(customers) ? customers : [],
+      tickets: Array.isArray(tickets) ? tickets : [],
+      inventory: Array.isArray(inventory) ? inventory : [],
+      interventions: [],
     },
-    apiToken,
-  });
+  };
 };
 
 export const callDeepSeekApi = async ({ endpoint, requestHeaders, safeSubject, safeDescription }) => {
