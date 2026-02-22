@@ -659,9 +659,38 @@ db.exec(`
   );
 `)
 
-const getRow = (sql, params = []) => db.prepare(sql).get(...params)
-const getAll = (sql, params = []) => db.prepare(sql).all(...params)
-const runQuery = (sql, params = []) => db.prepare(sql).run(...params)
+const logSqlError = (operation, sql, params, error) => {
+  console.error(`[db] SQL ${operation} failed: ${error?.message || error}`)
+  console.error('[db] SQL statement:', sql)
+  console.error('[db] SQL params:', params)
+}
+
+const getRow = (sql, params = []) => {
+  try {
+    return db.prepare(sql).get(...params)
+  } catch (error) {
+    logSqlError('get', sql, params, error)
+    throw error
+  }
+}
+
+const getAll = (sql, params = []) => {
+  try {
+    return db.prepare(sql).all(...params)
+  } catch (error) {
+    logSqlError('all', sql, params, error)
+    throw error
+  }
+}
+
+const runQuery = (sql, params = []) => {
+  try {
+    return db.prepare(sql).run(...params)
+  } catch (error) {
+    logSqlError('run', sql, params, error)
+    throw error
+  }
+}
 
 const formatBackupTimestampForName = (date = new Date()) => {
   const pad = (value) => String(value).padStart(2, '0')
@@ -736,7 +765,7 @@ const googleDriveRequest = async ({ method = 'GET', endpoint, token, body, conte
 const ensureDriveFolder = async (accessToken) => {
   if (!accessToken) return ''
   if (GOOGLE_DRIVE_FOLDER_ID) return GOOGLE_DRIVE_FOLDER_ID
-  const escapedFolderName = GOOGLE_DRIVE_FOLDER_NAME.replace(/'/g, "\'")
+  const escapedFolderName = GOOGLE_DRIVE_FOLDER_NAME.replace(/'/g, "''")
   const query = encodeURIComponent(`name='${escapedFolderName}' and mimeType='application/vnd.google-apps.folder' and trashed=false`)
   const existing = await googleDriveRequest({ endpoint: `/drive/v3/files?q=${query}&fields=files(id,name)&pageSize=1`, token: accessToken })
   if (existing?.files?.length) return existing.files[0].id
@@ -2152,17 +2181,23 @@ const scheduleAutomaticBackup = () => {
 }
 
 const server = createServer(async (req, res) => {
-  const url = new URL(req.url, `http://localhost:${PORT}`)
+  try {
+    const url = new URL(req.url, `http://localhost:${PORT}`)
 
-  if (url.pathname.startsWith('/api/')) {
-    return handleApiRequest(req, res, url)
+    if (url.pathname.startsWith('/api/')) {
+      return handleApiRequest(req, res, url)
+    }
+
+    if (req.method === 'GET') {
+      return handleStaticRequest(url.pathname, res)
+    }
+
+    return respond(res, 405, { error: 'Metodo non supportato.' })
+  } catch (error) {
+    console.error('[server] Richiesta fallita:', error)
+    if (!res.headersSent) return respond(res, 500, { error: 'Errore interno del server.' })
+    res.end()
   }
-
-  if (req.method === 'GET') {
-    return handleStaticRequest(url.pathname, res)
-  }
-
-  return respond(res, 405, { error: 'Metodo non supportato.' })
 })
 
 server.listen(PORT, () => {
