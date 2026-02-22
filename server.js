@@ -688,8 +688,20 @@ const parseSyncBody = (payload) => {
       protocolVersion,
       clientId: sanitizeString(payload?.clientId),
       lastSyncAt: normalizeIso(payload?.lastSyncAt),
+      state: payload?.state && typeof payload.state === 'object' ? payload.state : {},
       changes: payload?.changes && typeof payload.changes === 'object' ? payload.changes : {},
     },
+  }
+}
+
+const hashChecksum = (value) => crypto.createHash('sha256').update(value).digest('hex')
+
+const parseEntityState = (rawState = {}) => {
+  const version = sanitizeNumber(rawState?.version, 0)
+  const checksum = sanitizeString(rawState?.checksum)
+  return {
+    version: Number.isFinite(version) ? Math.max(0, Math.trunc(version)) : 0,
+    checksum,
   }
 }
 
@@ -736,6 +748,77 @@ const syncEntities = {
       [value.name, value.location, value.qty, value.price, value.minQty, value.priceDate, value.updatedAt, existing.version + 1, value.id],
     ),
   },
+  interventions: {
+    table: 'interventions',
+    key: 'id',
+    validate: validateInterventionPayload,
+    map: mapInterventionRow,
+    insert: (value) => runQuery(
+      `INSERT INTO interventions (id, client_id, type, status, urgency, opened_at, closed_at, description, parent_intervention_id, additional_data, created_at, updated_at, version)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [value.id, value.clientId, value.type, value.status, value.urgency, value.openedAt, value.closedAt, value.description, value.parentInterventionId, value.additionalData, nowIso(), value.updatedAt, 1],
+    ),
+    update: (existing, value) => runQuery(
+      `UPDATE interventions
+       SET client_id = ?, type = ?, status = ?, urgency = ?, opened_at = ?, closed_at = ?, description = ?, parent_intervention_id = ?, additional_data = ?, updated_at = ?, version = ?
+       WHERE id = ?`,
+      [
+        value.clientId,
+        value.type,
+        value.status,
+        value.urgency,
+        value.openedAt,
+        value.closedAt,
+        value.description,
+        value.parentInterventionId,
+        value.additionalData,
+        value.updatedAt,
+        existing.version + 1,
+        value.id,
+      ],
+    ),
+  },
+}
+
+const areRecordsEquivalent = (entityName, existing, value) => {
+  if (entityName === 'customers') {
+    return existing.name === value.name
+      && existing.email === value.email
+      && existing.phone === value.phone
+      && existing.address === value.address
+      && normalizeIso(existing.updated_at) === normalizeIso(value.updatedAt)
+  }
+  if (entityName === 'tickets') {
+    return existing.subject === value.subject
+      && existing.description === value.description
+      && existing.customer_id === value.customerId
+      && existing.status === value.status
+      && existing.date === value.date
+      && existing.time === value.time
+      && normalizeIso(existing.updated_at) === normalizeIso(value.updatedAt)
+  }
+  if (entityName === 'inventory') {
+    return existing.name === value.name
+      && existing.location === value.location
+      && Number(existing.qty) === Number(value.qty)
+      && Number(existing.price) === Number(value.price)
+      && Number(existing.min_qty) === Number(value.minQty)
+      && (existing.price_date || '') === (value.priceDate || '')
+      && normalizeIso(existing.updated_at) === normalizeIso(value.updatedAt)
+  }
+  if (entityName === 'interventions') {
+    return existing.client_id === value.clientId
+      && existing.type === value.type
+      && existing.status === value.status
+      && Number(existing.urgency) === Number(value.urgency)
+      && normalizeIso(existing.opened_at) === normalizeIso(value.openedAt)
+      && normalizeIso(existing.closed_at) === normalizeIso(value.closedAt)
+      && (existing.description || '') === (value.description || '')
+      && (existing.parent_intervention_id || null) === (value.parentInterventionId || null)
+      && (existing.additional_data || '{}') === (value.additionalData || '{}')
+      && normalizeIso(existing.updated_at) === normalizeIso(value.updatedAt)
+  }
+  return false
 }
 
 const applySyncChanges = (syncInput) => {
@@ -781,10 +864,26 @@ const applySyncChanges = (syncInput) => {
         return
       }
 
-      const conflictReason = resolveConflict(existing, value)
-      if (conflictReason) {
+      const existingUpdatedAt = normalizeIso(existing.updated_at)
+      const incomingUpdatedAt = normalizeIso(value.updatedAt)
+
+      if (areRecordsEquivalent(entityName, existing, value)) {
         const current = config.map(existing)
-        conflicts[entityName].push({ id: value.id, reason: conflictReason, current })
+        applied[entityName].push(current)
+        logSyncOperation({
+          protocolVersion: syncInput.protocolVersion,
+          clientId: syncInput.clientId,
+          entity: entityName,
+          recordId: value.id,
+          action: 'update',
+          result: 'noop',
+        })
+        return
+      }
+
+      if (existingUpdatedAt && incomingUpdatedAt && incomingUpdatedAt <= existingUpdatedAt) {
+        const current = config.map(existing)
+        conflicts[entityName].push({ id: value.id, reason: 'timestamp', current })
         logSyncOperation({
           protocolVersion: syncInput.protocolVersion,
           clientId: syncInput.clientId,
@@ -792,7 +891,7 @@ const applySyncChanges = (syncInput) => {
           recordId: value.id,
           action: 'update',
           result: 'conflict',
-          detail: { reason: conflictReason },
+          detail: { reason: 'timestamp', winner: 'server' },
         })
         return
       }
@@ -815,17 +914,49 @@ const applySyncChanges = (syncInput) => {
   return { applied, conflicts, rejected }
 }
 
-const collectSyncDelta = (lastSyncAt) => {
+const collectSyncDelta = (lastSyncAt, state = {}) => {
   const pullRows = (table, mapper) => {
     if (!lastSyncAt) return getAll(`SELECT * FROM ${table}`).map(mapper)
     return getAll(`SELECT * FROM ${table} WHERE updated_at > ?`, [lastSyncAt]).map(mapper)
   }
 
-  return {
-    customers: pullRows('customers', mapCustomerRow),
-    tickets: pullRows('tickets', mapTicketRow),
-    inventory: pullRows('inventory', mapInventoryRow),
+  const shouldSendFullEntity = (entityName) => {
+    const clientState = parseEntityState(state[entityName])
+    if (!clientState.version && !clientState.checksum) return false
+    const serverState = getServerEntityState(entityName)
+    return clientState.version !== serverState.version || clientState.checksum !== serverState.checksum
   }
+
+  const pullEntity = (entityName, table, mapper) => {
+    if (shouldSendFullEntity(entityName)) {
+      return getAll(`SELECT * FROM ${table}`).map(mapper)
+    }
+    return pullRows(table, mapper)
+  }
+
+  return {
+    customers: pullEntity('customers', 'customers', mapCustomerRow),
+    tickets: pullEntity('tickets', 'tickets', mapTicketRow),
+    inventory: pullEntity('inventory', 'inventory', mapInventoryRow),
+    interventions: pullEntity('interventions', 'interventions', mapInterventionRow),
+  }
+}
+
+const entitySyncState = {
+  customers: { table: 'customers', map: mapCustomerRow },
+  tickets: { table: 'tickets', map: mapTicketRow },
+  inventory: { table: 'inventory', map: mapInventoryRow },
+  interventions: { table: 'interventions', map: mapInterventionRow },
+}
+
+const getServerEntityState = (entityName) => {
+  const config = entitySyncState[entityName]
+  if (!config) return { version: 0, checksum: hashChecksum('[]') }
+  const rows = getAll(`SELECT * FROM ${config.table} ORDER BY id ASC`).map(config.map)
+  const version = rows.reduce((acc, row) => acc + sanitizeNumber(row?.version, 0), 0)
+  const normalized = rows.map((row) => ({ id: row.id, updatedAt: row.updatedAt, version: row.version }))
+  const checksum = hashChecksum(JSON.stringify(normalized))
+  return { version, checksum }
 }
 
 const parseCsv = (csvText) => {
@@ -1061,7 +1192,7 @@ const handleApiRequest = async (req, res, url) => {
       db.exec('COMMIT')
       transactionOpen = false
 
-      const pulled = collectSyncDelta(parsed.value.lastSyncAt)
+      const pulled = collectSyncDelta(parsed.value.lastSyncAt, parsed.value.state)
       return respond(res, 200, {
         protocolVersion: SYNC_PROTOCOL_VERSION,
         serverTime: nowIso(),

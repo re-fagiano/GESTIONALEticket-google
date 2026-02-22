@@ -22,7 +22,8 @@ import {
   getTokenStatus,
   logout,
   requestNewToken,
-  saveToken
+  saveToken,
+  syncData
 } from './services/api';
 import {
   getStorageState,
@@ -116,6 +117,7 @@ export default function App() {
   // Stato che indica se la storage persistente è in fase di richiesta
   const [isPersistingStorage, setIsPersistingStorage] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [lastSyncAt, setLastSyncAt] = useState(() => readRawSync('sync_last_at', null));
 
   // Stato per le notifiche toast
   const [toasts, setToasts] = useState([]);
@@ -277,17 +279,32 @@ export default function App() {
       return;
     }
     try {
-      setSyncStatus('Caricamento dati dal backend...');
+      setSyncStatus('Sincronizzazione dati in corso...');
       setIsSyncing(true);
-      const data = await apiFetchWithRetry('/api/bootstrap');
-      setCustomers(sanitizeCustomers(data.customers, initialCustomers));
-      setTickets(sanitizeTickets(data.tickets, initialTickets));
-      setInterventions(sanitizeInterventions(data.interventions, initialInterventions));
-      setInventory(sanitizeInventoryList(data.inventory, initialInventory));
-      setSettings(Array.isArray(data.settings) ? data.settings : []);
+      const data = await syncData({
+        apiToken,
+        clientId: 'web-app',
+        lastSyncAt,
+        localData: {
+          customers,
+          tickets,
+          inventory,
+          interventions,
+        },
+        changes: {},
+      });
+      const pulled = data?.pulled || {};
+      setCustomers((current) => sanitizeCustomers((pulled.customers?.length ? pulled.customers : current), initialCustomers));
+      setTickets((current) => sanitizeTickets((pulled.tickets?.length ? pulled.tickets : current), initialTickets));
+      setInterventions((current) => sanitizeInterventions((pulled.interventions?.length ? pulled.interventions : current), initialInterventions));
+      setInventory((current) => sanitizeInventoryList((pulled.inventory?.length ? pulled.inventory : current), initialInventory));
       setStorageWarning(null);
       setSyncStatus('Dati sincronizzati con il backend.');
       setBackendOnline(true);
+      if (data?.serverTime) {
+        setLastSyncAt(data.serverTime);
+        writeRaw('sync_last_at', data.serverTime);
+      }
     } catch (error) {
       console.error('Errore sincronizzazione backend', error);
       setStorageWarning(error.message || 'Impossibile contattare il backend.');
