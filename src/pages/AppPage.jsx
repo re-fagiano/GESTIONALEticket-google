@@ -2098,7 +2098,7 @@ const buildBackup = () => ({
 
 
   const CalendarView = () => {
-    const calendarEvents = interventions.map((item) => {
+    const calendarEvents = useMemo(() => interventions.map((item) => {
       const customer = customers.find((entry) => entry.id === item.clientId);
       const typeLabel = interventionTypeMeta[item.type]?.singularLabel || 'Intervento';
       const title = `${typeLabel} • ${customer?.name || 'Cliente non assegnato'}`;
@@ -2125,7 +2125,7 @@ const buildBackup = () => ({
           customerName: customer?.name || 'Cliente non assegnato'
         }
       };
-    });
+    }), [interventions, customers]);
 
     const isFullCalendarAvailable = typeof window !== 'undefined' && Boolean(window.FullCalendar?.Calendar);
     const fallbackCalendarData = useMemo(() => {
@@ -2214,7 +2214,13 @@ const buildBackup = () => ({
         calendarApiRef.current = null;
         calendar.destroy();
       };
-    }, [calendarEvents, interventions, isFullCalendarAvailable]);
+    }, [isFullCalendarAvailable]);
+
+    useEffect(() => {
+      if (!calendarApiRef.current || !isFullCalendarAvailable) return;
+      calendarApiRef.current.removeAllEvents();
+      calendarApiRef.current.addEventSource(calendarEvents);
+    }, [calendarEvents, isFullCalendarAvailable]);
 
     return (
       <div className="space-y-4">
