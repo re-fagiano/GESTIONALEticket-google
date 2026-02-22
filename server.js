@@ -507,6 +507,19 @@ db.exec(`
 `)
 
 try { db.exec('ALTER TABLE inventory ADD COLUMN price_date TEXT') } catch { /* Column may already exist in migrated databases. */ }
+db.exec(`
+  CREATE TABLE IF NOT EXISTS sync_logs (
+    id TEXT PRIMARY KEY,
+    protocol_version INTEGER NOT NULL,
+    client_id TEXT,
+    entity TEXT NOT NULL,
+    record_id TEXT,
+    action TEXT NOT NULL,
+    result TEXT NOT NULL,
+    detail TEXT,
+    created_at TEXT NOT NULL
+  );
+`)
 
 const getRow = (sql, params = []) => db.prepare(sql).get(...params)
 const getAll = (sql, params = []) => db.prepare(sql).all(...params)
@@ -561,6 +574,195 @@ const resolveConflict = (existing, incoming) => {
 
 const sendConflict = (res, message, current) => {
   respond(res, 409, { error: message, current })
+}
+
+
+const SYNC_PROTOCOL_VERSION = 1
+const SYNC_MAX_LOG_ROWS = 2000
+
+const logSyncOperation = ({ protocolVersion, clientId, entity, recordId, action, result, detail }) => {
+  runQuery(
+    'INSERT INTO sync_logs (id, protocol_version, client_id, entity, record_id, action, result, detail, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    [
+      ensureId(),
+      sanitizeNumber(protocolVersion, SYNC_PROTOCOL_VERSION),
+      sanitizeString(clientId) || null,
+      sanitizeString(entity, 'unknown'),
+      sanitizeString(recordId) || null,
+      sanitizeString(action, 'noop'),
+      sanitizeString(result, 'ok'),
+      detail ? JSON.stringify(detail) : null,
+      nowIso(),
+    ],
+  )
+}
+
+const trimSyncLog = () => {
+  const total = getRow('SELECT COUNT(*) AS total FROM sync_logs')?.total || 0
+  if (total <= SYNC_MAX_LOG_ROWS) return
+  const toDelete = total - SYNC_MAX_LOG_ROWS
+  runQuery(
+    `DELETE FROM sync_logs
+      WHERE id IN (
+        SELECT id FROM sync_logs
+        ORDER BY created_at ASC
+        LIMIT ?
+      )`,
+    [toDelete],
+  )
+}
+
+const parseSyncBody = (payload) => {
+  const protocolVersion = sanitizeNumber(payload?.protocolVersion, null)
+  if (protocolVersion === null) {
+    return { error: 'protocolVersion obbligatorio.' }
+  }
+  if (protocolVersion !== SYNC_PROTOCOL_VERSION) {
+    return { error: `Versione protocollo non supportata (${protocolVersion}).`, status: 426 }
+  }
+  return {
+    value: {
+      protocolVersion,
+      clientId: sanitizeString(payload?.clientId),
+      lastSyncAt: normalizeIso(payload?.lastSyncAt),
+      changes: payload?.changes && typeof payload.changes === 'object' ? payload.changes : {},
+    },
+  }
+}
+
+const syncEntities = {
+  customers: {
+    table: 'customers',
+    key: 'id',
+    validate: validateCustomerPayload,
+    map: mapCustomerRow,
+    insert: (value) => runQuery(
+      'INSERT INTO customers (id, name, email, phone, address, created_at, updated_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [value.id, value.name, value.email, value.phone, value.address, nowIso(), value.updatedAt, 1],
+    ),
+    update: (existing, value) => runQuery(
+      'UPDATE customers SET name = ?, email = ?, phone = ?, address = ?, updated_at = ?, version = ? WHERE id = ?',
+      [value.name, value.email, value.phone, value.address, value.updatedAt, existing.version + 1, value.id],
+    ),
+  },
+  tickets: {
+    table: 'tickets',
+    key: 'id',
+    validate: validateTicketPayload,
+    map: mapTicketRow,
+    insert: (value) => runQuery(
+      'INSERT INTO tickets (id, subject, description, customer_id, status, date, time, created_at, updated_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [value.id, value.subject, value.description, value.customerId, value.status, value.date, value.time, nowIso(), value.updatedAt, 1],
+    ),
+    update: (existing, value) => runQuery(
+      'UPDATE tickets SET subject = ?, description = ?, customer_id = ?, status = ?, date = ?, time = ?, updated_at = ?, version = ? WHERE id = ?',
+      [value.subject, value.description, value.customerId, value.status, value.date, value.time, value.updatedAt, existing.version + 1, value.id],
+    ),
+  },
+  inventory: {
+    table: 'inventory',
+    key: 'id',
+    validate: validateInventoryPayload,
+    map: mapInventoryRow,
+    insert: (value) => runQuery(
+      'INSERT INTO inventory (id, name, location, qty, price, min_qty, price_date, created_at, updated_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [value.id, value.name, value.location, value.qty, value.price, value.minQty, value.priceDate, nowIso(), value.updatedAt, 1],
+    ),
+    update: (existing, value) => runQuery(
+      'UPDATE inventory SET name = ?, location = ?, qty = ?, price = ?, min_qty = ?, price_date = ?, updated_at = ?, version = ? WHERE id = ?',
+      [value.name, value.location, value.qty, value.price, value.minQty, value.priceDate, value.updatedAt, existing.version + 1, value.id],
+    ),
+  },
+}
+
+const applySyncChanges = (syncInput) => {
+  const applied = {}
+  const conflicts = {}
+  const rejected = {}
+
+  Object.entries(syncEntities).forEach(([entityName, config]) => {
+    const incomingItems = Array.isArray(syncInput.changes[entityName]) ? syncInput.changes[entityName] : []
+    applied[entityName] = []
+    conflicts[entityName] = []
+    rejected[entityName] = []
+
+    incomingItems.forEach((item) => {
+      const { error, value } = config.validate(item)
+      if (error) {
+        rejected[entityName].push({ reason: error, item })
+        logSyncOperation({
+          protocolVersion: syncInput.protocolVersion,
+          clientId: syncInput.clientId,
+          entity: entityName,
+          recordId: item?.id,
+          action: 'upsert',
+          result: 'invalid',
+          detail: { reason: error },
+        })
+        return
+      }
+
+      const existing = getRow(`SELECT * FROM ${config.table} WHERE ${config.key} = ?`, [value.id])
+      if (!existing) {
+        config.insert(value)
+        const inserted = config.map(getRow(`SELECT * FROM ${config.table} WHERE ${config.key} = ?`, [value.id]))
+        applied[entityName].push(inserted)
+        logSyncOperation({
+          protocolVersion: syncInput.protocolVersion,
+          clientId: syncInput.clientId,
+          entity: entityName,
+          recordId: value.id,
+          action: 'insert',
+          result: 'applied',
+        })
+        return
+      }
+
+      const conflictReason = resolveConflict(existing, value)
+      if (conflictReason) {
+        const current = config.map(existing)
+        conflicts[entityName].push({ id: value.id, reason: conflictReason, current })
+        logSyncOperation({
+          protocolVersion: syncInput.protocolVersion,
+          clientId: syncInput.clientId,
+          entity: entityName,
+          recordId: value.id,
+          action: 'update',
+          result: 'conflict',
+          detail: { reason: conflictReason },
+        })
+        return
+      }
+
+      config.update(existing, value)
+      const updated = config.map(getRow(`SELECT * FROM ${config.table} WHERE ${config.key} = ?`, [value.id]))
+      applied[entityName].push(updated)
+      logSyncOperation({
+        protocolVersion: syncInput.protocolVersion,
+        clientId: syncInput.clientId,
+        entity: entityName,
+        recordId: value.id,
+        action: 'update',
+        result: 'applied',
+      })
+    })
+  })
+
+  trimSyncLog()
+  return { applied, conflicts, rejected }
+}
+
+const collectSyncDelta = (lastSyncAt) => {
+  const pullRows = (table, mapper) => {
+    if (!lastSyncAt) return getAll(`SELECT * FROM ${table}`).map(mapper)
+    return getAll(`SELECT * FROM ${table} WHERE updated_at > ?`, [lastSyncAt]).map(mapper)
+  }
+
+  return {
+    customers: pullRows('customers', mapCustomerRow),
+    tickets: pullRows('tickets', mapTicketRow),
+    inventory: pullRows('inventory', mapInventoryRow),
+  }
 }
 
 const parseCsv = (csvText) => {
@@ -689,6 +891,37 @@ const handleApiRequest = async (req, res, url) => {
       inventory: getAll('SELECT * FROM inventory').map(mapInventoryRow),
       settings: getAll('SELECT * FROM settings').map(mapSettingRow),
     })
+  }
+
+
+  if (req.method === 'POST' && url.pathname === '/api/sync') {
+    let transactionOpen = false
+    try {
+      const payload = await readJsonBody(req)
+      const parsed = parseSyncBody(payload)
+      if (parsed.error) {
+        return respond(res, parsed.status || 400, { error: parsed.error, supportedProtocolVersion: SYNC_PROTOCOL_VERSION })
+      }
+
+      db.exec('BEGIN')
+      transactionOpen = true
+      const syncResult = applySyncChanges(parsed.value)
+      db.exec('COMMIT')
+      transactionOpen = false
+
+      const pulled = collectSyncDelta(parsed.value.lastSyncAt)
+      return respond(res, 200, {
+        protocolVersion: SYNC_PROTOCOL_VERSION,
+        serverTime: nowIso(),
+        ...syncResult,
+        pulled,
+      })
+    } catch (error) {
+      if (transactionOpen) {
+        db.exec('ROLLBACK')
+      }
+      return respond(res, 400, { error: error.message || 'Errore durante la sincronizzazione.' })
+    }
   }
 
   if (req.method === 'POST' && url.pathname === '/api/import') {
