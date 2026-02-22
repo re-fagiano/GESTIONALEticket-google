@@ -1,6 +1,27 @@
 const RAG_API_URL = (import.meta.env.VITE_RAG_API_URL || '').trim().replace(/\/$/, '');
 const RAG_ENDPOINT = RAG_API_URL || '/api/rag';
 
+let refreshPromise = null;
+
+const refreshAccessToken = async () => {
+  if (!refreshPromise) {
+    refreshPromise = fetch('/api/auth/refresh', { method: 'POST', credentials: 'include' })
+      .then(async (response) => {
+        const payload = await response.json().catch(() => null);
+        if (!response.ok) {
+          const err = new Error(payload?.error || 'Sessione scaduta.');
+          err.status = response.status;
+          throw err;
+        }
+        return payload?.accessToken || '';
+      })
+      .finally(() => {
+        refreshPromise = null;
+      });
+  }
+  return refreshPromise;
+};
+
 export const callRagApi = async (payload = {}) => {
   if (!payload || typeof payload !== 'object') {
     throw new Error('Payload RAG non valido.');
@@ -39,7 +60,7 @@ export const callRagApi = async (payload = {}) => {
   }
 };
 
-export const apiFetch = async (input, maybeOptions = {}, maybeToken = '') => {
+export const apiFetch = async (input, maybeOptions = {}, maybeToken = '', allowRefresh = true) => {
   const normalized = typeof input === 'string'
     ? { path: input, options: maybeOptions, apiToken: maybeToken }
     : (input || {});
@@ -56,6 +77,12 @@ export const apiFetch = async (input, maybeOptions = {}, maybeToken = '') => {
   const payload = response.status === 204 ? null : await response.json().catch(() => null);
 
   if (!response.ok) {
+    if (response.status === 401 && allowRefresh) {
+      const refreshedToken = await refreshAccessToken().catch(() => '');
+      if (refreshedToken) {
+        return apiFetch({ path, options, apiToken: refreshedToken }, {}, '', false);
+      }
+    }
     const error = new Error(payload?.error || `Errore API: ${response.status}`);
     error.status = response.status;
     error.payload = payload;
