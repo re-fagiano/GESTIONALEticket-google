@@ -373,7 +373,7 @@ const mapQuoteRow = (row) => (row ? ({
 const USER_ROLES = new Set(['admin', 'tech', 'read', 'operator'])
 const CSRF_SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 
-const toBase64Url = (buffer) => buffer.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
+const toBase64Url = (value) => Buffer.from(value).toString('base64').replace(/=+$/g, '').replace(/\+/g, '-').replace(/\//g, '_')
 const hashValue = (value) => crypto.createHash('sha256').update(String(value || '')).digest('hex')
 
 const hashPassword = (password) => {
@@ -683,8 +683,6 @@ const parseServiceAccountPrivateKey = () => {
   }
 }
 
-const toBase64Url = (value) => Buffer.from(value).toString('base64').replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_')
-
 const getGoogleAccessToken = async () => {
   const privateKey = parseServiceAccountPrivateKey()
   if (!GOOGLE_SERVICE_ACCOUNT_EMAIL || !privateKey) return ''
@@ -803,9 +801,7 @@ const toCsvBuffer = (headers = [], rows = []) => {
   rows.forEach((row) => {
     csvRows.push(headers.map((header) => toCsvValue(row?.[header])).join(','))
   })
-  return Buffer.from(`${csvRows.join('
-')}
-`, 'utf-8')
+  return Buffer.from(`${csvRows.join('\n')}\n`, 'utf-8')
 }
 
 const storeBackupRun = ({ status, fileName = '', driveFileId = '', errorMessage = '' }) => {
