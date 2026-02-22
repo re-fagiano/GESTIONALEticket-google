@@ -14,6 +14,20 @@ import {
 } from 'lucide-react';
 import { INVENTORY_HEADERS, parseInventoryFile } from './utils/inventoryImport';
 import { apiFetch as apiFetchRequest, apiFetchWithRetry as apiFetchWithRetryRequest, callDeepSeekApi } from './services/api';
+import {
+  getStorageState,
+  idbSet,
+  loadBackupAtFromIdb,
+  loadBackupAtSync,
+  loadBackupFromIdb,
+  loadBackupSync,
+  loadCache,
+  loadCacheFromIdb,
+  readRawSync,
+  saveBackup,
+  saveCache,
+  writeRaw
+} from './services/clientStorage';
 import Sidebar from './components/Sidebar';
 import ToastList from './components/ToastList';
 import ActiveTabContent from './pages/ActiveTabContent';
@@ -21,50 +35,6 @@ import ActiveTabContent from './pages/ActiveTabContent';
 const isBrowser = typeof window !== 'undefined';
 const isLocalhost = isBrowser && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
 const forcedProxyEndpoint = '/api/deepseek';
-const storageAvailable = typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
-const storageFallbackState = { active: false };
-const IDB_DB_NAME = 'gestionale_storage';
-const IDB_STORE = 'keyval';
-
-const openIdb = () => {
-  if (!isBrowser) return Promise.reject(new Error('IDB non disponibile'));
-  if (!openIdb.promise) {
-    openIdb.promise = new Promise((resolve, reject) => {
-      const request = window.indexedDB.open(IDB_DB_NAME, 1);
-      request.onupgradeneeded = () => {
-        const db = request.result;
-        if (!db.objectStoreNames.contains(IDB_STORE)) {
-          db.createObjectStore(IDB_STORE);
-        }
-      };
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
-  }
-  return openIdb.promise;
-};
-
-const idbGet = async (key) => {
-  const db = await openIdb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(IDB_STORE, 'readonly');
-    const store = tx.objectStore(IDB_STORE);
-    const request = store.get(key);
-    request.onsuccess = () => resolve(request.result ?? null);
-    request.onerror = () => reject(request.error);
-  });
-};
-
-const idbSet = async (key, value) => {
-  const db = await openIdb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(IDB_STORE, 'readwrite');
-    const store = tx.objectStore(IDB_STORE);
-    const request = store.put(value, key);
-    request.onsuccess = () => resolve(true);
-    request.onerror = () => reject(request.error);
-  });
-};
 const nowIso = () => new Date().toISOString();
 const toDateKey = (value) => {
   const date = value instanceof Date ? value : new Date(value);
@@ -105,59 +75,6 @@ const getDescriptionEntries = (intervention) => {
 
 const buildDescriptionFromEntries = (entries = []) => entries.map((entry) => entry.text).filter(Boolean).join('\n');
 
-const safeGetItem = (key, fallback = null) => {
-  if (!storageAvailable) return fallback;
-  try {
-    const saved = localStorage.getItem(key);
-    return saved === null ? fallback : saved;
-  } catch (e) {
-    storageFallbackState.active = true;
-    console.warn('Storage non accessibile, uso fallback', e);
-    return fallback;
-  }
-};
-
-const safeSetItem = (key, value) => {
-  if (!storageAvailable) {
-    storageFallbackState.active = true;
-    idbSet(key, value).catch((error) => console.warn('Fallback IndexedDB fallito', error));
-    return false;
-  }
-  try {
-    localStorage.setItem(key, value);
-    return true;
-  } catch (e) {
-    storageFallbackState.active = true;
-    idbSet(key, value).catch((error) => console.warn('Fallback IndexedDB fallito', error));
-    console.warn('Impossibile scrivere su storage, i dati non saranno salvati', e);
-    return false;
-  }
-};
-
-const loadData = (key, defaultData) => {
-  const saved = safeGetItem(key, null);
-  if (!saved) return defaultData;
-  try {
-    return JSON.parse(saved);
-  } catch (e) {
-    console.error("Errore lettura memoria", e);
-    return defaultData;
-  }
-};
-
-const cacheKeys = {
-  customers: 'cache_customers',
-  tickets: 'cache_tickets',
-  interventions: 'cache_interventions',
-  sparePartsOrders: 'cache_spare_parts_orders',
-  quotes: 'cache_quotes',
-  inventory: 'cache_inventory',
-  settings: 'cache_settings'
-};
-
-const loadCache = (key, fallback) => loadData(cacheKeys[key], fallback);
-
-const saveCache = (key, value) => safeSetItem(cacheKeys[key], JSON.stringify(value));
 
 const sanitizeTicket = (ticket, idx = 0) => {
   if (!ticket || typeof ticket !== 'object') return null;
@@ -409,8 +326,8 @@ export default function App() {
   const [retryStatus, setRetryStatus] = useState('');
 
   // Stato per l’ultimo backup automatico e relativo timestamp
-  const [latestBackup, setLatestBackup] = useState(null);
-  const [autoBackupAt, setAutoBackupAt] = useState(null);
+  const [latestBackup, setLatestBackup] = useState(() => loadBackupSync());
+  const [autoBackupAt, setAutoBackupAt] = useState(() => loadBackupAtSync());
 
   // Stato per la notifica dei backup manuali/automatici
   const [backupStatus, setBackupStatus] = useState('');
@@ -425,8 +342,8 @@ export default function App() {
   const [toasts, setToasts] = useState([]);
 
   const [operatorProfile, setOperatorProfile] = useState(() => {
-    const savedCode = safeGetItem('operatorCode', '');
-    const savedName = safeGetItem('operatorName', '');
+    const savedCode = readRawSync('operatorCode', '');
+    const savedName = readRawSync('operatorName', '');
     return {
       code: savedCode || generateUserCode(),
       name: savedName || 'Operatore'
@@ -488,29 +405,30 @@ export default function App() {
   }, [settings]);
 
   useEffect(() => {
-    safeSetItem('operatorCode', operatorProfile.code);
-    safeSetItem('operatorName', operatorProfile.name);
+    writeRaw('operatorCode', operatorProfile.code);
+    writeRaw('operatorName', operatorProfile.name);
   }, [operatorProfile]);
 
   useEffect(() => {
-    if (!storageAvailable || storageFallbackState.active) {
+    const storageState = getStorageState();
+    if (!storageState.localStorageAvailable || storageState.fallbackActive) {
       const loadFallback = async () => {
         try {
           const [customersRaw, ticketsRaw, interventionsRaw, inventoryRaw, settingsRaw, backupRaw, backupAt] = await Promise.all([
-            idbGet(cacheKeys.customers),
-            idbGet(cacheKeys.tickets),
-            idbGet(cacheKeys.interventions),
-            idbGet(cacheKeys.inventory),
-            idbGet(cacheKeys.settings),
-            idbGet('lastBackup'),
-            idbGet('lastBackupAt'),
+            loadCacheFromIdb('customers', initialCustomers),
+            loadCacheFromIdb('tickets', initialTickets),
+            loadCacheFromIdb('interventions', initialInterventions),
+            loadCacheFromIdb('inventory', initialInventory),
+            loadCacheFromIdb('settings', []),
+            loadBackupFromIdb(),
+            loadBackupAtFromIdb(),
           ]);
-          if (customersRaw) setCustomers(sanitizeCustomers(JSON.parse(customersRaw), initialCustomers));
-          if (ticketsRaw) setTickets(sanitizeTickets(JSON.parse(ticketsRaw), initialTickets));
-          if (interventionsRaw) setInterventions(sanitizeInterventions(JSON.parse(interventionsRaw), initialInterventions));
-          if (inventoryRaw) setInventory(sanitizeInventoryList(JSON.parse(inventoryRaw), initialInventory));
-          if (settingsRaw) setSettings(JSON.parse(settingsRaw));
-          if (backupRaw) setLatestBackup(JSON.parse(backupRaw));
+          if (customersRaw) setCustomers(sanitizeCustomers(customersRaw, initialCustomers));
+          if (ticketsRaw) setTickets(sanitizeTickets(ticketsRaw, initialTickets));
+          if (interventionsRaw) setInterventions(sanitizeInterventions(interventionsRaw, initialInterventions));
+          if (inventoryRaw) setInventory(sanitizeInventoryList(inventoryRaw, initialInventory));
+          if (settingsRaw) setSettings(Array.isArray(settingsRaw) ? settingsRaw : []);
+          if (backupRaw) setLatestBackup(backupRaw);
           if (backupAt) setAutoBackupAt(backupAt);
         } catch (error) {
           console.warn('Fallback IndexedDB non disponibile', error);
@@ -1342,13 +1260,7 @@ const buildBackup = () => ({
 
   const saveAutoBackup = () => {
     const backup = buildBackup();
-    const payload = JSON.stringify(backup);
-    const stored = safeSetItem('lastBackup', payload);
-    safeSetItem('lastBackupAt', backup.exportedAt);
-    if (!stored) {
-      idbSet('lastBackup', payload).catch(() => null);
-      idbSet('lastBackupAt', backup.exportedAt).catch(() => null);
-    }
+    saveBackup(backup);
     setLatestBackup(backup);
     setAutoBackupAt(backup.exportedAt);
   };
