@@ -1101,6 +1101,29 @@ const ensureRole = (res, user, allowedRoles = []) => {
   return true
 }
 
+const ensureRouteAuthorization = (req, res, user, pathname) => {
+  if (user.role === 'admin') return true
+
+  if (user.role === 'tech') {
+    if (pathname.startsWith('/api/import')) {
+      respond(res, 403, { error: 'Permessi insufficienti per questa operazione.' })
+      return false
+    }
+    return true
+  }
+
+  if (user.role === 'read') {
+    if (!CSRF_SAFE_METHODS.has(req.method || 'GET')) {
+      respond(res, 403, { error: 'Permessi insufficienti per questa operazione.' })
+      return false
+    }
+    return true
+  }
+
+  respond(res, 403, { error: 'Permessi insufficienti per questa operazione.' })
+  return false
+}
+
 const handleApiRequest = async (req, res, url) => {
   if (url.pathname === '/api/health' && req.method === 'GET') {
     const user = ensureAuth(req, res)
@@ -1198,6 +1221,7 @@ const handleApiRequest = async (req, res, url) => {
 
   const user = ensureAuth(req, res)
   if (!user) return
+  if (!ensureRouteAuthorization(req, res, user, url.pathname)) return
   if (!ensureCsrf(req, res)) return
   if (!checkApiRateLimit(req, res, user.id)) return
 
