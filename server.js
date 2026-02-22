@@ -622,11 +622,11 @@ db.exec(`
 
 try { db.exec('ALTER TABLE inventory ADD COLUMN price_date TEXT') } catch { /* Column may already exist in migrated databases. */ }
 try { db.exec('ALTER TABLE users ADD COLUMN email TEXT UNIQUE') } catch { /* Column may already exist in migrated databases. */ }
-try { db.exec("ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active'") } catch { /* Column may already exist in migrated databases. */ }
+try { db.exec('ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT \'active\'') } catch { /* Column may already exist in migrated databases. */ }
 try { db.exec('ALTER TABLE users ADD COLUMN approved INTEGER NOT NULL DEFAULT 1') } catch { /* Column may already exist in migrated databases. */ }
 try {
-  db.exec("UPDATE users SET email = LOWER(username) WHERE email IS NULL OR email = ''")
-  db.exec('UPDATE users SET status = COALESCE(NULLIF(status, ""), "active")')
+  db.exec('UPDATE users SET email = LOWER(username) WHERE email IS NULL OR email = \'\'')
+  db.exec('UPDATE users SET status = COALESCE(NULLIF(status, \'\'), \'active\')')
   db.exec('UPDATE users SET approved = COALESCE(approved, 1)')
 } catch (error) {
   console.error('[db] Migrazione users non completata:', error)
@@ -1174,7 +1174,7 @@ const handleApiRequest = async (req, res, url) => {
       const identifier = username || email
       const password = sanitizeString(payload?.password)
       if (!identifier || !password) return respond(res, 400, { error: 'Email e password sono obbligatorie.', code: 'missing_credentials' })
-      const user = getRow('SELECT * FROM users WHERE LOWER(username) = LOWER(?) OR LOWER(COALESCE(email, "")) = LOWER(?)', [identifier, identifier])
+      const user = getRow('SELECT * FROM users WHERE LOWER(username) = LOWER(?) OR LOWER(COALESCE(email, \'\')) = LOWER(?)', [identifier, identifier])
       if (!checkLoginRateLimit(req, res, identifier)) return
       if (!user) {
         return respond(res, 404, { error: 'Utente non trovato.', code: 'user_not_found' })
@@ -1213,7 +1213,7 @@ const handleApiRequest = async (req, res, url) => {
       if (password.length < 8) {
         return respond(res, 400, { error: 'La password deve avere almeno 8 caratteri.', code: 'weak_password' })
       }
-      if (getRow('SELECT id FROM users WHERE LOWER(username) = LOWER(?) OR LOWER(COALESCE(email, "")) = LOWER(?)', [email, email])) {
+      if (getRow('SELECT id FROM users WHERE LOWER(username) = LOWER(?) OR LOWER(COALESCE(email, \'\')) = LOWER(?)', [email, email])) {
         return respond(res, 409, { error: 'Utente già registrato.', code: 'user_exists' })
       }
       const user = {
