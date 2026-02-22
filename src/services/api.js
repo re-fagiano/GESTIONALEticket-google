@@ -156,3 +156,43 @@ export const callDeepSeekApi = async ({ endpoint, requestHeaders, safeSubject, s
   if (!content) throw new Error('Risposta AI non valida.');
   return content;
 };
+
+export const getTokenStatus = async () => {
+  const response = await fetch('/api/token/status', { credentials: 'include' });
+  if (response.status === 204) return null;
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(data?.error || 'Impossibile verificare lo stato del token.');
+  }
+  return data;
+};
+
+export const getHealthStatus = async () => {
+  const response = await fetch('/api/health', { credentials: 'include' });
+  return response.ok;
+};
+
+export const saveToken = async (token) => {
+  const response = await fetch('/api/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ token })
+  });
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(data?.error || 'Impossibile salvare il token.');
+  }
+  return data;
+};
+
+export const requestNewToken = async () => {
+  const response = await fetch('/api/token', { credentials: 'include' });
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(data?.error || 'Impossibile richiedere un nuovo token.');
+  }
+  return data;
+};
+
+export const logout = async () => fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
