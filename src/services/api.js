@@ -1,3 +1,9 @@
+const getCsrfToken = () => {
+  if (typeof document === 'undefined') return '';
+  const cookie = document.cookie.split(';').map((part) => part.trim()).find((part) => part.startsWith('csrf_token='));
+  return cookie ? decodeURIComponent(cookie.slice('csrf_token='.length)) : '';
+};
+
 const RAG_API_URL = (import.meta.env.VITE_RAG_API_URL || '').trim().replace(/\/$/, '');
 const RAG_ENDPOINT = RAG_API_URL || '/api/rag';
 
@@ -5,7 +11,7 @@ let refreshPromise = null;
 
 const refreshAccessToken = async () => {
   if (!refreshPromise) {
-    refreshPromise = fetch('/api/auth/refresh', { method: 'POST', credentials: 'include' })
+    refreshPromise = fetch('/api/auth/refresh', { method: 'POST', credentials: 'include', headers: { 'X-CSRF-Token': getCsrfToken() } })
       .then(async (response) => {
         const payload = await response.json().catch(() => null);
         if (!response.ok) {
@@ -64,7 +70,7 @@ export const apiFetch = async (input, maybeOptions = {}, maybeToken = '', allowR
   const normalized = typeof input === 'string'
     ? { path: input, options: maybeOptions, apiToken: maybeToken }
     : (input || {});
-  const { path, options = {}, apiToken = '' } = normalized;
+  const { path, options = {}, apiToken = '', allowRefresh: allowRefreshOpt } = normalized;
   const headers = {
     'Content-Type': 'application/json',
     ...(options.headers || {})
@@ -73,11 +79,18 @@ export const apiFetch = async (input, maybeOptions = {}, maybeToken = '', allowR
     headers.Authorization = `Bearer ${apiToken}`;
   }
 
-  const response = await fetch(path, { ...options, headers, credentials: 'include' });
+  const method = String(options.method || 'GET').toUpperCase();
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) {
+    const csrfToken = getCsrfToken();
+    if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+  }
+
+  const response = await fetch(path, { ...options, method, headers, credentials: 'include' });
   const payload = response.status === 204 ? null : await response.json().catch(() => null);
 
   if (!response.ok) {
-    if (response.status === 401 && allowRefresh) {
+    const canRefresh = allowRefreshOpt === undefined ? allowRefresh : allowRefreshOpt;
+    if (response.status === 401 && canRefresh) {
       const refreshedToken = await refreshAccessToken().catch(() => '');
       if (refreshedToken) {
         return apiFetch({ path, options, apiToken: refreshedToken }, {}, '', false);
@@ -208,42 +221,22 @@ export const callDeepSeekApi = async ({ endpoint, requestHeaders, safeSubject, s
   return content;
 };
 
-export const getTokenStatus = async () => {
-  const response = await fetch('/api/token/status', { credentials: 'include' });
-  if (response.status === 204) return null;
-  const data = await response.json().catch(() => null);
-  if (!response.ok) {
-    throw new Error(data?.error || 'Impossibile verificare lo stato del token.');
-  }
-  return data;
+export const login = async ({ username, password }) => {
+  return apiFetch({
+    path: '/api/auth/login',
+    options: {
+      method: 'POST',
+      body: JSON.stringify({ username, password }),
+    },
+    allowRefresh: false,
+  });
 };
+
+export const getMe = async () => apiFetch({ path: '/api/auth/me', options: {}, apiToken: '', allowRefresh: true });
 
 export const getHealthStatus = async () => {
   const response = await fetch('/api/health', { credentials: 'include' });
   return response.ok;
-};
-
-export const saveToken = async (token) => {
-  const response = await fetch('/api/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
-    body: JSON.stringify({ token })
-  });
-  const data = await response.json().catch(() => null);
-  if (!response.ok) {
-    throw new Error(data?.error || 'Impossibile salvare il token.');
-  }
-  return data;
-};
-
-export const requestNewToken = async () => {
-  const response = await fetch('/api/token', { credentials: 'include' });
-  const data = await response.json().catch(() => null);
-  if (!response.ok) {
-    throw new Error(data?.error || 'Impossibile richiedere un nuovo token.');
-  }
-  return data;
 };
 
 export const logout = async () => fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
