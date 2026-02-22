@@ -23,15 +23,13 @@ Per estendere il formato con nuove colonne (es. fornitore, categoria, data di sc
 
 ## DeepSeek AI configuration
 
-The AI diagnosis panel calls the DeepSeek API directly from the client. Configure one of the following environment variables (for example on Railway) before building:
+The frontend calls only the internal proxy endpoint `/api/deepseek`.
+Configure DeepSeek credentials only on the backend environment:
 
-- `VITE_DEEPSEEK_API_KEY`: your DeepSeek API key. Only `VITE_` variables are bundled in the client; remember to rebuild after changing it.
-- `VITE_DEEPSEEK_API_URL`: base URL for the API (defaults to `https://api.deepseek.com`). Make sure the endpoint is reachable via HTTPS from your deployment domain and allows CORS requests from the app origin.
+- `DEEPSEEK_API_KEY`: required server-side API key used by `server.js`.
+- `DEEPSEEK_API_URL`: optional base URL (default `https://api.deepseek.com`).
 
-Copy `.env.example` to `.env` and set the values locally if you want to test AI calls during development. Only the `VITE_*` variables are read at build time to avoid leaking server-only secrets.
-
-Copy `.env.example` to `.env` and set the values locally if you want to test AI calls during development. Non-`VITE_` names are injected into the client bundle automatically to support hosting providers that reserve the `VITE_` prefix.
-
+Copy `.env.example` to `.env` and set backend values locally when testing. Do not expose DeepSeek keys with `VITE_*` variables.
 
 ## Modalità memoria MBI e deploy su Railway/"Highway"
 
