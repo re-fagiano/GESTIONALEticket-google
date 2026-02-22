@@ -2480,9 +2480,7 @@ const buildBackup = () => ({
       </div>
       <nav className="p-4 space-y-2 flex-1">
         <button onClick={() => switchToTab('dashboard')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'dashboard' ? 'bg-slate-800 text-yellow-400' : ''}`}><LayoutDashboard size={20}/> Dashboard</button>
-        <button onClick={() => switchToTab('tickets')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'tickets' ? 'bg-slate-800 text-yellow-400' : ''}`}><Ticket size={20}/> Ticket</button>
-        <button onClick={() => switchToTab('interventions')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'interventions' ? 'bg-slate-800 text-yellow-400' : ''}`}><Wrench size={20}/> Interventi</button>
-                <button onClick={() => switchToTab('customers')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'customers' ? 'bg-slate-800 text-yellow-400' : ''}`}><Users size={20}/> Clienti</button>
+        <button onClick={() => switchToTab('customers')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'customers' ? 'bg-slate-800 text-yellow-400' : ''}`}><Users size={20}/> Clienti</button>
         <button onClick={() => switchToTab('chiamate')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'chiamate' ? 'bg-slate-800 text-yellow-400' : ''}`}><Phone size={20}/> Chiamate</button>
         <button onClick={() => switchToTab('riparazioni')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'riparazioni' ? 'bg-slate-800 text-yellow-400' : ''}`}><Wrench size={20}/> Riparazioni</button>
         <button onClick={() => switchToTab('ordine-ricambi')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'ordine-ricambi' ? 'bg-slate-800 text-yellow-400' : ''}`}><Package size={20}/> Ordine Ricambi</button>
