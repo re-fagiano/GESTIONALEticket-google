@@ -49,6 +49,56 @@ const MIME_TYPES = {
   '.woff2': 'font/woff2',
 }
 
+const SECURITY_HEADERS = {
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'DENY',
+  'Referrer-Policy': 'no-referrer',
+  'Permissions-Policy': 'geolocation=(), camera=(), microphone=()',
+  'Cross-Origin-Opener-Policy': 'same-origin',
+  'Cross-Origin-Resource-Policy': 'same-origin',
+  'Content-Security-Policy': "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+}
+
+const logEvent = (level, message, context = {}) => {
+  const entry = {
+    ts: nowIso(),
+    level,
+    message,
+    ...context,
+  }
+  const output = JSON.stringify(entry)
+  if (level === 'error') {
+    console.error(output)
+  } else if (level === 'warn') {
+    console.warn(output)
+  } else {
+    console.log(output)
+  }
+}
+
+const createHttpError = (status, message, code = 'request_error') => {
+  const error = new Error(message)
+  error.status = status
+  error.code = code
+  return error
+}
+
+const handleErrorResponse = (res, error, context = {}) => {
+  const status = Number.isInteger(error?.status) ? error.status : 500
+  const message = error?.message || 'Errore interno del server.'
+  logEvent(status >= 500 ? 'error' : 'warn', 'request_failed', {
+    status,
+    code: error?.code || 'internal_error',
+    error: message,
+    ...context,
+  })
+  if (!res.headersSent) {
+    respond(res, status, { error: message, code: error?.code || 'internal_error' })
+  } else {
+    res.end()
+  }
+}
+
 const nowIso = () => new Date().toISOString()
 
 const normalizeIso = (value) => {
@@ -65,6 +115,7 @@ const respond = (res, statusCode, payload, headers = {}) => {
   const body = typeof payload === 'string' ? payload : JSON.stringify(payload)
   res.writeHead(statusCode, {
     'Content-Type': typeof payload === 'string' ? 'text/plain' : 'application/json',
+    ...SECURITY_HEADERS,
     ...headers,
   })
   res.end(body)
@@ -73,7 +124,7 @@ const respond = (res, statusCode, payload, headers = {}) => {
 const sendFile = (filePath, res) => {
   const ext = path.extname(filePath).toLowerCase()
   const contentType = MIME_TYPES[ext] || 'application/octet-stream'
-  res.writeHead(200, { 'Content-Type': contentType })
+  res.writeHead(200, { 'Content-Type': contentType, ...SECURITY_HEADERS })
   const stream = createReadStream(filePath)
   stream.on('error', () => {
     respond(res, 500, { error: 'Errore durante la lettura del file.' })
@@ -90,9 +141,7 @@ const readJsonBody = async (req) => {
   try {
     return JSON.parse(body)
   } catch {
-    const err = new Error('Payload JSON non valido.')
-    err.status = 400
-    throw err
+    throw createHttpError(400, 'Payload JSON non valido.', 'invalid_json')
   }
 }
 
@@ -116,6 +165,19 @@ const sanitizeNumber = (value, fallback = 0) => {
   return Number.isFinite(parsed) ? parsed : fallback
 }
 
+const validators = {
+  requiredString: (value, errorMessage) => {
+    const normalized = sanitizeString(value)
+    if (!normalized) return { error: errorMessage }
+    return { value: normalized }
+  },
+  enumValue: (value, allowedValues, fallback, errorMessage) => {
+    const normalized = sanitizeString(value, fallback)
+    if (!allowedValues.has(normalized)) return { error: errorMessage }
+    return { value: normalized }
+  },
+}
+
 const INTERVENTION_TYPES = new Set(['chiamata', 'riparazione', 'ordine_ricambi', 'preventivo'])
 const INTERVENTION_STATUSES = new Set(['pendente', 'preso_in_carico', 'diagnosticato', 'ordine_ricambi', 'preventivato', 'saldato', 'chiuso'])
 const URGENCY_LEVELS = new Set([1, 2, 3])
@@ -125,12 +187,12 @@ const QUOTE_STATUSES = new Set(['proposto', 'accettato', 'rifiutato'])
 const isEmpty = (value) => value === null || value === undefined || value === ''
 
 const validateCustomerPayload = (payload) => {
-  const name = sanitizeString(payload?.name)
-  if (!name) return { error: 'Il nome cliente è obbligatorio.' }
+  const nameValidation = validators.requiredString(payload?.name, 'Il nome cliente è obbligatorio.')
+  if (nameValidation.error) return nameValidation
   return {
     value: {
       id: ensureId(payload?.id),
-      name,
+      name: nameValidation.value,
       email: sanitizeString(payload?.email),
       phone: sanitizeString(payload?.phone),
       address: sanitizeString(payload?.address),
@@ -141,12 +203,12 @@ const validateCustomerPayload = (payload) => {
 }
 
 const validateTicketPayload = (payload) => {
-  const subject = sanitizeString(payload?.subject)
-  if (!subject) return { error: 'Oggetto ticket obbligatorio.' }
+  const subjectValidation = validators.requiredString(payload?.subject, 'Oggetto ticket obbligatorio.')
+  if (subjectValidation.error) return subjectValidation
   return {
     value: {
       id: ensureId(payload?.id),
-      subject,
+      subject: subjectValidation.value,
       description: sanitizeString(payload?.description),
       customerId: sanitizeString(payload?.customerId),
       status: sanitizeString(payload?.status, 'aperto'),
@@ -159,12 +221,12 @@ const validateTicketPayload = (payload) => {
 }
 
 const validateInventoryPayload = (payload) => {
-  const name = sanitizeString(payload?.name)
-  if (!name) return { error: 'Nome ricambio obbligatorio.' }
+  const nameValidation = validators.requiredString(payload?.name, 'Nome ricambio obbligatorio.')
+  if (nameValidation.error) return nameValidation
   return {
     value: {
       id: ensureId(payload?.id),
-      name,
+      name: nameValidation.value,
       location: sanitizeString(payload?.location),
       qty: sanitizeNumber(payload?.qty, 0),
       price: sanitizeNumber(payload?.price, 0),
@@ -177,13 +239,12 @@ const validateInventoryPayload = (payload) => {
 }
 
 const validateInterventionPayload = (payload) => {
-  const clientId = sanitizeString(payload?.clientId || payload?.customerId)
-  if (!clientId) return { error: 'Il client_id è obbligatorio.' }
-  const type = sanitizeString(payload?.type)
-  if (!INTERVENTION_TYPES.has(type)) return { error: 'Tipo intervento non valido.' }
-
-  const status = sanitizeString(payload?.status, 'pendente')
-  if (!INTERVENTION_STATUSES.has(status)) return { error: 'Stato intervento non valido.' }
+  const clientIdValidation = validators.requiredString(payload?.clientId || payload?.customerId, 'Il client_id è obbligatorio.')
+  if (clientIdValidation.error) return clientIdValidation
+  const typeValidation = validators.enumValue(payload?.type, INTERVENTION_TYPES, '', 'Tipo intervento non valido.')
+  if (typeValidation.error) return typeValidation
+  const statusValidation = validators.enumValue(payload?.status, INTERVENTION_STATUSES, 'pendente', 'Stato intervento non valido.')
+  if (statusValidation.error) return statusValidation
 
   const urgency = sanitizeNumber(payload?.urgency, 2)
   if (!URGENCY_LEVELS.has(urgency)) return { error: 'Urgenza non valida (1, 2, 3).' }
@@ -195,9 +256,9 @@ const validateInterventionPayload = (payload) => {
   return {
     value: {
       id: ensureId(payload?.id),
-      clientId,
-      type,
-      status,
+      clientId: clientIdValidation.value,
+      type: typeValidation.value,
+      status: statusValidation.value,
       urgency,
       openedAt: normalizeIso(payload?.openedAt) || nowIso(),
       closedAt: normalizeIso(payload?.closedAt),
@@ -211,16 +272,16 @@ const validateInterventionPayload = (payload) => {
 }
 
 const validateSparePartOrderPayload = (payload) => {
-  const interventionId = sanitizeString(payload?.interventionId)
-  if (!interventionId) return { error: 'intervention_id obbligatorio.' }
-  const status = sanitizeString(payload?.status, 'ordinato')
-  if (!SPARE_PART_ORDER_STATUSES.has(status)) return { error: 'Stato ordine ricambi non valido.' }
+  const interventionValidation = validators.requiredString(payload?.interventionId, 'intervention_id obbligatorio.')
+  if (interventionValidation.error) return interventionValidation
+  const statusValidation = validators.enumValue(payload?.status, SPARE_PART_ORDER_STATUSES, 'ordinato', 'Stato ordine ricambi non valido.')
+  if (statusValidation.error) return statusValidation
   return {
     value: {
       id: ensureId(payload?.id),
-      interventionId,
+      interventionId: interventionValidation.value,
       parts: JSON.stringify(Array.isArray(payload?.parts) ? payload.parts : []),
-      status,
+      status: statusValidation.value,
       supplier: sanitizeString(payload?.supplier),
       notes: sanitizeString(payload?.notes),
       updatedAt: ensureUpdatedAt(payload?.updatedAt),
@@ -230,19 +291,19 @@ const validateSparePartOrderPayload = (payload) => {
 }
 
 const validateQuotePayload = (payload) => {
-  const interventionId = sanitizeString(payload?.interventionId)
-  if (!interventionId) return { error: 'intervention_id obbligatorio.' }
-  const status = sanitizeString(payload?.status, 'proposto')
-  if (!QUOTE_STATUSES.has(status)) return { error: 'Stato preventivo non valido.' }
+  const interventionValidation = validators.requiredString(payload?.interventionId, 'intervention_id obbligatorio.')
+  if (interventionValidation.error) return interventionValidation
+  const statusValidation = validators.enumValue(payload?.status, QUOTE_STATUSES, 'proposto', 'Stato preventivo non valido.')
+  if (statusValidation.error) return statusValidation
   return {
     value: {
       id: ensureId(payload?.id),
-      interventionId,
+      interventionId: interventionValidation.value,
       items: JSON.stringify(Array.isArray(payload?.items) ? payload.items : []),
       totalAmount: sanitizeNumber(payload?.totalAmount, 0),
       discount: sanitizeNumber(payload?.discount, 0),
       validUntil: normalizeIso(payload?.validUntil),
-      status,
+      status: statusValidation.value,
       notes: sanitizeString(payload?.notes),
       updatedAt: ensureUpdatedAt(payload?.updatedAt),
       version: sanitizeNumber(payload?.version, 1),
@@ -635,7 +696,7 @@ try {
   db.exec("UPDATE users SET status = COALESCE(NULLIF(status, ''), 'active')")
   db.exec('UPDATE users SET approved = COALESCE(approved, 1)')
 } catch (error) {
-  console.error('[db] Migrazione users non completata:', error)
+  logEvent('error', 'db_migration_users_failed', { error: error?.message || String(error) })
 }
 db.exec(`
   CREATE TABLE IF NOT EXISTS sync_logs (
@@ -660,9 +721,12 @@ db.exec(`
 `)
 
 const logSqlError = (operation, sql, params, error) => {
-  console.error(`[db] SQL ${operation} failed: ${error?.message || error}`)
-  console.error('[db] SQL statement:', sql)
-  console.error('[db] SQL params:', params)
+  logEvent('error', 'db_sql_failed', {
+    operation,
+    sql,
+    params,
+    error: error?.message || String(error),
+  })
 }
 
 const getRow = (sql, params = []) => {
@@ -863,7 +927,7 @@ const performBackup = async ({ triggeredBy = 'manual' } = {}) => {
   } catch (error) {
     const message = error?.message || 'Errore backup sconosciuto'
     storeBackupRun({ status: 'failed', fileName: backupFileName, errorMessage: message })
-    console.error('[backup] Fallimento backup:', message)
+    logEvent('error', 'backup_failed', { error: message })
     return { ok: false, mode: 'failed', fileName: backupFileName, exportedAt: payload.exportedAt, message }
   }
 }
@@ -1409,13 +1473,13 @@ const handleApiRequest = async (req, res, url) => {
       const identifier = username || email
       const password = sanitizeString(payload?.password)
       if (!identifier || !password) return respond(res, 400, { error: 'Email e password sono obbligatorie.', code: 'missing_credentials' })
-      const user = getRow("SELECT * FROM users WHERE LOWER(username) = LOWER(?) OR LOWER(COALESCE(email, '')) = LOWER(?)", [identifier, identifier])
       if (!checkLoginRateLimit(req, res, identifier)) return
+      const user = getRow("SELECT * FROM users WHERE LOWER(username) = LOWER(?) OR LOWER(COALESCE(email, '')) = LOWER(?)", [identifier, identifier])
       if (!user) {
         return respond(res, 404, { error: 'Utente non trovato.', code: 'user_not_found' })
       }
       if (!verifyPassword(password, user.password_hash)) {
-        console.warn(`[auth] Tentativo login fallito per utente=${identifier || 'n/a'} ip=${req.socket?.remoteAddress || 'unknown'}`)
+        logEvent('warn', 'login_failed', { user: identifier || 'n/a', ip: req.socket?.remoteAddress || 'unknown' })
         return respond(res, 401, { error: 'Credenziali errate.', code: 'invalid_credentials' })
       }
       if (!user.approved) return respond(res, 403, { error: 'Utente non approvato.', code: 'user_not_approved' })
@@ -1430,7 +1494,7 @@ const handleApiRequest = async (req, res, url) => {
       setAuthCookies(res, accessToken, refreshToken, csrfToken)
       return respond(res, 200, { accessToken, user: { id: user.id, username: user.username, email: user.email || user.username, role: user.role, status: user.status, approved: Boolean(user.approved) } })
     } catch (error) {
-      return respond(res, error.status || 400, { error: error.message || 'Payload non valido.' })
+      return handleErrorResponse(res, error, { path: url.pathname, method: req.method })
     }
   }
 
@@ -1471,7 +1535,7 @@ const handleApiRequest = async (req, res, url) => {
       setAuthCookies(res, accessToken, refreshToken, csrfToken)
       return respond(res, 201, { accessToken, user: { id: user.id, username: user.username, email: user.email, role: user.role, status: user.status, approved: true } })
     } catch (error) {
-      return respond(res, error.status || 400, { error: error.message || 'Payload non valido.' })
+      return handleErrorResponse(res, error, { path: url.pathname, method: req.method })
     }
   }
 
@@ -2049,6 +2113,7 @@ const handleApiRequest = async (req, res, url) => {
     res.writeHead(200, {
       'Content-Type': 'application/json',
       'Content-Disposition': `attachment; filename="${filename}"`,
+      ...SECURITY_HEADERS,
     })
     res.end(JSON.stringify(payload, null, 2))
     return
@@ -2069,6 +2134,7 @@ const handleApiRequest = async (req, res, url) => {
     res.writeHead(200, {
       'Content-Type': 'text/csv; charset=utf-8',
       'Content-Disposition': 'attachment; filename="export-tickets-interventi.csv"',
+      ...SECURITY_HEADERS,
     })
 
     res.end(merged)
@@ -2111,7 +2177,7 @@ const handleDeepSeekProxy = async (req, res) => {
 
     respond(res, response.status, parsed)
   } catch (error) {
-    respond(res, 502, { error: error?.message || 'Errore durante la chiamata a DeepSeek.' })
+    handleErrorResponse(res, createHttpError(502, error?.message || 'Errore durante la chiamata a DeepSeek.', 'deepseek_proxy_error'))
   }
 }
 
@@ -2130,7 +2196,7 @@ const handleRagProxy = async (req, res) => {
     try {
       payload = JSON.parse(body)
     } catch {
-      return respond(res, 400, { error: 'Payload JSON non valido.' })
+      throw createHttpError(400, 'Payload JSON non valido.', 'invalid_json')
     }
   }
 
@@ -2153,7 +2219,7 @@ const handleRagProxy = async (req, res) => {
 
     respond(res, response.status, parsed)
   } catch (error) {
-    respond(res, 502, { error: error?.message || 'Errore durante la chiamata RAG.' })
+    handleErrorResponse(res, createHttpError(502, error?.message || 'Errore durante la chiamata RAG.', 'rag_proxy_error'))
   }
 }
 
@@ -2215,16 +2281,14 @@ const server = createServer(async (req, res) => {
 
     return respond(res, 405, { error: 'Metodo non supportato.' })
   } catch (error) {
-    console.error('[server] Richiesta fallita:', error)
-    if (!res.headersSent) return respond(res, 500, { error: 'Errore interno del server.' })
-    res.end()
+    handleErrorResponse(res, error, { path: req.url, method: req.method })
   }
 })
 
 server.listen(PORT, () => {
-  console.log(`Server avviato su http://localhost:${PORT}`)
+  logEvent('info', 'server_started', { url: `http://localhost:${PORT}` })
   if (!isProduction) {
-    console.log('Utenti default: admin, tecnico, lettura (password configurabili via env).')
+    logEvent('info', 'default_users_available')
   }
   scheduleAutomaticBackup()
 })

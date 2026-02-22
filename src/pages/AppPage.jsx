@@ -2127,8 +2127,35 @@ const buildBackup = () => ({
       };
     });
 
+    const isFullCalendarAvailable = typeof window !== 'undefined' && Boolean(window.FullCalendar?.Calendar);
+    const fallbackCalendarData = useMemo(() => {
+      const baseDate = new Date(calendarDateRef.current || nowIso());
+      if (Number.isNaN(baseDate.getTime())) return null;
+      const year = baseDate.getFullYear();
+      const month = baseDate.getMonth();
+      const firstDay = new Date(year, month, 1);
+      const startOffset = firstDay.getDay();
+      const startDate = new Date(year, month, 1 - startOffset);
+      const cells = Array.from({ length: 42 }, (_, index) => {
+        const date = new Date(startDate);
+        date.setDate(startDate.getDate() + index);
+        const isoDate = date.toISOString().slice(0, 10);
+        return {
+          isoDate,
+          day: date.getDate(),
+          inMonth: date.getMonth() === month,
+          events: interventions.filter((item) => typeof item?.openedAt === 'string' && item.openedAt.startsWith(isoDate))
+        };
+      });
+      return {
+        monthLabel: firstDay.toLocaleDateString('it-IT', { month: 'long', year: 'numeric' }),
+        weekdays: ['dom', 'lun', 'mar', 'mer', 'gio', 'ven', 'sab'],
+        cells
+      };
+    }, [interventions]);
+
     useEffect(() => {
-      if (!calendarRef.current || !window.FullCalendar?.Calendar) return;
+      if (!calendarRef.current || !isFullCalendarAvailable) return;
       const calendar = new window.FullCalendar.Calendar(calendarRef.current, {
         locale: 'it',
         initialView: calendarViewRef.current,
@@ -2187,7 +2214,7 @@ const buildBackup = () => ({
         calendarApiRef.current = null;
         calendar.destroy();
       };
-    }, [calendarEvents, interventions]);
+    }, [calendarEvents, interventions, isFullCalendarAvailable]);
 
     return (
       <div className="space-y-4">
@@ -2208,7 +2235,32 @@ const buildBackup = () => ({
         </div>
 
         <div className="bg-white rounded shadow p-4">
-          <div ref={calendarRef} />
+          {isFullCalendarAvailable ? (
+            <div ref={calendarRef} />
+          ) : (
+            <div className="space-y-3">
+              <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
+                Calendario avanzato non disponibile in questo ambiente: visualizzazione base attiva.
+              </p>
+              <h3 className="text-xl font-semibold text-slate-800 capitalize">{fallbackCalendarData?.monthLabel || 'Calendario'}</h3>
+              <div className="grid grid-cols-7 border border-slate-200 rounded overflow-hidden text-sm">
+                {fallbackCalendarData?.weekdays?.map((day) => (
+                  <div key={day} className="bg-slate-50 border-b border-r border-slate-200 p-2 font-semibold text-slate-600">{day}</div>
+                ))}
+                {fallbackCalendarData?.cells?.map((cell) => (
+                  <div key={cell.isoDate} className={`min-h-24 p-2 border-r border-b border-slate-200 ${cell.inMonth ? 'bg-white text-slate-800' : 'bg-slate-50 text-slate-400'}`}>
+                    <div className="text-xs font-semibold mb-1">{cell.day}</div>
+                    {cell.events.slice(0, 2).map((eventItem) => (
+                      <div key={eventItem.id} className="text-[11px] truncate text-blue-700">• {interventionTypeMeta[eventItem.type]?.singularLabel || 'Intervento'}</div>
+                    ))}
+                    {cell.events.length > 2 && (
+                      <div className="text-[11px] text-slate-500">+{cell.events.length - 2} altri</div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         {showCalendarQuickAdd && (
