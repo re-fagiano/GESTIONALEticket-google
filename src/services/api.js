@@ -280,3 +280,63 @@ export const downloadAdminExportCsv = async () => {
   }
   return response.blob();
 };
+
+export const createCustomer = async (customer) => apiFetch({
+  path: '/api/customers',
+  options: { method: 'POST', body: JSON.stringify(customer) },
+});
+
+export const updateCustomer = async (id, customer) => apiFetch({
+  path: `/api/customers/${id}`,
+  options: { method: 'PUT', body: JSON.stringify(customer) },
+});
+
+export const createTicket = async (ticket) => apiFetch({
+  path: '/api/tickets',
+  options: { method: 'POST', body: JSON.stringify(ticket) },
+});
+
+export const updateTicket = async (id, ticket) => apiFetchWithRetry({
+  path: `/api/tickets/${id}`,
+  options: { method: 'PUT', body: JSON.stringify(ticket) },
+});
+
+export const createIntervention = async (intervention) => apiFetch({
+  path: '/api/interventions',
+  options: { method: 'POST', body: JSON.stringify(intervention) },
+});
+
+export const updateIntervention = async (id, intervention) => apiFetchWithRetry({
+  path: `/api/interventions/${id}`,
+  options: { method: 'PUT', body: JSON.stringify(intervention) },
+});
+
+export const deleteIntervention = async (id) => apiFetch({
+  path: `/api/interventions/${id}`,
+  options: { method: 'DELETE' },
+});
+
+export const createInventoryItem = async (item) => apiFetch({
+  path: '/api/inventory',
+  options: { method: 'POST', body: JSON.stringify(item) },
+});
+
+export const updateInventoryItem = async (id, item) => apiFetchWithRetry({
+  path: `/api/inventory/${id}`,
+  options: { method: 'PUT', body: JSON.stringify(item) },
+});
+
+export const replaceInventoryItem = async (id, item) => apiFetch({
+  path: `/api/inventory/${id}`,
+  options: { method: 'PUT', body: JSON.stringify(item) },
+});
+
+export const deleteEntity = async (type, id) => apiFetch({
+  path: `/api/${type}/${id}`,
+  options: { method: 'DELETE' },
+});
+
+export const importData = async (payload) => apiFetch({
+  path: '/api/import',
+  options: { method: 'POST', body: JSON.stringify(payload) },
+});
