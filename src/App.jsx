@@ -18,12 +18,16 @@ import {
   apiFetch as apiFetchRequest,
   apiFetchWithRetry as apiFetchWithRetryRequest,
   callDeepSeekApi,
+  downloadAdminExportCsv,
+  downloadAdminExportJson,
   getHealthStatus,
+  getLatestAdminBackup,
   getMe,
   login,
   logout,
   register,
-  syncData
+  syncData,
+  triggerAdminBackup
 } from './services/api';
 import {
   getStorageState,
@@ -108,6 +112,8 @@ export default function App() {
 
   // Stato per la notifica dei backup manuali/automatici
   const [backupStatus, setBackupStatus] = useState('');
+  const [serverBackupRun, setServerBackupRun] = useState(null);
+  const [isRunningServerBackup, setIsRunningServerBackup] = useState(false);
   const [mbiEnabled] = useState(false);
   const [, setMbiStatus] = useState('');
 
@@ -243,6 +249,20 @@ export default function App() {
     const timer = setTimeout(() => setExportNotice(null), 4000);
     return () => clearTimeout(timer);
   }, [exportNotice]);
+
+  useEffect(() => {
+    if (!authState.user || authState.user.role !== 'admin') {
+      setServerBackupRun(null);
+      return;
+    }
+    getLatestAdminBackup()
+      .then((payload) => {
+        setServerBackupRun(payload?.lastRun || null);
+      })
+      .catch(() => {
+        setServerBackupRun(null);
+      });
+  }, [authState.user]);
 
   // Modal & AI State
   const [showNewTicket, setShowNewTicket] = useState(false);
@@ -1115,6 +1135,47 @@ const buildBackup = () => ({
     link.click();
   };
 
+  const triggerBlobDownload = (blob, filename) => {
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = filename;
+    link.click();
+  };
+
+  const handleServerBackupNow = async () => {
+    setIsRunningServerBackup(true);
+    try {
+      const payload = await triggerAdminBackup();
+      setServerBackupRun(payload?.lastRun || null);
+      setBackupStatus('Backup server eseguito con successo.');
+      addToast('Backup server completato.', 'success');
+    } catch (error) {
+      handleApiError(error, 'Backup server non riuscito.');
+    } finally {
+      setIsRunningServerBackup(false);
+    }
+  };
+
+  const handleServerExportJson = async () => {
+    try {
+      const blob = await downloadAdminExportJson();
+      triggerBlobDownload(blob, `export-${new Date().toISOString().slice(0, 10)}.json`);
+      setExportNotice('Export JSON server scaricato con successo.');
+    } catch (error) {
+      handleApiError(error, 'Impossibile scaricare export JSON server.');
+    }
+  };
+
+  const handleServerExportCsv = async () => {
+    try {
+      const blob = await downloadAdminExportCsv();
+      triggerBlobDownload(blob, `export-${new Date().toISOString().slice(0, 10)}.csv`);
+      setExportNotice('Export CSV server scaricato con successo.');
+    } catch (error) {
+      handleApiError(error, 'Impossibile scaricare export CSV server.');
+    }
+  };
+
   const handleImportBackup = (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -1954,7 +2015,29 @@ const buildBackup = () => ({
         <p className="text-sm text-slate-500 mb-3">Utente autenticato: <strong>{authState.user?.username}</strong> • ruolo <strong>{authState.user?.role}</strong></p>
         <button onClick={handleLogout} className="px-3 py-1 text-xs bg-slate-100 border rounded">Logout</button>
       </div>
-            <div className="bg-white rounded shadow p-4 border border-slate-200">
+
+      {authState.user?.role === 'admin' && (
+        <div className="bg-white rounded shadow p-4 border border-slate-200 space-y-3">
+          <h2 className="text-lg font-bold text-slate-800">Backup server (Google Drive)</h2>
+          <p className="text-sm text-slate-500">Ultimo backup: <strong>{serverBackupRun?.created_at ? new Date(serverBackupRun.created_at).toLocaleString('it-IT') : 'Nessun backup registrato'}</strong></p>
+          {serverBackupRun?.status && (
+            <p className="text-xs text-slate-500">Stato ultimo job: {serverBackupRun.status}{serverBackupRun.file_name ? ` • ${serverBackupRun.file_name}` : ''}</p>
+          )}
+          <div className="flex flex-wrap gap-2">
+            <button
+              onClick={handleServerBackupNow}
+              disabled={isRunningServerBackup}
+              className="px-3 py-2 text-sm bg-blue-600 text-white rounded disabled:opacity-60"
+            >
+              {isRunningServerBackup ? 'Backup in corso...' : 'Esegui backup ora'}
+            </button>
+            <button onClick={handleServerExportJson} className="px-3 py-2 text-sm bg-slate-100 border rounded">Export JSON</button>
+            <button onClick={handleServerExportCsv} className="px-3 py-2 text-sm bg-slate-100 border rounded">Export CSV</button>
+          </div>
+        </div>
+      )}
+
+      <div className="bg-white rounded shadow p-4 border border-slate-200">
         <h2 className="text-lg font-bold text-slate-800 mb-2">Configurazione AI DeepSeek</h2>
         <p className="text-sm text-slate-500">
           La configurazione AI è gestita dal server. Assicurati che <code className="font-mono">DEEPSEEK_API_KEY</code> sia impostata.

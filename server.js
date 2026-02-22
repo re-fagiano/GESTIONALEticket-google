@@ -23,6 +23,12 @@ const {
   ADMIN_PASS,
   NODE_ENV,
   DB_PATH,
+  BACKUP_INTERVAL_HOURS,
+  GOOGLE_DRIVE_FOLDER_NAME,
+  GOOGLE_DRIVE_FOLDER_ID,
+  GOOGLE_SERVICE_ACCOUNT_EMAIL,
+  GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY,
+  GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY_BASE64,
 } = config
 
 const __filename = fileURLToPath(import.meta.url)
@@ -643,11 +649,199 @@ db.exec(`
     detail TEXT,
     created_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS backup_runs (
+    id TEXT PRIMARY KEY,
+    status TEXT NOT NULL,
+    file_name TEXT,
+    drive_file_id TEXT,
+    error_message TEXT,
+    created_at TEXT NOT NULL
+  );
 `)
 
 const getRow = (sql, params = []) => db.prepare(sql).get(...params)
 const getAll = (sql, params = []) => db.prepare(sql).all(...params)
 const runQuery = (sql, params = []) => db.prepare(sql).run(...params)
+
+const formatBackupTimestampForName = (date = new Date()) => {
+  const pad = (value) => String(value).padStart(2, '0')
+  const year = date.getUTCFullYear()
+  const month = pad(date.getUTCMonth() + 1)
+  const day = pad(date.getUTCDate())
+  const hours = pad(date.getUTCHours())
+  const minutes = pad(date.getUTCMinutes())
+  return `${year}-${month}-${day}-${hours}${minutes}`
+}
+
+const parseServiceAccountPrivateKey = () => {
+  if (GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY) return GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY.replace(/\\n/g, '\n')
+  if (!GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY_BASE64) return ''
+  try {
+    return Buffer.from(GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY_BASE64, 'base64').toString('utf-8').replace(/\\n/g, '\n')
+  } catch {
+    return ''
+  }
+}
+
+const toBase64Url = (value) => Buffer.from(value).toString('base64').replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_')
+
+const getGoogleAccessToken = async () => {
+  const privateKey = parseServiceAccountPrivateKey()
+  if (!GOOGLE_SERVICE_ACCOUNT_EMAIL || !privateKey) return ''
+  const issuedAt = Math.floor(Date.now() / 1000)
+  const header = toBase64Url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }))
+  const payload = toBase64Url(JSON.stringify({
+    iss: GOOGLE_SERVICE_ACCOUNT_EMAIL,
+    scope: 'https://www.googleapis.com/auth/drive.file',
+    aud: 'https://oauth2.googleapis.com/token',
+    iat: issuedAt,
+    exp: issuedAt + 3600,
+  }))
+  const unsignedToken = `${header}.${payload}`
+  const signer = crypto.createSign('RSA-SHA256')
+  signer.update(unsignedToken)
+  signer.end()
+  const signature = signer.sign(privateKey, 'base64').replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_')
+  const assertion = `${unsignedToken}.${signature}`
+
+  const body = new URLSearchParams({
+    grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+    assertion,
+  })
+
+  const response = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body,
+  })
+  const tokenPayload = await response.json().catch(() => null)
+  if (!response.ok) throw new Error(tokenPayload?.error_description || tokenPayload?.error || 'Token Google non disponibile')
+  return tokenPayload?.access_token || ''
+}
+
+const googleDriveRequest = async ({ method = 'GET', endpoint, token, body, contentType = 'application/json' }) => {
+  const response = await fetch(`https://www.googleapis.com${endpoint}`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      ...(body ? { 'Content-Type': contentType } : {}),
+    },
+    body,
+  })
+  const text = await response.text()
+  let parsed = null
+  try { parsed = text ? JSON.parse(text) : null } catch { parsed = text }
+  if (!response.ok) throw new Error(parsed?.error?.message || 'Google Drive request fallita')
+  return parsed
+}
+
+const ensureDriveFolder = async (accessToken) => {
+  if (!accessToken) return ''
+  if (GOOGLE_DRIVE_FOLDER_ID) return GOOGLE_DRIVE_FOLDER_ID
+  const escapedFolderName = GOOGLE_DRIVE_FOLDER_NAME.replace(/'/g, "\'")
+  const query = encodeURIComponent(`name='${escapedFolderName}' and mimeType='application/vnd.google-apps.folder' and trashed=false`)
+  const existing = await googleDriveRequest({ endpoint: `/drive/v3/files?q=${query}&fields=files(id,name)&pageSize=1`, token: accessToken })
+  if (existing?.files?.length) return existing.files[0].id
+  const created = await googleDriveRequest({
+    method: 'POST',
+    endpoint: '/drive/v3/files?fields=id',
+    token: accessToken,
+    body: JSON.stringify({ name: GOOGLE_DRIVE_FOLDER_NAME, mimeType: 'application/vnd.google-apps.folder' }),
+  })
+  return created?.id || ''
+}
+
+const uploadBackupToDrive = async ({ accessToken, fileName, jsonBuffer, folderId }) => {
+  const boundary = `backup-boundary-${Date.now()}`
+  const metadata = JSON.stringify({ name: fileName, ...(folderId ? { parents: [folderId] } : {}) })
+  const multipartBody = Buffer.concat([
+    Buffer.from(`--${boundary}
+Content-Type: application/json; charset=UTF-8
+
+${metadata}
+`),
+    Buffer.from(`--${boundary}
+Content-Type: application/json
+
+`),
+    jsonBuffer,
+    Buffer.from(`
+--${boundary}--`),
+  ])
+
+  return googleDriveRequest({
+    method: 'POST',
+    endpoint: '/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink',
+    token: accessToken,
+    body: multipartBody,
+    contentType: `multipart/related; boundary=${boundary}`,
+  })
+}
+
+const readBackupDataset = () => ({
+  users: getAll('SELECT id, username, email, role, status, approved, created_at, updated_at FROM users ORDER BY created_at ASC'),
+  tickets: getAll('SELECT * FROM tickets ORDER BY created_at ASC'),
+  interventions: getAll('SELECT * FROM interventions ORDER BY created_at ASC'),
+  customers: getAll('SELECT * FROM customers ORDER BY created_at ASC'),
+  inventory: getAll('SELECT * FROM inventory ORDER BY created_at ASC'),
+})
+
+const buildBackupPayload = () => ({
+  exportedAt: nowIso(),
+  source: 'server',
+  ...readBackupDataset(),
+})
+
+const toCsvValue = (value) => {
+  if (value === null || value === undefined) return ''
+  const safe = String(value).replace(/"/g, '""')
+  return `"${safe}"`
+}
+
+const toCsvBuffer = (headers = [], rows = []) => {
+  const csvRows = [headers.map(toCsvValue).join(',')]
+  rows.forEach((row) => {
+    csvRows.push(headers.map((header) => toCsvValue(row?.[header])).join(','))
+  })
+  return Buffer.from(`${csvRows.join('
+')}
+`, 'utf-8')
+}
+
+const storeBackupRun = ({ status, fileName = '', driveFileId = '', errorMessage = '' }) => {
+  runQuery(
+    'INSERT INTO backup_runs (id, status, file_name, drive_file_id, error_message, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+    [ensureId(), status, fileName || null, driveFileId || null, errorMessage || null, nowIso()],
+  )
+}
+
+const getLastBackupRun = () => getRow('SELECT id, status, file_name, drive_file_id, error_message, created_at FROM backup_runs ORDER BY created_at DESC LIMIT 1')
+
+const performBackup = async ({ triggeredBy = 'manual' } = {}) => {
+  const payload = buildBackupPayload()
+  const backupFileName = `backup-${formatBackupTimestampForName(new Date())}.json`
+  const backupJson = Buffer.from(JSON.stringify(payload, null, 2), 'utf-8')
+  try {
+    const accessToken = await getGoogleAccessToken()
+    if (!accessToken) {
+      const message = 'Google Drive non configurato: backup salvato solo localmente/log.'
+      console.warn(`[backup] ${message}`)
+      storeBackupRun({ status: 'degraded', fileName: backupFileName, errorMessage: message })
+      return { ok: true, mode: 'degraded', fileName: backupFileName, exportedAt: payload.exportedAt, message }
+    }
+    const folderId = await ensureDriveFolder(accessToken)
+    const created = await uploadBackupToDrive({ accessToken, fileName: backupFileName, jsonBuffer: backupJson, folderId })
+    const driveFileId = created?.id || ''
+    storeBackupRun({ status: 'success', fileName: backupFileName, driveFileId })
+    console.log(`[backup] ${triggeredBy} completato: ${backupFileName} (${driveFileId || 'no-id'})`)
+    return { ok: true, mode: 'drive', fileName: backupFileName, exportedAt: payload.exportedAt, driveFileId }
+  } catch (error) {
+    const message = error?.message || 'Errore backup sconosciuto'
+    storeBackupRun({ status: 'failed', fileName: backupFileName, errorMessage: message })
+    console.error('[backup] Fallimento backup:', message)
+    return { ok: false, mode: 'failed', fileName: backupFileName, exportedAt: payload.exportedAt, message }
+  }
+}
 
 const ensureAdminUser = () => {
   const adminUsername = sanitizeString(ADMIN_USER || 'admin')
@@ -1787,6 +1981,54 @@ const handleApiRequest = async (req, res, url) => {
     return respond(res, 204, '')
   }
 
+  if (req.method === 'POST' && url.pathname === '/api/admin/backup') {
+    if (!ensureRole(res, user, ['admin'])) return
+    if (!ensureCsrf(req, res)) return
+    const result = await performBackup({ triggeredBy: 'manual-api' })
+    if (!result.ok) {
+      return respond(res, 503, { error: 'Backup non riuscito.', detail: result.message, lastRun: getLastBackupRun() })
+    }
+    return respond(res, 200, { message: 'Backup completato.', result, lastRun: getLastBackupRun() })
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/admin/backup/latest') {
+    if (!ensureRole(res, user, ['admin'])) return
+    return respond(res, 200, { lastRun: getLastBackupRun() })
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/admin/export/json') {
+    if (!ensureRole(res, user, ['admin'])) return
+    const payload = buildBackupPayload()
+    const filename = `backup-${formatBackupTimestampForName(new Date())}.json`
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'Content-Disposition': `attachment; filename="${filename}"`,
+    })
+    res.end(JSON.stringify(payload, null, 2))
+    return
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/admin/export/csv') {
+    if (!ensureRole(res, user, ['admin'])) return
+    const tickets = getAll('SELECT id, subject, description, customer_id, status, date, time, created_at, updated_at, version FROM tickets ORDER BY created_at ASC')
+    const interventions = getAll('SELECT id, client_id, type, status, urgency, opened_at, closed_at, description, parent_intervention_id, additional_data, created_at, updated_at, version FROM interventions ORDER BY created_at ASC')
+
+    const ticketHeaders = ['id', 'subject', 'description', 'customer_id', 'status', 'date', 'time', 'created_at', 'updated_at', 'version']
+    const interventionHeaders = ['id', 'client_id', 'type', 'status', 'urgency', 'opened_at', 'closed_at', 'description', 'parent_intervention_id', 'additional_data', 'created_at', 'updated_at', 'version']
+
+    const ticketsCsv = toCsvBuffer(ticketHeaders, tickets).toString('utf-8')
+    const interventionsCsv = toCsvBuffer(interventionHeaders, interventions).toString('utf-8')
+    const merged = `# tickets\n${ticketsCsv}\n# interventi\n${interventionsCsv}`
+
+    res.writeHead(200, {
+      'Content-Type': 'text/csv; charset=utf-8',
+      'Content-Disposition': 'attachment; filename="export-tickets-interventi.csv"',
+    })
+
+    res.end(merged)
+    return
+  }
+
   return respond(res, 404, { error: 'Endpoint non trovato.' })
 }
 
@@ -1900,6 +2142,19 @@ const handleStaticRequest = async (pathname, res) => {
   }
 }
 
+
+const backupIntervalMs = Math.max(1, sanitizeNumber(BACKUP_INTERVAL_HOURS, 24)) * 60 * 60 * 1000
+
+const scheduleAutomaticBackup = () => {
+  setTimeout(() => {
+    performBackup({ triggeredBy: 'startup-auto' })
+  }, 30_000)
+
+  setInterval(() => {
+    performBackup({ triggeredBy: 'cron-24h' })
+  }, backupIntervalMs)
+}
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`)
 
@@ -1919,4 +2174,5 @@ server.listen(PORT, () => {
   if (!isProduction) {
     console.log('Utenti default: admin, tecnico, lettura (password configurabili via env).')
   }
+  scheduleAutomaticBackup()
 })

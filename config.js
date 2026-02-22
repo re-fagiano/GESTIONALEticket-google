@@ -44,4 +44,10 @@ export const config = {
   ADMIN_USER: (process.env.ADMIN_USER || 'admin').trim(),
   ADMIN_PASS: (process.env.ADMIN_PASS || '').trim(),
   DB_PATH: process.env.DB_PATH || path.join(__dirname, 'data', 'gestionale.db'),
+  BACKUP_INTERVAL_HOURS: Number(process.env.BACKUP_INTERVAL_HOURS || 24),
+  GOOGLE_DRIVE_FOLDER_NAME: (process.env.GOOGLE_DRIVE_FOLDER_NAME || 'GESTIONALEticket-backups').trim(),
+  GOOGLE_DRIVE_FOLDER_ID: (process.env.GOOGLE_DRIVE_FOLDER_ID || '').trim(),
+  GOOGLE_SERVICE_ACCOUNT_EMAIL: (process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || '').trim(),
+  GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY: (process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY || '').trim(),
+  GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY_BASE64: (process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY_BASE64 || '').trim(),
 }

@@ -251,3 +251,32 @@ export const getHealthStatus = async () => {
 };
 
 export const logout = async () => fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
+
+
+export const triggerAdminBackup = async () => apiFetch({
+  path: '/api/admin/backup',
+  options: { method: 'POST' },
+});
+
+export const getLatestAdminBackup = async () => apiFetch({
+  path: '/api/admin/backup/latest',
+  options: { method: 'GET' },
+});
+
+export const downloadAdminExportJson = async () => {
+  const response = await fetch('/api/admin/export/json', { credentials: 'include' });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null);
+    throw new Error(payload?.error || 'Export JSON non disponibile.');
+  }
+  return response.blob();
+};
+
+export const downloadAdminExportCsv = async () => {
+  const response = await fetch('/api/admin/export/csv', { credentials: 'include' });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null);
+    throw new Error(payload?.error || 'Export CSV non disponibile.');
+  }
+  return response.blob();
+};
