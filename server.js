@@ -633,21 +633,16 @@ const getAll = (sql, params = []) => db.prepare(sql).all(...params)
 const runQuery = (sql, params = []) => db.prepare(sql).run(...params)
 
 const ensureAdminUser = () => {
-  const adminSeeds = [
-    { username: sanitizeString(ADMIN_USER || 'admin'), password: sanitizeString(ADMIN_PASS) },
-    { username: 'refagiano@gmail.com', password: '1' },
-  ]
-
-  adminSeeds.forEach((entry) => {
-    if (!entry.username || !entry.password) return
-    const existingAdmin = getRow('SELECT id FROM users WHERE username = ?', [entry.username])
-    if (existingAdmin) return
+  const adminUsername = sanitizeString(ADMIN_USER || 'admin')
+  const adminPassword = sanitizeString(ADMIN_PASS)
+  const existingAdmin = getRow('SELECT id FROM users WHERE username = ?', [adminUsername])
+  if (!existingAdmin && adminPassword) {
     runQuery(
       'INSERT INTO users (id, username, password_hash, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
-      [ensureId(), entry.username, hashPassword(entry.password), 'admin', nowIso(), nowIso()],
+      [ensureId(), adminUsername, hashPassword(adminPassword), 'admin', nowIso(), nowIso()],
     )
-    console.log(`[auth] Admin seed creato per utente ${entry.username}.`)
-  })
+    console.log(`[auth] Admin seed creato per utente ${adminUsername}.`)
+  }
 }
 
 ensureAdminUser()
