@@ -626,7 +626,7 @@ try { db.exec("ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active
 try { db.exec('ALTER TABLE users ADD COLUMN approved INTEGER NOT NULL DEFAULT 1') } catch { /* Column may already exist in migrated databases. */ }
 try {
   db.exec("UPDATE users SET email = LOWER(username) WHERE email IS NULL OR email = ''")
-  db.exec("UPDATE users SET status = COALESCE(NULLIF(status, ''), 'active')")
+  db.exec('UPDATE users SET status = COALESCE(NULLIF(status, ""), "active")')
   db.exec('UPDATE users SET approved = COALESCE(approved, 1)')
 } catch (error) {
   console.error('[db] Migrazione users non completata:', error)
