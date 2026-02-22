@@ -77,7 +77,7 @@ const readJsonBody = async (req) => {
   if (!body) return {}
   try {
     return JSON.parse(body)
-  } catch (error) {
+  } catch {
     const err = new Error('Payload JSON non valido.')
     err.status = 400
     throw err
@@ -506,7 +506,7 @@ db.exec(`
   );
 `)
 
-try { db.exec('ALTER TABLE inventory ADD COLUMN price_date TEXT') } catch {}
+try { db.exec('ALTER TABLE inventory ADD COLUMN price_date TEXT') } catch { /* Column may already exist in migrated databases. */ }
 
 const getRow = (sql, params = []) => db.prepare(sql).get(...params)
 const getAll = (sql, params = []) => db.prepare(sql).all(...params)
@@ -709,7 +709,7 @@ const handleApiRequest = async (req, res, url) => {
       runQuery('DELETE FROM quotes')
       runQuery('DELETE FROM inventory')
       runQuery('DELETE FROM settings')
-      customers.forEach((customer, idx) => {
+      customers.forEach((customer) => {
         const { error, value } = validateCustomerPayload(customer)
         if (error) throw new Error(error)
         runQuery(
@@ -1172,7 +1172,7 @@ const handleRagProxy = async (req, res) => {
   if (body) {
     try {
       payload = JSON.parse(body)
-    } catch (error) {
+    } catch {
       return respond(res, 400, { error: 'Payload JSON non valido.' })
     }
   }
