@@ -140,10 +140,10 @@ const mapPrismaIntervention = (row) => {
     code: row.code,
     clientId: row.customerId,
     customerId: row.customerId,
-    type: INTERVENTION_TYPE_FROM_DB[row.type] || 'chiamata',
-    status: INTERVENTION_STATUS_FROM_DB[row.status] || 'pendente',
-    urgency: row.urgency,
-    priority: row.urgency,
+    type: row.type,
+    status: row.status,
+    urgency: row.priority,
+    priority: row.priority,
     assignedTo: row.assignedTo,
     openedAt: row.openedAt?.toISOString?.() || row.openedAt,
     closedAt: row.closedAt?.toISOString?.() || row.closedAt,
@@ -1915,8 +1915,8 @@ const handleApiRequest = async (req, res, url) => {
     const customerId = sanitizeString(url.searchParams.get('customerId') || url.searchParams.get('clientId'))
     const type = sanitizeString(url.searchParams.get('type'))
     const status = sanitizeString(url.searchParams.get('status'))
-    const typeFilter = INTERVENTION_TYPES.has(type) ? INTERVENTION_TYPE_TO_DB[type] : ''
-    const statusFilter = INTERVENTION_STATUSES.has(status) ? (INTERVENTION_STATUS_TO_DB[status] || 'OPEN') : ''
+    const typeFilter = INTERVENTION_TYPES.has(type) ? type : ''
+    const statusFilter = INTERVENTION_STATUSES.has(status) ? status : ''
     const rows = await prisma.intervention.findMany({
       where: {
         ...(customerId ? { customerId } : {}),
@@ -1938,10 +1938,9 @@ const handleApiRequest = async (req, res, url) => {
         id: value.id,
         code: interventionCode(),
         customerId: value.clientId,
-        type: INTERVENTION_TYPE_TO_DB[value.type],
-        status: INTERVENTION_STATUS_TO_DB[value.status] || 'OPEN',
-        urgency: value.urgency,
-        title: value.description?.slice(0, 120) || null,
+        type: value.type,
+        status: value.status,
+        priority: value.urgency,
         description: value.description,
         openedAt: ensureDate(value.openedAt),
         closedAt: value.closedAt ? ensureDate(value.closedAt) : null,
@@ -1959,27 +1958,26 @@ const handleApiRequest = async (req, res, url) => {
     const data = {}
     if (payload.status) {
       if (!INTERVENTION_STATUSES.has(payload.status)) return respond(res, 400, { error: 'Stato intervento non valido.' })
-      data.status = INTERVENTION_STATUS_TO_DB[payload.status] || 'OPEN'
+      data.status = payload.status
     }
-    if (payload.priority !== undefined || payload.urgency !== undefined) data.urgency = sanitizeNumber(payload.priority ?? payload.urgency, 2)
+    if (payload.priority !== undefined || payload.urgency !== undefined) data.priority = sanitizeNumber(payload.priority ?? payload.urgency, 2)
     if (payload.assignedTo !== undefined) data.assignedTo = sanitizeString(payload.assignedTo) || null
     if (payload.description !== undefined || payload.notes !== undefined) data.description = sanitizeString(payload.description || payload.notes)
     if (Object.keys(data).length === 0) {
       const { error, value } = validateInterventionPayload({ ...payload, id })
       if (error) return respond(res, 400, { error })
       data.customerId = value.clientId
-      data.type = INTERVENTION_TYPE_TO_DB[value.type]
-      data.status = INTERVENTION_STATUS_TO_DB[value.status] || 'OPEN'
-      data.urgency = value.urgency
+      data.type = value.type
+      data.status = value.status
+      data.priority = value.urgency
       data.openedAt = ensureDate(value.openedAt)
       data.closedAt = value.closedAt ? ensureDate(value.closedAt) : null
-      data.title = value.description?.slice(0, 120) || null
       data.description = value.description
       data.additionalData = JSON.parse(value.additionalData || '{}')
     }
     const updated = await prisma.intervention.update({ where: { id }, data: { ...data, version: { increment: 1 } } })
     if (payload.notes) {
-      await prisma.note.create({ data: { interventionId: id, body: sanitizeString(payload.notes) } })
+      await prisma.note.create({ data: { interventionId: id, content: sanitizeString(payload.notes) } })
     }
     return respond(res, 200, mapPrismaIntervention(updated))
   }
