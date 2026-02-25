@@ -233,6 +233,35 @@ const URGENCY_LEVELS = new Set([1, 2, 3])
 const SPARE_PART_ORDER_STATUSES = new Set(['ordinato', 'in_arrivo', 'arrivato', 'consegnato'])
 const QUOTE_STATUSES = new Set(['proposto', 'accettato', 'rifiutato'])
 
+
+const INTERVENTION_TYPE_TO_DB = {
+  chiamata: 'CALL_OUT',
+  riparazione: 'LAB_REPAIR',
+  ordine_ricambi: 'SPARE_PART_ORDER',
+  preventivo: 'NEW_APPLIANCE_QUOTE',
+}
+
+const INTERVENTION_TYPE_FROM_DB = Object.fromEntries(Object.entries(INTERVENTION_TYPE_TO_DB).map(([k,v]) => [v,k]))
+
+const INTERVENTION_STATUS_TO_DB = {
+  pendente: 'OPEN',
+  preso_in_carico: 'IN_PROGRESS',
+  diagnosticato: 'IN_PROGRESS',
+  ordine_ricambi: 'WAITING_PARTS',
+  preventivato: 'WAITING_CUSTOMER',
+  saldato: 'DONE',
+  chiuso: 'DONE',
+}
+
+const INTERVENTION_STATUS_FROM_DB = {
+  OPEN: 'pendente',
+  IN_PROGRESS: 'preso_in_carico',
+  WAITING_PARTS: 'ordine_ricambi',
+  WAITING_CUSTOMER: 'preventivato',
+  DONE: 'chiuso',
+  CANCELED: 'chiuso',
+}
+
 const isEmpty = (value) => value === null || value === undefined || value === ''
 
 const validateCustomerPayload = (payload) => {
