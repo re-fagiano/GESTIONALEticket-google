@@ -46,3 +46,25 @@ Per avere persistenza stabile in cloud (Railway):
 Google Drive come storage remoto:
 - usare Drive come **backup snapshot** (JSON), non come database primario;
 - mantenere una cartella per ambiente (`prod`, `staging`) e retention (es. ultimi 30 file).
+
+## Persistenza Postgres con Prisma (Railway)
+
+Il backend ora supporta PostgreSQL via `DATABASE_URL` (Railway) con Prisma.
+
+### Setup locale
+1. Imposta `DATABASE_URL` nel tuo `.env`.
+2. Genera il client Prisma:
+   - `npm run prisma:generate`
+3. Crea/applica migration in sviluppo:
+   - `npm run prisma:migrate`
+
+### Deploy su Railway (produzione)
+- Railway espone già `DATABASE_URL` al service backend.
+- In produzione **non** usare `prisma migrate dev`.
+- Usa invece:
+  - `npm run prisma:deploy`
+  - oppure `npx prisma migrate deploy`
+
+### Note operative
+- Se `DATABASE_URL` manca, il server logga un errore chiaro e rimane in fallback SQLite senza loop di crash.
+- Le API AI (DeepSeek/RAG) non sono state toccate; il focus è solo su persistenza DB/CRUD.

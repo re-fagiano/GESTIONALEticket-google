@@ -7,6 +7,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
 import { config } from './config.js'
+import prisma, { isDatabaseConfigured } from './src/db/prisma.js'
 
 const {
   PORT,
@@ -23,6 +24,7 @@ const {
   ADMIN_PASS,
   NODE_ENV,
   DB_PATH,
+  DATABASE_URL,
   BACKUP_INTERVAL_HOURS,
   GOOGLE_DRIVE_FOLDER_NAME,
   GOOGLE_DRIVE_FOLDER_ID,
@@ -76,6 +78,10 @@ const logEvent = (level, message, context = {}) => {
   }
 }
 
+if (!DATABASE_URL) {
+  console.error(JSON.stringify({ ts: new Date().toISOString(), level: 'error', message: 'database_url_missing', detail: 'DATABASE_URL non configurata: backend in fallback SQLite.' }))
+}
+
 const createHttpError = (status, message, code = 'request_error') => {
   const error = new Error(message)
   error.status = status
@@ -105,6 +111,49 @@ const normalizeIso = (value) => {
   if (!value) return null
   const parsed = new Date(value)
   return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString()
+}
+
+
+const ensureDate = (value) => {
+  const normalized = normalizeIso(value)
+  return normalized ? new Date(normalized) : new Date()
+}
+
+const interventionCode = () => {
+  const d = new Date()
+  const y = d.getUTCFullYear()
+  const m = String(d.getUTCMonth() + 1).padStart(2, '0')
+  const day = String(d.getUTCDate()).padStart(2, '0')
+  const suffix = Math.floor(Math.random() * 100000).toString().padStart(5, '0')
+  return `INV-${y}${m}${day}-${suffix}`
+}
+
+const mapPrismaIntervention = (row) => {
+  if (!row) return null
+  const openedTime = row.openedAt ? new Date(row.openedAt).getTime() : null
+  const closedTime = row.closedAt ? new Date(row.closedAt).getTime() : Date.now()
+  const durationDays = (openedTime && Number.isFinite(closedTime))
+    ? Math.max(0, Math.ceil((closedTime - openedTime) / 86_400_000))
+    : 0
+  return {
+    id: row.id,
+    code: row.code,
+    clientId: row.customerId,
+    customerId: row.customerId,
+    type: INTERVENTION_TYPE_FROM_DB[row.type] || 'chiamata',
+    status: INTERVENTION_STATUS_FROM_DB[row.status] || 'pendente',
+    urgency: row.urgency,
+    priority: row.urgency,
+    assignedTo: row.assignedTo,
+    openedAt: row.openedAt?.toISOString?.() || row.openedAt,
+    closedAt: row.closedAt?.toISOString?.() || row.closedAt,
+    description: row.description || '',
+    additionalData: row.additionalData || {},
+    durationDays,
+    createdAt: row.createdAt?.toISOString?.() || row.createdAt,
+    updatedAt: row.updatedAt?.toISOString?.() || row.updatedAt,
+    version: row.version,
+  }
 }
 
 const ensureId = (value) => (value && typeof value === 'string' ? value : crypto.randomUUID())
@@ -183,6 +232,35 @@ const INTERVENTION_STATUSES = new Set(['pendente', 'preso_in_carico', 'diagnosti
 const URGENCY_LEVELS = new Set([1, 2, 3])
 const SPARE_PART_ORDER_STATUSES = new Set(['ordinato', 'in_arrivo', 'arrivato', 'consegnato'])
 const QUOTE_STATUSES = new Set(['proposto', 'accettato', 'rifiutato'])
+
+
+const INTERVENTION_TYPE_TO_DB = {
+  chiamata: 'CALL_OUT',
+  riparazione: 'LAB_REPAIR',
+  ordine_ricambi: 'SPARE_PART_ORDER',
+  preventivo: 'NEW_APPLIANCE_QUOTE',
+}
+
+const INTERVENTION_TYPE_FROM_DB = Object.fromEntries(Object.entries(INTERVENTION_TYPE_TO_DB).map(([k,v]) => [v,k]))
+
+const INTERVENTION_STATUS_TO_DB = {
+  pendente: 'OPEN',
+  preso_in_carico: 'IN_PROGRESS',
+  diagnosticato: 'IN_PROGRESS',
+  ordine_ricambi: 'WAITING_PARTS',
+  preventivato: 'WAITING_CUSTOMER',
+  saldato: 'DONE',
+  chiuso: 'DONE',
+}
+
+const INTERVENTION_STATUS_FROM_DB = {
+  OPEN: 'pendente',
+  IN_PROGRESS: 'preso_in_carico',
+  WAITING_PARTS: 'ordine_ricambi',
+  WAITING_CUSTOMER: 'preventivato',
+  DONE: 'chiuso',
+  CANCELED: 'chiuso',
+}
 
 const isEmpty = (value) => value === null || value === undefined || value === ''
 
@@ -1799,6 +1877,165 @@ const handleApiRequest = async (req, res, url) => {
   const match = (pattern) => {
     const result = url.pathname.match(pattern)
     return result ? result[1] : null
+  }
+
+
+  if (isDatabaseConfigured && req.method === 'GET' && url.pathname === '/api/customers') {
+    const q = sanitizeString(url.searchParams.get('q'))
+    const rows = await prisma.customer.findMany({
+      where: q ? { OR: [{ name: { contains: q, mode: 'insensitive' } }, { email: { contains: q, mode: 'insensitive' } }, { phone: { contains: q, mode: 'insensitive' } }] } : undefined,
+      orderBy: { createdAt: 'desc' },
+    })
+    return respond(res, 200, rows)
+  }
+
+  if (isDatabaseConfigured && req.method === 'POST' && url.pathname === '/api/customers') {
+    if (!ensureRole(res, user, ['admin', 'tech'])) return
+    const payload = await readJsonBody(req)
+    const { error, value } = validateCustomerPayload(payload)
+    if (error) return respond(res, 400, { error })
+    const created = await prisma.customer.create({
+      data: { id: value.id, name: value.name, email: value.email || null, phone: value.phone || null, address: value.address || null },
+    })
+    return respond(res, 201, created)
+  }
+
+  if (isDatabaseConfigured && req.method === 'PUT' && url.pathname.startsWith('/api/customers/')) {
+    if (!ensureRole(res, user, ['admin', 'tech'])) return
+    const id = match(/^\/api\/customers\/(.+)$/)
+    if (!id) return respond(res, 404, { error: 'Cliente non trovato.' })
+    const payload = await readJsonBody(req)
+    const { error, value } = validateCustomerPayload({ ...payload, id })
+    if (error) return respond(res, 400, { error })
+    const updated = await prisma.customer.update({ where: { id }, data: { name: value.name, email: value.email || null, phone: value.phone || null, address: value.address || null } })
+    return respond(res, 200, updated)
+  }
+
+  if (isDatabaseConfigured && req.method === 'GET' && url.pathname === '/api/interventions') {
+    const customerId = sanitizeString(url.searchParams.get('customerId') || url.searchParams.get('clientId'))
+    const type = sanitizeString(url.searchParams.get('type'))
+    const status = sanitizeString(url.searchParams.get('status'))
+    const typeFilter = INTERVENTION_TYPES.has(type) ? INTERVENTION_TYPE_TO_DB[type] : ''
+    const statusFilter = INTERVENTION_STATUSES.has(status) ? (INTERVENTION_STATUS_TO_DB[status] || 'OPEN') : ''
+    const rows = await prisma.intervention.findMany({
+      where: {
+        ...(customerId ? { customerId } : {}),
+        ...(typeFilter ? { type: typeFilter } : {}),
+        ...(statusFilter ? { status: statusFilter } : {}),
+      },
+      orderBy: { openedAt: 'desc' },
+    })
+    return respond(res, 200, rows.map(mapPrismaIntervention))
+  }
+
+  if (isDatabaseConfigured && req.method === 'POST' && url.pathname === '/api/interventions') {
+    if (!ensureRole(res, user, ['admin', 'tech'])) return
+    const payload = await readJsonBody(req)
+    const { error, value } = validateInterventionPayload(payload)
+    if (error) return respond(res, 400, { error })
+    const created = await prisma.intervention.create({
+      data: {
+        id: value.id,
+        code: interventionCode(),
+        customerId: value.clientId,
+        type: INTERVENTION_TYPE_TO_DB[value.type],
+        status: INTERVENTION_STATUS_TO_DB[value.status] || 'OPEN',
+        urgency: value.urgency,
+        title: value.description?.slice(0, 120) || null,
+        description: value.description,
+        openedAt: ensureDate(value.openedAt),
+        closedAt: value.closedAt ? ensureDate(value.closedAt) : null,
+        additionalData: JSON.parse(value.additionalData || '{}'),
+      },
+    })
+    return respond(res, 201, mapPrismaIntervention(created))
+  }
+
+  if (isDatabaseConfigured && (req.method === 'PUT' || req.method === 'PATCH') && url.pathname.startsWith('/api/interventions/')) {
+    if (!ensureRole(res, user, ['admin', 'tech'])) return
+    const id = match(/^\/api\/interventions\/(.+)$/)
+    if (!id) return respond(res, 404, { error: 'Intervento non trovato.' })
+    const payload = await readJsonBody(req)
+    const data = {}
+    if (payload.status) {
+      if (!INTERVENTION_STATUSES.has(payload.status)) return respond(res, 400, { error: 'Stato intervento non valido.' })
+      data.status = INTERVENTION_STATUS_TO_DB[payload.status] || 'OPEN'
+    }
+    if (payload.priority !== undefined || payload.urgency !== undefined) data.urgency = sanitizeNumber(payload.priority ?? payload.urgency, 2)
+    if (payload.assignedTo !== undefined) data.assignedTo = sanitizeString(payload.assignedTo) || null
+    if (payload.description !== undefined || payload.notes !== undefined) data.description = sanitizeString(payload.description || payload.notes)
+    if (Object.keys(data).length === 0) {
+      const { error, value } = validateInterventionPayload({ ...payload, id })
+      if (error) return respond(res, 400, { error })
+      data.customerId = value.clientId
+      data.type = INTERVENTION_TYPE_TO_DB[value.type]
+      data.status = INTERVENTION_STATUS_TO_DB[value.status] || 'OPEN'
+      data.urgency = value.urgency
+      data.openedAt = ensureDate(value.openedAt)
+      data.closedAt = value.closedAt ? ensureDate(value.closedAt) : null
+      data.title = value.description?.slice(0, 120) || null
+      data.description = value.description
+      data.additionalData = JSON.parse(value.additionalData || '{}')
+    }
+    const updated = await prisma.intervention.update({ where: { id }, data: { ...data, version: { increment: 1 } } })
+    if (payload.notes) {
+      await prisma.note.create({ data: { interventionId: id, body: sanitizeString(payload.notes) } })
+    }
+    return respond(res, 200, mapPrismaIntervention(updated))
+  }
+
+  if (isDatabaseConfigured && req.method === 'GET' && url.pathname === '/api/calendar') {
+    const from = normalizeIso(url.searchParams.get('from'))
+    const to = normalizeIso(url.searchParams.get('to'))
+    const rows = await prisma.calendarItem.findMany({
+      where: {
+        ...(from || to ? {
+          AND: [
+            ...(from ? [{ endAt: { gte: new Date(from) } }] : []),
+            ...(to ? [{ startAt: { lte: new Date(to) } }] : []),
+          ],
+        } : {}),
+      },
+      orderBy: { startAt: 'asc' },
+    })
+    return respond(res, 200, rows)
+  }
+
+  if (isDatabaseConfigured && req.method === 'POST' && url.pathname === '/api/calendar') {
+    if (!ensureRole(res, user, ['admin', 'tech'])) return
+    const payload = await readJsonBody(req)
+    const title = sanitizeString(payload?.title)
+    if (!title) return respond(res, 400, { error: 'title obbligatorio.' })
+    const created = await prisma.calendarItem.create({
+      data: {
+        title,
+        description: sanitizeString(payload.description) || null,
+        startAt: ensureDate(payload.startAt || payload.from),
+        endAt: ensureDate(payload.endAt || payload.to),
+        status: sanitizeString(payload.status, 'planned'),
+        customerId: sanitizeString(payload.customerId) || null,
+        interventionId: sanitizeString(payload.interventionId) || null,
+      },
+    })
+    return respond(res, 201, created)
+  }
+
+  if (isDatabaseConfigured && (req.method === 'PATCH' || req.method === 'PUT') && url.pathname.startsWith('/api/calendar/')) {
+    if (!ensureRole(res, user, ['admin', 'tech'])) return
+    const id = match(/^\/api\/calendar\/(.+)$/)
+    if (!id) return respond(res, 404, { error: 'Evento non trovato.' })
+    const payload = await readJsonBody(req)
+    const updated = await prisma.calendarItem.update({
+      where: { id },
+      data: {
+        ...(payload.title !== undefined ? { title: sanitizeString(payload.title) } : {}),
+        ...(payload.description !== undefined ? { description: sanitizeString(payload.description) || null } : {}),
+        ...(payload.startAt !== undefined ? { startAt: ensureDate(payload.startAt) } : {}),
+        ...(payload.endAt !== undefined ? { endAt: ensureDate(payload.endAt) } : {}),
+        ...(payload.status !== undefined ? { status: sanitizeString(payload.status) } : {}),
+      },
+    })
+    return respond(res, 200, updated)
   }
 
   if (req.method === 'GET' && url.pathname === '/api/customers') {
