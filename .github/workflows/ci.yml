@@ -17,25 +17,16 @@ jobs:
         with:
           node-version: 22
 
-      - name: Configure npm registry and proxy
-        run: |
-          npm config set registry https://registry.npmjs.org/
-          npm config delete proxy || true
-          npm config delete https-proxy || true
-          npm config set strict-ssl true
-
-      - name: Nuke npm cache
-        run: |
-          npm cache clean --force
-          rm -rf ~/.npm/_cacache
-          rm -rf node_modules
+      - name: Clean npm cache
+        run: npm cache clean --force
 
       - name: Install dependencies
         env:
-          NPM_CONFIG_FETCH_RETRIES: 8
+          NPM_CONFIG_FETCH_RETRIES: 5
           NPM_CONFIG_FETCH_RETRY_MINTIMEOUT: 20000
-          NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT: 180000
-        run: npm ci --prefer-online --no-fund --no-audit
+          NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT: 120000
+          NPM_CONFIG_AUDIT: false
+        run: npm ci
 
       - name: Lint
         run: npm run lint
