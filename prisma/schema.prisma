@@ -1,0 +1,145 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum InterventionType {
+  CALL_OUT
+  LAB_REPAIR
+  SPARE_PART_ORDER
+  NEW_APPLIANCE_QUOTE
+}
+
+enum InterventionStatus {
+  OPEN
+  IN_PROGRESS
+  WAITING_PARTS
+  WAITING_CUSTOMER
+  DONE
+  CANCELED
+}
+
+model Customer {
+  id        String   @id @default(cuid())
+  name      String
+  phone     String?
+  email     String?
+  address   String?
+  city      String?
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  interventions Intervention[]
+  tickets       Ticket[]
+  calendarItems CalendarItem[]
+
+  @@index([name])
+  @@map("customers")
+}
+
+model Intervention {
+  id            String             @id @default(cuid())
+  code          String             @unique
+  type          InterventionType
+  status        InterventionStatus @default(OPEN)
+  urgency       Int                @default(0)
+  title         String?
+  description   String?
+  openedAt      DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+  closedAt      DateTime?
+  assignedTo    String?
+  additionalData Json?
+  version       Int                @default(1)
+
+  customerId    String
+  customer      Customer           @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  notes         Note[]
+  calendarItems CalendarItem[]
+
+  @@index([customerId])
+  @@index([status])
+  @@map("interventions")
+}
+
+model Note {
+  id             String       @id @default(cuid())
+  interventionId String
+  intervention   Intervention @relation(fields: [interventionId], references: [id], onDelete: Cascade)
+  body           String
+  createdAt      DateTime     @default(now())
+
+  @@map("notes")
+}
+
+model CalendarItem {
+  id             String        @id @default(cuid())
+  title          String
+  description    String?
+  startAt        DateTime
+  endAt          DateTime
+  location       String?
+  status         String?       @default("planned")
+
+  customerId     String?
+  customer       Customer?     @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  interventionId String?
+  intervention   Intervention? @relation(fields: [interventionId], references: [id], onDelete: SetNull)
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([startAt, endAt])
+  @@map("calendar_items")
+}
+
+model Ticket {
+  id          String    @id @default(cuid())
+  subject     String
+  description String?
+  status      String    @default("aperto")
+  date        String?
+  time        String?
+  version     Int       @default(1)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  customerId  String?
+  customer    Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  @@index([customerId])
+  @@map("tickets")
+}
+
+model InventoryItem {
+  id        String   @id @default(cuid())
+  name      String
+  location  String?
+  qty       Int      @default(0)
+  price     Float    @default(0)
+  minQty    Int      @default(0)
+  priceDate String?
+  version   Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("inventory")
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  action     String
+  entityType String
+  entityId   String
+  payload    Json?
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@map("audit_logs")
+}
