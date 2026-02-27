@@ -8,32 +8,30 @@ datasource db {
 }
 
 enum InterventionType {
-  CALL_OUT
-  LAB_REPAIR
-  SPARE_PART_ORDER
-  NEW_APPLIANCE_QUOTE
+  chiamata
+  riparazione
+  ordine_ricambi
+  preventivo
 }
 
 enum InterventionStatus {
-  OPEN
-  IN_PROGRESS
-  WAITING_PARTS
-  WAITING_CUSTOMER
-  DONE
-  CANCELED
+  pendente
+  preso_in_carico
+  diagnosticato
+  ordine_ricambi
+  preventivato
+  saldato
+  chiuso
 }
 
 model Customer {
-  id        String   @id @default(cuid())
-  name      String
-  phone     String?
-  email     String?
-  address   String?
-  city      String?
-  notes     String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
+  id            String         @id @default(uuid())
+  name          String
+  email         String?
+  phone         String?
+  address       String?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
   interventions Intervention[]
   tickets       Ticket[]
   calendarItems CalendarItem[]
@@ -42,66 +40,8 @@ model Customer {
   @@map("customers")
 }
 
-model Intervention {
-  id            String             @id @default(cuid())
-  code          String             @unique
-  type          InterventionType
-  status        InterventionStatus @default(OPEN)
-  urgency       Int                @default(0)
-  title         String?
-  description   String?
-  openedAt      DateTime           @default(now())
-  updatedAt     DateTime           @updatedAt
-  closedAt      DateTime?
-  assignedTo    String?
-  additionalData Json?
-  version       Int                @default(1)
-
-  customerId    String
-  customer      Customer           @relation(fields: [customerId], references: [id], onDelete: Cascade)
-
-  notes         Note[]
-  calendarItems CalendarItem[]
-
-  @@index([customerId])
-  @@index([status])
-  @@map("interventions")
-}
-
-model Note {
-  id             String       @id @default(cuid())
-  interventionId String
-  intervention   Intervention @relation(fields: [interventionId], references: [id], onDelete: Cascade)
-  body           String
-  createdAt      DateTime     @default(now())
-
-  @@map("notes")
-}
-
-model CalendarItem {
-  id             String        @id @default(cuid())
-  title          String
-  description    String?
-  startAt        DateTime
-  endAt          DateTime
-  location       String?
-  status         String?       @default("planned")
-
-  customerId     String?
-  customer       Customer?     @relation(fields: [customerId], references: [id], onDelete: SetNull)
-
-  interventionId String?
-  intervention   Intervention? @relation(fields: [interventionId], references: [id], onDelete: SetNull)
-
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-
-  @@index([startAt, endAt])
-  @@map("calendar_items")
-}
-
 model Ticket {
-  id          String    @id @default(cuid())
+  id          String    @id @default(uuid())
   subject     String
   description String?
   status      String    @default("aperto")
@@ -118,7 +58,7 @@ model Ticket {
 }
 
 model InventoryItem {
-  id        String   @id @default(cuid())
+  id        String   @id @default(uuid())
   name      String
   location  String?
   qty       Int      @default(0)
@@ -132,8 +72,61 @@ model InventoryItem {
   @@map("inventory")
 }
 
+model Intervention {
+  id             String             @id @default(uuid())
+  code           String             @unique
+  customerId     String
+  customer       Customer           @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  type           InterventionType
+  status         InterventionStatus @default(pendente)
+  priority       Int                @default(2)
+  assignedTo     String?
+  description    String?
+  openedAt       DateTime           @default(now())
+  closedAt       DateTime?
+  additionalData Json?
+  version        Int                @default(1)
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  notes          Note[]
+  calendarItems  CalendarItem[]
+
+  @@index([customerId])
+  @@index([status])
+  @@map("interventions")
+}
+
+model CalendarItem {
+  id             String        @id @default(uuid())
+  title          String
+  description    String?
+  startAt        DateTime
+  endAt          DateTime
+  status         String?       @default("planned")
+  customerId     String?
+  customer       Customer?     @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  interventionId String?
+  intervention   Intervention? @relation(fields: [interventionId], references: [id], onDelete: SetNull)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@index([startAt, endAt])
+  @@map("calendar_items")
+}
+
+model Note {
+  id             String       @id @default(uuid())
+  interventionId String
+  intervention   Intervention @relation(fields: [interventionId], references: [id], onDelete: Cascade)
+  content        String
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@map("notes")
+}
+
 model AuditLog {
-  id         String   @id @default(cuid())
+  id         String   @id @default(uuid())
   action     String
   entityType String
   entityId   String
