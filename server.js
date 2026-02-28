@@ -16,6 +16,7 @@ const {
   RAG_API_URL,
   API_TOKEN,
   DEFAULT_TOKEN,
+  JWT_SECRET,
   JWT_ACCESS_SECRET,
   JWT_REFRESH_SECRET,
   ACCESS_TOKEN_TTL_SECONDS,
@@ -38,6 +39,22 @@ const __dirname = path.dirname(__filename)
 const DIST_DIR = path.join(__dirname, 'dist')
 const DIST_INDEX = path.join(DIST_DIR, 'index.html')
 const isProduction = NODE_ENV === 'production'
+
+
+let bcryptLib = null
+let jwtLib = null
+try {
+  const loaded = await import('bcryptjs')
+  bcryptLib = loaded.default || loaded
+} catch {
+  bcryptLib = null
+}
+try {
+  const loaded = await import('jsonwebtoken')
+  jwtLib = loaded.default || loaded
+} catch {
+  jwtLib = null
+}
 
 const MIME_TYPES = {
   '.html': 'text/html',
@@ -509,37 +526,43 @@ const mapQuoteRow = (row) => (row ? ({
   version: row.version,
 }) : null)
 
-const USER_ROLES = new Set(['admin', 'tech', 'read', 'operator'])
+const USER_ROLES = new Set(['admin', 'tech', 'read', 'operator', 'operatore'])
 const CSRF_SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 
 const toBase64Url = (value) => Buffer.from(value).toString('base64').replace(/=+$/g, '').replace(/\+/g, '-').replace(/\//g, '_')
 const hashValue = (value) => crypto.createHash('sha256').update(String(value || '')).digest('hex')
 
-const hashPassword = (password) => {
+const hashPassword = async (password) => {
+  if (bcryptLib?.hash) return bcryptLib.hash(String(password || ''), 12)
   const salt = crypto.randomBytes(16)
   const key = crypto.scryptSync(String(password || ''), salt, 64)
   return `scrypt$${salt.toString('hex')}$${key.toString('hex')}`
 }
 
-const verifyPassword = (password, storedHash) => {
+const verifyPassword = async (password, storedHash) => {
   if (!storedHash || typeof storedHash !== 'string') return false
-  if (!storedHash.startsWith('scrypt$')) {
-    const legacy = hashValue(password)
-    return crypto.timingSafeEqual(Buffer.from(storedHash), Buffer.from(legacy))
+  try {
+    if (bcryptLib?.compare) return await bcryptLib.compare(String(password || ''), storedHash)
+    if (!storedHash.startsWith('scrypt$')) return false
+    const [, saltHex, keyHex] = storedHash.split('$')
+    if (!saltHex || !keyHex) return false
+    const computed = crypto.scryptSync(String(password || ''), Buffer.from(saltHex, 'hex'), 64)
+    const expected = Buffer.from(keyHex, 'hex')
+    if (computed.length !== expected.length) return false
+    return crypto.timingSafeEqual(computed, expected)
+  } catch {
+    return false
   }
-  const [, saltHex, keyHex] = storedHash.split('$')
-  if (!saltHex || !keyHex) return false
-  const computed = crypto.scryptSync(String(password || ''), Buffer.from(saltHex, 'hex'), 64)
-  const expected = Buffer.from(keyHex, 'hex')
-  if (computed.length !== expected.length) return false
-  return crypto.timingSafeEqual(computed, expected)
 }
 
 const normalizeEmail = (value) => sanitizeString(value).toLowerCase()
 
 const isValidEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
 
+const generateOperatorCode = () => `OP-${crypto.randomBytes(4).toString('hex').toUpperCase()}`
+
 const signJwt = (payload, secret, expiresInSeconds) => {
+  if (jwtLib?.sign) return jwtLib.sign(payload, secret, { expiresIn: expiresInSeconds })
   const header = { alg: 'HS256', typ: 'JWT' }
   const now = Math.floor(Date.now() / 1000)
   const body = { ...payload, iat: now, exp: now + expiresInSeconds }
@@ -551,12 +574,13 @@ const signJwt = (payload, secret, expiresInSeconds) => {
 
 const verifyJwt = (token, secret) => {
   if (!token || typeof token !== 'string') return null
-  const parts = token.split('.')
-  if (parts.length !== 3) return null
-  const [head, body, signature] = parts
-  const expected = crypto.createHmac('sha256', secret).update(`${head}.${body}`).digest('base64url')
-  if (signature !== expected) return null
   try {
+    if (jwtLib?.verify) return jwtLib.verify(token, secret)
+    const parts = token.split('.')
+    if (parts.length !== 3) return null
+    const [head, body, signature] = parts
+    const expected = crypto.createHmac('sha256', secret).update(`${head}.${body}`).digest('base64url')
+    if (signature !== expected) return null
     const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'))
     if (!payload?.exp || Math.floor(Date.now() / 1000) > payload.exp) return null
     return payload
@@ -566,7 +590,7 @@ const verifyJwt = (token, secret) => {
 }
 
 const createAuthTokens = (user) => {
-  const accessToken = signJwt({ sub: user.id, role: user.role, type: 'access' }, JWT_ACCESS_SECRET, ACCESS_TOKEN_TTL_SECONDS)
+  const accessToken = signJwt({ sub: user.id, role: user.role, email: user.email, operatorCode: user.operatorCode, type: 'access' }, JWT_SECRET || JWT_ACCESS_SECRET, ACCESS_TOKEN_TTL_SECONDS)
   const refreshId = crypto.randomUUID()
   const refreshToken = signJwt({ sub: user.id, role: user.role, type: 'refresh', jti: refreshId }, JWT_REFRESH_SECRET, REFRESH_TOKEN_TTL_SECONDS)
   const csrfToken = toBase64Url(crypto.randomBytes(32))
@@ -751,6 +775,7 @@ db.exec(`
     role TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'active',
     approved INTEGER NOT NULL DEFAULT 1,
+    operator_code TEXT UNIQUE,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
@@ -769,10 +794,12 @@ try { db.exec('ALTER TABLE inventory ADD COLUMN price_date TEXT') } catch { /* C
 try { db.exec('ALTER TABLE users ADD COLUMN email TEXT UNIQUE') } catch { /* Column may already exist in migrated databases. */ }
 try { db.exec('ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT \'active\'') } catch { /* Column may already exist in migrated databases. */ }
 try { db.exec('ALTER TABLE users ADD COLUMN approved INTEGER NOT NULL DEFAULT 1') } catch { /* Column may already exist in migrated databases. */ }
+try { db.exec('ALTER TABLE users ADD COLUMN operator_code TEXT UNIQUE') } catch { /* Column may already exist in migrated databases. */ }
 try {
   db.exec("UPDATE users SET email = LOWER(username) WHERE email IS NULL OR email = ''")
   db.exec("UPDATE users SET status = COALESCE(NULLIF(status, ''), 'active')")
   db.exec('UPDATE users SET approved = COALESCE(approved, 1)')
+  db.exec("UPDATE users SET operator_code = 'OP-' || substr(replace(hex(randomblob(16)), ' ', ''), 1, 8) WHERE operator_code IS NULL OR operator_code = ''")
 } catch (error) {
   logEvent('error', 'db_migration_users_failed', { error: error?.message || String(error) })
 }
@@ -948,7 +975,7 @@ Content-Type: application/json
 }
 
 const readBackupDataset = () => ({
-  users: getAll('SELECT id, username, email, role, status, approved, created_at, updated_at FROM users ORDER BY created_at ASC'),
+  users: getAll('SELECT id, username, email, role, status, approved, operator_code, created_at, updated_at FROM users ORDER BY created_at ASC'),
   tickets: getAll('SELECT * FROM tickets ORDER BY created_at ASC'),
   interventions: getAll('SELECT * FROM interventions ORDER BY created_at ASC'),
   customers: getAll('SELECT * FROM customers ORDER BY created_at ASC'),
@@ -1471,13 +1498,11 @@ const readCsvFile = (file) => {
 
 const authenticateRequest = (req) => {
   const token = getTokenFromRequest(req)
-  const payload = verifyJwt(token, JWT_ACCESS_SECRET)
+  const payload = verifyJwt(token, JWT_SECRET || JWT_ACCESS_SECRET)
   if (!payload || payload.type !== 'access') return null
-  const user = getRow('SELECT id, username, email, role, status, approved FROM users WHERE id = ?', [payload.sub])
-  if (!user || !USER_ROLES.has(user.role)) return null
-  if (!user.approved) return null
-  if (!['active', 'pending'].includes(sanitizeString(user.status, 'active'))) return null
-  return user
+  const role = sanitizeString(payload.role)
+  if (!payload.sub || !USER_ROLES.has(role)) return null
+  return { id: payload.sub, role, email: sanitizeString(payload.email), operatorCode: sanitizeString(payload.operatorCode) }
 }
 
 const ensureAuth = (req, res) => {
@@ -1500,7 +1525,7 @@ const ensureRole = (res, user, allowedRoles = []) => {
 const ensureRouteAuthorization = (req, res, user, pathname) => {
   if (user.role === 'admin') return true
 
-  if (user.role === 'tech' || user.role === 'operator') {
+  if (user.role === 'tech' || user.role === 'operator' || user.role === 'operatore') {
     if (pathname.startsWith('/api/import')) {
       respond(res, 403, { error: 'Permessi insufficienti per questa operazione.' })
       return false
@@ -1546,31 +1571,44 @@ const handleApiRequest = async (req, res, url) => {
   if (url.pathname === '/api/auth/login' && req.method === 'POST') {
     try {
       const payload = await readJsonBody(req)
-      const username = sanitizeString(payload?.username)
       const email = normalizeEmail(payload?.email)
-      const identifier = username || email
       const password = sanitizeString(payload?.password)
-      if (!identifier || !password) return respond(res, 400, { error: 'Email e password sono obbligatorie.', code: 'missing_credentials' })
-      if (!checkLoginRateLimit(req, res, identifier)) return
-      const user = getRow("SELECT * FROM users WHERE LOWER(username) = LOWER(?) OR LOWER(COALESCE(email, '')) = LOWER(?)", [identifier, identifier])
-      if (!user) {
-        return respond(res, 404, { error: 'Utente non trovato.', code: 'user_not_found' })
+      if (!email || !password) return respond(res, 400, { error: 'Email e password sono obbligatorie.', code: 'missing_credentials' })
+      if (!checkLoginRateLimit(req, res, email)) return
+
+      if (isDatabaseConfigured) {
+        const dbUser = await prisma.user.findUnique({ where: { email } })
+        if (!dbUser) return respond(res, 404, { error: 'Utente non trovato.', code: 'user_not_found' })
+        const passwordOk = await verifyPassword(password, dbUser.passwordHash)
+        if (!passwordOk) return respond(res, 401, { error: 'Credenziali errate.', code: 'invalid_credentials' })
+        const user = { id: dbUser.id, email: dbUser.email, username: dbUser.email, role: dbUser.role, operatorCode: dbUser.operatorCode }
+        const { accessToken, refreshToken, refreshId, csrfToken } = createAuthTokens(user)
+        runQuery(
+          'INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at, revoked_at, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+          [refreshId, user.id, hashValue(refreshToken), new Date(Date.now() + REFRESH_TOKEN_TTL_SECONDS * 1000).toISOString(), null, nowIso()],
+        )
+        setAuthCookies(res, accessToken, refreshToken, csrfToken)
+        return respond(res, 200, { accessToken, user })
       }
-      if (!verifyPassword(password, user.password_hash)) {
-        logEvent('warn', 'login_failed', { user: identifier || 'n/a', ip: req.socket?.remoteAddress || 'unknown' })
+
+      const user = getRow("SELECT * FROM users WHERE LOWER(COALESCE(email, username)) = LOWER(?)", [email])
+      if (!user) return respond(res, 404, { error: 'Utente non trovato.', code: 'user_not_found' })
+      if (!(await verifyPassword(password, user.password_hash))) {
+        logEvent('warn', 'login_failed', { user: email || 'n/a', ip: req.socket?.remoteAddress || 'unknown' })
         return respond(res, 401, { error: 'Credenziali errate.', code: 'invalid_credentials' })
       }
       if (!user.approved) return respond(res, 403, { error: 'Utente non approvato.', code: 'user_not_approved' })
       if (!['active', 'pending'].includes(sanitizeString(user.status, 'active'))) {
         return respond(res, 403, { error: 'Utente non attivo.', code: 'user_inactive' })
       }
-      const { accessToken, refreshToken, refreshId, csrfToken } = createAuthTokens(user)
+      const authUser = { id: user.id, username: user.username, email: user.email || user.username, role: user.role, status: user.status, approved: Boolean(user.approved), operatorCode: user.operator_code }
+      const { accessToken, refreshToken, refreshId, csrfToken } = createAuthTokens(authUser)
       runQuery(
         'INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at, revoked_at, created_at) VALUES (?, ?, ?, ?, ?, ?)',
         [refreshId, user.id, hashValue(refreshToken), new Date(Date.now() + REFRESH_TOKEN_TTL_SECONDS * 1000).toISOString(), null, nowIso()],
       )
       setAuthCookies(res, accessToken, refreshToken, csrfToken)
-      return respond(res, 200, { accessToken, user: { id: user.id, username: user.username, email: user.email || user.username, role: user.role, status: user.status, approved: Boolean(user.approved) } })
+      return respond(res, 200, { accessToken, user: authUser })
     } catch (error) {
       return handleErrorResponse(res, error, { path: url.pathname, method: req.method })
     }
@@ -1590,6 +1628,28 @@ const handleApiRequest = async (req, res, url) => {
       if (password.length < 8) {
         return respond(res, 400, { error: 'La password deve avere almeno 8 caratteri.', code: 'weak_password' })
       }
+
+      if (isDatabaseConfigured) {
+        const existing = await prisma.user.findUnique({ where: { email } })
+        if (existing) return respond(res, 409, { error: 'Utente già registrato.', code: 'user_exists' })
+        const created = await prisma.user.create({
+          data: {
+            email,
+            passwordHash: await hashPassword(password),
+            role: 'operatore',
+            operatorCode: generateOperatorCode(),
+          },
+        })
+        const user = { id: created.id, email: created.email, username: created.email, role: created.role, operatorCode: created.operatorCode }
+        const { accessToken, refreshToken, refreshId, csrfToken } = createAuthTokens(user)
+        runQuery(
+          'INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at, revoked_at, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+          [refreshId, user.id, hashValue(refreshToken), new Date(Date.now() + REFRESH_TOKEN_TTL_SECONDS * 1000).toISOString(), null, nowIso()],
+        )
+        setAuthCookies(res, accessToken, refreshToken, csrfToken)
+        return respond(res, 201, { accessToken, user })
+      }
+
       if (getRow("SELECT id FROM users WHERE LOWER(username) = LOWER(?) OR LOWER(COALESCE(email, '')) = LOWER(?)", [email, email])) {
         return respond(res, 409, { error: 'Utente già registrato.', code: 'user_exists' })
       }
@@ -1600,10 +1660,11 @@ const handleApiRequest = async (req, res, url) => {
         role: 'operator',
         status: 'pending',
         approved: 1,
+        operatorCode: generateOperatorCode(),
       }
       runQuery(
-        'INSERT INTO users (id, username, email, password_hash, role, status, approved, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        [user.id, user.username, user.email, hashPassword(password), user.role, user.status, user.approved, nowIso(), nowIso()],
+        'INSERT INTO users (id, username, email, password_hash, role, status, approved, operator_code, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [user.id, user.username, user.email, await hashPassword(password), user.role, user.status, user.approved, user.operatorCode, nowIso(), nowIso()],
       )
       const { accessToken, refreshToken, refreshId, csrfToken } = createAuthTokens(user)
       runQuery(
@@ -1611,7 +1672,7 @@ const handleApiRequest = async (req, res, url) => {
         [refreshId, user.id, hashValue(refreshToken), new Date(Date.now() + REFRESH_TOKEN_TTL_SECONDS * 1000).toISOString(), null, nowIso()],
       )
       setAuthCookies(res, accessToken, refreshToken, csrfToken)
-      return respond(res, 201, { accessToken, user: { id: user.id, username: user.username, email: user.email, role: user.role, status: user.status, approved: true } })
+      return respond(res, 201, { accessToken, user: { id: user.id, username: user.username, email: user.email, role: user.role, status: user.status, approved: true, operatorCode: user.operatorCode } })
     } catch (error) {
       return handleErrorResponse(res, error, { path: url.pathname, method: req.method })
     }
@@ -1631,7 +1692,14 @@ const handleApiRequest = async (req, res, url) => {
       clearAuthCookies(res)
       return respond(res, 401, { error: 'Sessione scaduta.', code: 'session_expired' })
     }
-    const user = getRow('SELECT id, username, email, role, status, approved FROM users WHERE id = ?', [record.user_id])
+    let user = null
+    if (isDatabaseConfigured) {
+      const dbUser = await prisma.user.findUnique({ where: { id: record.user_id } })
+      if (dbUser) user = { id: dbUser.id, email: dbUser.email, username: dbUser.email, role: dbUser.role, operatorCode: dbUser.operatorCode, approved: 1, status: 'active' }
+    } else {
+      user = getRow('SELECT id, username, email, role, status, approved, operator_code FROM users WHERE id = ?', [record.user_id])
+      if (user) user.operatorCode = user.operator_code
+    }
     if (!user) return respond(res, 404, { error: 'Utente non trovato.', code: 'user_not_found' })
     if (!user.approved || !['active', 'pending'].includes(sanitizeString(user.status, 'active'))) {
       clearAuthCookies(res)
@@ -1668,6 +1736,18 @@ const handleApiRequest = async (req, res, url) => {
       console.warn('[auth] /api/auth/me non disponibile temporaneamente', error)
       return respond(res, 503, { error: 'Servizio autenticazione temporaneamente non disponibile.', code: 'auth_temporarily_unavailable' })
     }
+  }
+
+  if (url.pathname === '/api/auth/operator-code/regenerate' && req.method === 'POST') {
+    const user = ensureAuth(req, res)
+    if (!user) return
+    const operatorCode = generateOperatorCode()
+    if (isDatabaseConfigured) {
+      const updated = await prisma.user.update({ where: { id: user.id }, data: { operatorCode } })
+      return respond(res, 200, { operatorCode: updated.operatorCode })
+    }
+    runQuery('UPDATE users SET operator_code = ?, updated_at = ? WHERE id = ?', [operatorCode, nowIso(), user.id])
+    return respond(res, 200, { operatorCode })
   }
 
   if (!url.pathname.startsWith('/api/')) {
