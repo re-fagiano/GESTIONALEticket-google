@@ -3,7 +3,13 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "engines": {
+    "node": "^20.10.0",
+    "npm": "^10.5.0"
+  },
+  "packageManager": "npm@10.5.0",
   "scripts": {
+    "preinstall": "npm cache clean --force && npm config set registry https://registry.npmjs.org/ && npm config set fetch-retries=5 && npm config set prefer-offline=false",
     "dev": "vite",
     "build": "prisma generate && node scripts/check-duplicate-intervention-handlers.js && vite build",
     "start": "npm run prisma:deploy && node server.js",
@@ -19,11 +25,10 @@
     "lucide-react": "^0.556.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
-    "@prisma/client": "^6.0.0",
-    "prisma": "^6.0.0",
-    "@prisma/engines": "^6.0.0"
+    "@prisma/client": "^6.0.0"
   },
   "devDependencies": {
+    "prisma": "^6.0.0",
     "@eslint/js": "^9.39.1",
     "@types/react": "^19.2.5",
     "@types/react-dom": "^19.2.3",
