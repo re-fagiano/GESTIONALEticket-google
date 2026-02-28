@@ -3,14 +3,18 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "engines": {
+    "node": "^20.10.0"
+  },
+  "packageManager": "pnpm@9.1.0",
   "scripts": {
     "dev": "vite",
     "build": "prisma generate && node scripts/check-duplicate-intervention-handlers.js && vite build",
-    "start": "npm run prisma:deploy && node server.js",
+    "start": "pnpm run prisma:deploy && node server.js",
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "echo \"No tests configured\"",
-    "start:sqlite": "npm run build && node backend/server.js",
+    "start:sqlite": "pnpm run build && node backend/server.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:deploy": "prisma migrate deploy"
@@ -19,11 +23,10 @@
     "lucide-react": "^0.556.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
-    "@prisma/client": "^6.0.0",
-    "prisma": "^6.0.0",
-    "@prisma/engines": "^6.0.0"
+    "@prisma/client": "^6.0.0"
   },
   "devDependencies": {
+    "prisma": "^6.0.0",
     "@eslint/js": "^9.39.1",
     "@types/react": "^19.2.5",
     "@types/react-dom": "^19.2.3",
