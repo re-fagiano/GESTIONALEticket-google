@@ -8,6 +8,8 @@ on:
 jobs:
   lint-build:
     runs-on: ubuntu-latest
+    env:
+      NPM_CONFIG_CACHE: /tmp/.npm
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -15,7 +17,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 20
 
       - name: Clean npm cache
         run: npm cache clean --force
@@ -26,7 +28,7 @@ jobs:
           NPM_CONFIG_FETCH_RETRY_MINTIMEOUT: 20000
           NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT: 120000
           NPM_CONFIG_AUDIT: false
-        run: npm ci
+        run: npm ci --cache /tmp/.npm --no-audit --no-fund
 
       - name: Lint
         run: npm run lint
