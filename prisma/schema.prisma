@@ -24,6 +24,11 @@ enum InterventionStatus {
   chiuso
 }
 
+enum UserRole {
+  operatore
+  admin
+}
+
 model Customer {
   id            String         @id @default(uuid())
   name          String
@@ -135,4 +140,17 @@ model AuditLog {
 
   @@index([entityType, entityId])
   @@map("audit_logs")
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  role         UserRole @default(operatore)
+  operatorCode String   @unique
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([role])
+  @@map("users")
 }
