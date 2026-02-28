@@ -9,7 +9,7 @@ jobs:
   lint-build:
     runs-on: ubuntu-latest
     env:
-      NPM_CONFIG_CACHE: /tmp/.npm
+      PNPM_HOME: /tmp/.pnpm
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -19,19 +19,16 @@ jobs:
         with:
           node-version: 20
 
-      - name: Clean npm cache
-        run: npm cache clean --force
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.1.0
 
       - name: Install dependencies
-        env:
-          NPM_CONFIG_FETCH_RETRIES: 5
-          NPM_CONFIG_FETCH_RETRY_MINTIMEOUT: 20000
-          NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT: 120000
-          NPM_CONFIG_AUDIT: false
-        run: npm ci --cache /tmp/.npm --no-audit --no-fund
+        run: pnpm install --store-dir /tmp/.pnpm-store --no-frozen-lockfile --no-optional
 
       - name: Lint
-        run: npm run lint
+        run: pnpm run lint
 
       - name: Build
-        run: npm run build
+        run: pnpm run build
