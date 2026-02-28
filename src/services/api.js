@@ -6,6 +6,38 @@ const getCsrfToken = () => {
 
 const RAG_API_URL = (import.meta.env.VITE_RAG_API_URL || '').trim().replace(/\/$/, '');
 const RAG_ENDPOINT = RAG_API_URL || '/api/rag';
+const AUTH_TOKEN_KEY = 'gestionale_jwt';
+
+let unauthorizedHandler = null;
+
+const getStorage = () => {
+  if (typeof window === 'undefined') return null;
+  return window.localStorage || window.sessionStorage || null;
+};
+
+let authToken = (() => {
+  const storage = getStorage();
+  return storage?.getItem(AUTH_TOKEN_KEY) || '';
+})();
+
+export const setUnauthorizedHandler = (handler) => {
+  unauthorizedHandler = typeof handler === 'function' ? handler : null;
+};
+
+export const setAuthToken = (token, persist = true) => {
+  authToken = String(token || '');
+  const storage = getStorage();
+  if (!storage) return;
+  if (!authToken) {
+    storage.removeItem(AUTH_TOKEN_KEY);
+    return;
+  }
+  if (persist) storage.setItem(AUTH_TOKEN_KEY, authToken);
+};
+
+export const clearAuthToken = () => {
+  setAuthToken('');
+};
 
 let refreshPromise = null;
 
@@ -19,7 +51,9 @@ const refreshAccessToken = async () => {
           err.status = response.status;
           throw err;
         }
-        return payload?.accessToken || '';
+        const nextToken = payload?.accessToken || '';
+        if (nextToken) setAuthToken(nextToken);
+        return nextToken;
       })
       .finally(() => {
         refreshPromise = null;
@@ -75,8 +109,9 @@ export const apiFetch = async (input, maybeOptions = {}, maybeToken = '', allowR
     'Content-Type': 'application/json',
     ...(options.headers || {})
   };
-  if (apiToken) {
-    headers.Authorization = `Bearer ${apiToken}`;
+  const token = apiToken || authToken;
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
   }
 
   const method = String(options.method || 'GET').toUpperCase();
@@ -94,6 +129,12 @@ export const apiFetch = async (input, maybeOptions = {}, maybeToken = '', allowR
       const refreshedToken = await refreshAccessToken().catch(() => '');
       if (refreshedToken) {
         return apiFetch({ path, options, apiToken: refreshedToken }, {}, '', false);
+      }
+    }
+    if (response.status === 401) {
+      clearAuthToken();
+      if (typeof unauthorizedHandler === 'function') {
+        unauthorizedHandler();
       }
     }
     const error = new Error(payload?.error || `Errore API: ${response.status}`);
@@ -209,7 +250,7 @@ export const callDeepSeekApi = async ({ endpoint, requestHeaders, safeSubject, s
 };
 
 export const login = async ({ email, password }) => {
-  return apiFetch({
+  const response = await apiFetch({
     path: '/api/auth/login',
     options: {
       method: 'POST',
@@ -217,10 +258,12 @@ export const login = async ({ email, password }) => {
     },
     allowRefresh: false,
   });
+  if (response?.accessToken) setAuthToken(response.accessToken);
+  return response;
 };
 
 export const register = async ({ email, password }) => {
-  return apiFetch({
+  const response = await apiFetch({
     path: '/api/auth/register',
     options: {
       method: 'POST',
@@ -228,6 +271,8 @@ export const register = async ({ email, password }) => {
     },
     allowRefresh: false,
   });
+  if (response?.accessToken) setAuthToken(response.accessToken);
+  return response;
 };
 
 export const getMe = async () => apiFetch({ path: '/api/auth/me', options: {}, apiToken: '', allowRefresh: true });
@@ -237,7 +282,13 @@ export const getHealthStatus = async () => {
   return response.ok;
 };
 
-export const logout = async () => fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
+export const logout = async () => {
+  try {
+    return await apiFetch({ path: '/api/auth/logout', options: { method: 'POST' }, allowRefresh: false });
+  } finally {
+    clearAuthToken();
+  }
+};
 
 
 export const triggerAdminBackup = async () => apiFetch({

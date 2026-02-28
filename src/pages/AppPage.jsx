@@ -36,6 +36,7 @@ import {
   login,
   logout,
   register,
+  setUnauthorizedHandler,
   syncData,
   triggerAdminBackup
 } from '../services/api';
@@ -285,6 +286,15 @@ export default function AppPage() {
   }, []);
 
   useEffect(() => {
+    setUnauthorizedHandler(() => {
+      setAuthState({ checked: true, user: null });
+      setStorageWarning('Sessione scaduta. Effettua nuovamente il login.');
+      addToast('Sessione scaduta.', 'error');
+    });
+    return () => setUnauthorizedHandler(null);
+  }, []);
+
+  useEffect(() => {
     if (!exportNotice) return;
     const timer = setTimeout(() => setExportNotice(null), 4000);
     return () => clearTimeout(timer);
@@ -352,7 +362,7 @@ export default function AppPage() {
     } catch (error) {
       console.error('Errore sincronizzazione backend', error);
       setStorageWarning(error.message || 'Impossibile contattare il backend.');
-      setSyncStatus('Backend non raggiungibile: uso cache locale.');
+      setSyncStatus('Backend non raggiungibile.');
       setBackendOnline(false);
     } finally {
       setIsSyncing(false);
@@ -502,11 +512,6 @@ export default function AppPage() {
     addToast(message, 'error');
   };
 
-  const shouldFallbackToLocal = (error) => {
-    const status = Number(error?.status);
-    return !status || status === 401 || status === 403 || status >= 500;
-  };
-
   const handleAuthSubmit = async () => {
     if (!loginForm.email.trim() || !loginForm.password.trim()) {
       addToast('Inserisci email e password.', 'error');
@@ -605,30 +610,7 @@ export default function AppPage() {
       setSyncStatus('Cliente salvato nel backend.');
       addToast('Cliente aggiunto con successo.', 'success');
     } catch (error) {
-      if (shouldFallbackToLocal(error)) {
-        if (editingCustomerId) {
-          setCustomers((prev) => sanitizeCustomers(prev.map((item) => (item.id === editingCustomerId ? customer : item)), initialCustomers));
-          closeCustomerModal();
-          addToast('Cliente aggiornato in locale (token mancante/non valido).', 'success');
-          setSyncStatus('Modalità locale: cliente aggiornato solo nel browser.');
-        } else {
-          setCustomers((prev) => sanitizeCustomers([...prev, customer], initialCustomers));
-          closeCustomerModal();
-          if (returnToTicketAfterCustomer) {
-            setShowNewTicket(true);
-            setNewTicket((prev) => ({ ...prev, customerId: customer.id }));
-            setReturnToTicketAfterCustomer(false);
-          }
-          if (returnToInterventionAfterCustomer) {
-            setNewIntervention((prev) => ({ ...prev, clientId: customer.id }));
-            setReturnToInterventionAfterCustomer(false);
-          }
-          addToast('Cliente salvato in locale (token mancante/non valido).', 'success');
-          setSyncStatus('Modalità locale: cliente salvato solo nel browser.');
-        }
-      } else {
-        handleApiError(error, editingCustomerId ? 'Impossibile aggiornare il cliente.' : 'Impossibile salvare il cliente.');
-      }
+      handleApiError(error, editingCustomerId ? 'Impossibile aggiornare il cliente.' : 'Impossibile salvare il cliente.');
     } finally {
       setIsSavingCustomer(false);
     }
@@ -653,16 +635,7 @@ export default function AppPage() {
       setSyncStatus('Ticket salvato nel backend.');
       addToast('Ticket creato con successo.', 'success');
     } catch (error) {
-      if (shouldFallbackToLocal(error)) {
-        setTickets((prev) => sanitizeTickets([...prev, ticket], initialTickets));
-        setNewTicket({ subject: '', description: '', customerId: '', status: 'aperto', type: 'chiamata', urgency: 2, date: new Date().toISOString().split('T')[0], time: '09:00' });
-        setTicketCustomerQuery('');
-        setShowNewTicket(false);
-        addToast('Ticket salvato in locale (token mancante/non valido).', 'success');
-        setSyncStatus('Modalità locale: ticket salvato solo nel browser.');
-      } else {
-        handleApiError(error, 'Impossibile salvare il ticket.');
-      }
+      handleApiError(error, 'Impossibile salvare il ticket.');
     } finally {
       setIsSavingTicket(false);
     }
@@ -743,21 +716,7 @@ export default function AppPage() {
       setShowCalendarQuickAdd(false);
       addToast('Intervento creato con successo.', 'success');
     } catch (error) {
-      if (shouldFallbackToLocal(error)) {
-        setInterventions((prev) => sanitizeInterventions([payload, ...prev], initialInterventions));
-        setNewIntervention({
-          clientId: '', type: forcedType || selectedType || 'chiamata', status: 'pendente', urgency: 2, openedAt: nowIso(), description: '', parentInterventionId: '',
-          applianceBrand: '', applianceModel: '', serialNumber: '', defect: '',
-          sparePartCode: '', sparePartQty: 1, supplier: '', quoteItems: '', quoteTotal: 0, quoteValidUntil: ''
-        });
-        setInterventionCustomerQuery('');
-        setNewInterventionFiles([]);
-        setShowCalendarQuickAdd(false);
-        addToast('Intervento salvato in locale (token mancante/non valido).', 'success');
-        setSyncStatus('Modalità locale: intervento salvato solo nel browser.');
-      } else {
-        handleApiError(error, 'Impossibile creare l\'intervento.');
-      }
+      handleApiError(error, 'Impossibile creare l\'intervento.');
     }
   };
 
@@ -793,12 +752,6 @@ export default function AppPage() {
       addToast('Data intervento aggiornata.', 'success');
       return true;
     } catch (error) {
-      if (shouldFallbackToLocal(error)) {
-        setInterventions((prev) => prev.map((entry) => (entry.id === updated.id ? updated : entry)));
-        setSyncStatus('Modalità locale: data intervento aggiornata solo nel browser.');
-        addToast('Data intervento aggiornata in locale (token mancante/non valido).', 'success');
-        return true;
-      }
       handleApiError(error, 'Impossibile aggiornare la data intervento.');
       return false;
     }
@@ -853,13 +806,7 @@ export default function AppPage() {
       setSelectedIntervention(null);
       addToast('Dettagli intervento aggiornati.', 'success');
     } catch (error) {
-      if (shouldFallbackToLocal(error)) {
-        setInterventions((prev) => prev.map((entry) => (entry.id === selectedIntervention.id ? payload : entry)));
-        setSelectedIntervention(null);
-        addToast('Intervento aggiornato in locale.', 'success');
-      } else {
-        handleApiError(error, 'Impossibile salvare i dettagli intervento.');
-      }
+      handleApiError(error, 'Impossibile salvare i dettagli intervento.');
     }
   };
 
@@ -882,15 +829,7 @@ export default function AppPage() {
       setSyncStatus('Ricambio salvato nel backend.');
       addToast('Ricambio salvato.', 'success');
     } catch (error) {
-      if (shouldFallbackToLocal(error)) {
-        setInventory((prev) => sanitizeInventoryList([...prev, part], initialInventory));
-        setNewPart({ code: '', name: '', description: '', location: '', qty: 1, price: 0, minQty: 5, priceDate: new Date().toISOString().split('T')[0] });
-        setShowNewPart(false);
-        addToast('Ricambio salvato in locale (token mancante/non valido).', 'success');
-        setSyncStatus('Modalità locale: ricambio salvato solo nel browser.');
-      } else {
-        handleApiError(error, 'Impossibile salvare il ricambio.');
-      }
+      handleApiError(error, 'Impossibile salvare il ricambio.');
     } finally {
       setIsSavingPart(false);
     }
@@ -1094,12 +1033,7 @@ const buildBackup = () => ({
       setMbiStatus(`MBI remoto sincronizzato alle ${new Date().toLocaleTimeString('it-IT')}.`);
       addToast('Sincronizzazione MBI completata.', 'success');
     } catch (error) {
-      if (shouldFallbackToLocal(error)) {
-        setMbiStatus('MBI: backend non raggiungibile, snapshot locale comunque salvato.');
-        addToast('MBI locale salvato, remoto non disponibile.', 'success');
-      } else {
-        handleApiError(error, 'Sincronizzazione MBI non riuscita.');
-      }
+      handleApiError(error, 'Sincronizzazione MBI non riuscita.');
     }
   };
 
