@@ -354,6 +354,17 @@ export const deleteIntervention = async (id) => apiFetch({
   options: { method: 'DELETE' },
 });
 
+
+export const patchInterventoStatus = async (id, status) => apiFetch({
+  path: `/api/interventi/${id}`,
+  options: { method: 'PATCH', body: JSON.stringify({ status }) },
+});
+
+export const convertChiamataToRiparazione = async (id) => apiFetch({
+  path: `/api/riparazioni/from-chiamata/${id}`,
+  options: { method: 'POST' },
+});
+
 export const createInventoryItem = async (item) => apiFetch({
   path: '/api/inventory',
   options: { method: 'POST', body: JSON.stringify(item) },

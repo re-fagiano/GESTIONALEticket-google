@@ -22,6 +22,8 @@ import {
   updateTicket,
   createIntervention,
   updateIntervention,
+  patchInterventoStatus,
+  convertChiamataToRiparazione,
   deleteIntervention,
   createInventoryItem,
   updateInventoryItem,
@@ -454,7 +456,7 @@ export default function AppPage() {
   const [inventorySearch, setInventorySearch] = useState('');
   const [inventorySearchField, setInventorySearchField] = useState('all');
   const [selectedIntervention, setSelectedIntervention] = useState(null);
-  const openInterventions = interventions.filter((item) => item.status !== 'chiuso');
+  const openInterventions = interventions.filter((item) => item.status !== 'completato' && item.status !== 'annullato');
   const normalizedTicketCustomerQuery = ticketCustomerQuery.trim().toLowerCase();
   const filteredTicketCustomers = customers.filter((customer) => {
     if (!normalizedTicketCustomerQuery) return true;
@@ -795,14 +797,8 @@ export default function AppPage() {
 
   const handleInterventionStatusChange = async (intervention, status) => {
     if (!intervention || intervention.status === status) return;
-    const updated = {
-      ...intervention,
-      status,
-      updatedAt: nowIso(),
-      closedAt: status === 'chiuso' ? nowIso() : intervention.closedAt
-    };
     try {
-      const saved = await updateIntervention(intervention.id, updated);
+      const saved = await patchInterventoStatus(intervention.id, status);
       setInterventions((prev) => prev.map((entry) => (entry.id === intervention.id ? sanitizeIntervention(saved) : entry)));
       setSyncStatus('Intervento aggiornato.');
     } catch (error) {
@@ -860,6 +856,8 @@ export default function AppPage() {
     const payload = sanitizeIntervention({
       ...selectedIntervention,
       description: buildDescriptionFromEntries(nextEntries),
+      assignedToId: selectedIntervention.assignedToId || '',
+      note: noteText,
       additionalData: {
         ...(selectedIntervention.additionalData || {}),
         descriptionEntries: nextEntries,
@@ -961,8 +959,21 @@ export default function AppPage() {
     }
   };
 
+  const handleConvertCallToRepair = async (ticket) => {
+    if (!ticket?.id) return;
+    try {
+      const createdRepair = await convertChiamataToRiparazione(ticket.id);
+      setInterventions((prev) => sanitizeInterventions([createdRepair, ...prev.filter((entry) => entry.id !== createdRepair.id)], initialInterventions));
+      setSyncStatus('Chiamata trasformata in riparazione.');
+      addToast('Trasformazione completata.', 'success');
+    } catch (error) {
+      handleApiError(error, 'Impossibile trasformare la chiamata in riparazione.');
+    }
+  };
+
   const getStatusStyles = (status) => {
-    if (status === 'chiuso') return 'bg-emerald-50 text-emerald-700 border-emerald-200';
+    if (status === 'completato') return 'bg-emerald-50 text-emerald-700 border-emerald-200';
+    if (status === 'annullato') return 'bg-slate-100 text-slate-700 border-slate-300';
     if (status === 'in lavorazione') return 'bg-amber-50 text-amber-700 border-amber-200';
     return 'bg-red-50 text-red-600 border-red-200';
   };
@@ -1790,7 +1801,7 @@ const buildBackup = () => ({
     const typeKey = dedicatedTabToType[tabKey] || 'chiamata';
     const meta = interventionTypeMeta[typeKey];
     const typeItems = interventions.filter((item) => item.type === typeKey);
-    const typeOpen = typeItems.filter((item) => item.status !== 'chiuso');
+    const typeOpen = typeItems.filter((item) => item.status !== 'completato' && item.status !== 'annullato');
 
     return (
       <div className="space-y-6">
@@ -2417,6 +2428,17 @@ const buildBackup = () => ({
                               >
                                 <Bot size={16}/> Diagnosi
                               </button>
+                              {ticket.type === 'chiamata' && (
+                                <button
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    handleConvertCallToRepair(ticket);
+                                  }}
+                                  className="text-xs px-2 py-1 rounded border border-emerald-200 text-emerald-700 bg-emerald-50"
+                                >
+                                  Trasforma in riparazione
+                                </button>
+                              )}
                               <button
                                 onClick={(event) => {
                                   event.stopPropagation();
@@ -2579,6 +2601,15 @@ const buildBackup = () => ({
               <select className="w-full border p-2 rounded" value={selectedIntervention.urgency} onChange={(e) => setSelectedIntervention((prev) => ({ ...prev, urgency: Number(e.target.value) }))}>
                 <option value={1}>Bassa</option><option value={2}>Media</option><option value={3}>Alta</option>
               </select>
+              <select
+                className="w-full border p-2 rounded md:col-span-2"
+                value={selectedIntervention.assignedToId || ''}
+                onChange={(e) => setSelectedIntervention((prev) => ({ ...prev, assignedToId: e.target.value }))}
+                disabled={authState.user?.role !== 'admin'}
+              >
+                <option value="">Nessun operatore assegnato</option>
+                {authState.user && <option value={authState.user.id}>Operatore corrente ({authState.user.username || authState.user.email})</option>}
+              </select>
             </div>
             <div className="mt-3 space-y-2">
               <p className="text-sm font-semibold text-slate-700">Storico scritte</p>
@@ -2604,6 +2635,19 @@ const buildBackup = () => ({
                 onChange={(e) => setSelectedIntervention((prev) => ({ ...prev, newNote: e.target.value }))}
               />
               <p className="text-xs text-slate-500">Le nuove note sono colorate e mostrano autore/data passando con il mouse.</p>
+              <div className="mt-4">
+                <p className="text-sm font-semibold text-slate-700 mb-2">Cronologia modifiche</p>
+                <div className="max-h-40 overflow-y-auto border rounded p-2 bg-white space-y-1">
+                  {(selectedIntervention.logs || []).length === 0 && (
+                    <p className="text-xs text-slate-500">Nessuna modifica tracciata.</p>
+                  )}
+                  {(selectedIntervention.logs || []).map((log) => (
+                    <p key={log.id} className="text-xs text-slate-700 border-b pb-1 last:border-b-0">
+                      <strong>{log.action}</strong> - {log.note || '-'} - {formatAuditDate(log.createdAt)}
+                    </p>
+                  ))}
+                </div>
+              </div>
             </div>
             <div className="flex justify-end gap-2 mt-4">
               <button onClick={() => setSelectedIntervention(null)} className="px-4 py-2 text-slate-500">Chiudi</button>

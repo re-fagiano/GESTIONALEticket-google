@@ -138,7 +138,7 @@ const sanitizeInventoryList = (list, fallback = []) => {
 };
 
 const interventionTypes = ['chiamata', 'riparazione', 'ordine_ricambi', 'preventivo'];
-const interventionStatuses = ['pendente', 'preso_in_carico', 'diagnosticato', 'ordine_ricambi', 'preventivato', 'saldato', 'chiuso'];
+const interventionStatuses = ['pendente', 'in_lavorazione', 'completato', 'annullato'];
 const interventionTypeMeta = {
   chiamata: { label: 'Chiamate', singularLabel: 'Chiamata', color: 'blue' },
   riparazione: { label: 'Riparazioni', singularLabel: 'Riparazione', color: 'indigo' },
@@ -154,16 +154,16 @@ const dedicatedTabToType = {
 };
 
 const mapInterventionStatusToTicketStatus = (status) => {
-  if (status === 'chiuso') return 'chiuso';
+  if (status === 'completato' || status === 'annullato') return 'chiuso';
   if (status === 'pendente') return 'aperto';
   return 'in lavorazione';
 };
 
 const mapTicketStatusToInterventionStatus = (status, currentStatus) => {
-  if (status === 'chiuso') return 'chiuso';
+  if (status === 'chiuso') return 'completato';
   if (status === 'aperto') return 'pendente';
-  if (currentStatus && currentStatus !== 'chiuso' && currentStatus !== 'pendente') return currentStatus;
-  return 'preso_in_carico';
+  if (currentStatus && currentStatus !== 'completato' && currentStatus !== 'pendente') return currentStatus;
+  return 'in_lavorazione';
 };
 
 const interventionToTicket = (intervention, index = 0) => {
@@ -209,7 +209,10 @@ const sanitizeIntervention = (item, idx = 0) => {
     closedAt: typeof item.closedAt === 'string' ? item.closedAt : null,
     description: typeof item.description === 'string' ? item.description : '',
     parentInterventionId: typeof item.parentInterventionId === 'string' ? item.parentInterventionId : null,
+    assignedToId: typeof item.assignedToId === 'string' ? item.assignedToId : '',
+    updatedByUserId: typeof item.updatedByUserId === 'string' ? item.updatedByUserId : '',
     additionalData: item.additionalData && typeof item.additionalData === 'object' ? item.additionalData : {},
+    logs: Array.isArray(item.logs) ? item.logs : [],
     durationDays: Number.isFinite(Number(item.durationDays)) ? Number(item.durationDays) : 0,
     updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : nowIso(),
     version: Number.isFinite(Number(item.version)) ? Number(item.version) : 1
