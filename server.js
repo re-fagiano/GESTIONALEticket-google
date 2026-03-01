@@ -161,11 +161,19 @@ const mapPrismaIntervention = (row) => {
     status: row.status,
     urgency: row.priority,
     priority: row.priority,
-    assignedTo: row.assignedTo,
+    assignedToId: row.assignedToId || '',
     openedAt: row.openedAt?.toISOString?.() || row.openedAt,
     closedAt: row.closedAt?.toISOString?.() || row.closedAt,
     description: row.description || '',
     additionalData: row.additionalData || {},
+    logs: Array.isArray(row.logs) ? row.logs.map((log) => ({
+      id: log.id,
+      interventoId: log.interventoId,
+      userId: log.userId || '',
+      action: log.action,
+      note: log.note || '',
+      createdAt: log.createdAt?.toISOString?.() || log.createdAt,
+    })) : [],
     durationDays,
     createdAt: row.createdAt?.toISOString?.() || row.createdAt,
     updatedAt: row.updatedAt?.toISOString?.() || row.updatedAt,
@@ -245,7 +253,7 @@ const validators = {
 }
 
 const INTERVENTION_TYPES = new Set(['chiamata', 'riparazione', 'ordine_ricambi', 'preventivo'])
-const INTERVENTION_STATUSES = new Set(['pendente', 'preso_in_carico', 'diagnosticato', 'ordine_ricambi', 'preventivato', 'saldato', 'chiuso'])
+const INTERVENTION_STATUSES = new Set(['pendente', 'in_lavorazione', 'completato', 'annullato'])
 const URGENCY_LEVELS = new Set([1, 2, 3])
 const SPARE_PART_ORDER_STATUSES = new Set(['ordinato', 'in_arrivo', 'arrivato', 'consegnato'])
 const QUOTE_STATUSES = new Set(['proposto', 'accettato', 'rifiutato'])
@@ -262,21 +270,18 @@ const INTERVENTION_TYPE_FROM_DB = Object.fromEntries(Object.entries(INTERVENTION
 
 const INTERVENTION_STATUS_TO_DB = {
   pendente: 'OPEN',
-  preso_in_carico: 'IN_PROGRESS',
-  diagnosticato: 'IN_PROGRESS',
-  ordine_ricambi: 'WAITING_PARTS',
-  preventivato: 'WAITING_CUSTOMER',
-  saldato: 'DONE',
-  chiuso: 'DONE',
+  in_lavorazione: 'IN_PROGRESS',
+  completato: 'DONE',
+  annullato: 'CANCELED',
 }
 
 const INTERVENTION_STATUS_FROM_DB = {
   OPEN: 'pendente',
-  IN_PROGRESS: 'preso_in_carico',
-  WAITING_PARTS: 'ordine_ricambi',
-  WAITING_CUSTOMER: 'preventivato',
-  DONE: 'chiuso',
-  CANCELED: 'chiuso',
+  IN_PROGRESS: 'in_lavorazione',
+  WAITING_PARTS: 'in_lavorazione',
+  WAITING_CUSTOMER: 'in_lavorazione',
+  DONE: 'completato',
+  CANCELED: 'annullato',
 }
 
 const isEmpty = (value) => value === null || value === undefined || value === ''
@@ -470,6 +475,8 @@ const mapInterventionRow = (row) => {
     type: row.type,
     status: row.status,
     urgency: row.urgency,
+    assignedToId: row.assigned_to_id || '',
+    updatedByUserId: row.updated_by_user_id || '',
     openedAt: row.opened_at,
     closedAt: row.closed_at,
     description: row.description,
@@ -481,6 +488,7 @@ const mapInterventionRow = (row) => {
         return {}
       }
     })(),
+    logs: [],
     durationDays,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -525,6 +533,31 @@ const mapQuoteRow = (row) => (row ? ({
   updatedAt: row.updated_at,
   version: row.version,
 }) : null)
+
+
+const mapInterventoLogRow = (row) => (row ? ({
+  id: row.id,
+  interventoId: row.intervento_id,
+  userId: row.user_id,
+  action: row.action,
+  note: row.note || '',
+  createdAt: row.created_at,
+}) : null)
+
+const saveInterventoLogSqlite = ({ interventoId, userId = '', action = '', note = '' }) => {
+  const safeInterventoId = sanitizeString(interventoId)
+  const safeAction = sanitizeString(action)
+  if (!safeInterventoId || !safeAction) return
+  runQuery(
+    'INSERT INTO intervento_logs (id, intervento_id, user_id, action, note, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+    [ensureId(), safeInterventoId, sanitizeString(userId) || null, safeAction, sanitizeString(note), nowIso()],
+  )
+}
+
+const getInterventoLogsSqlite = (interventoId) => getAll(
+  'SELECT * FROM intervento_logs WHERE intervento_id = ? ORDER BY created_at ASC',
+  [interventoId],
+).map(mapInterventoLogRow)
 
 const USER_ROLES = new Set(['admin', 'tech', 'read', 'operator', 'operatore'])
 const CSRF_SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
@@ -734,6 +767,8 @@ db.exec(`
     opened_at TEXT NOT NULL,
     closed_at TEXT,
     description TEXT,
+    assigned_to_id TEXT,
+    updated_by_user_id TEXT,
     parent_intervention_id TEXT,
     additional_data TEXT,
     created_at TEXT NOT NULL,
@@ -767,6 +802,16 @@ db.exec(`
     version INTEGER NOT NULL,
     FOREIGN KEY(intervention_id) REFERENCES interventions(id)
   );
+  CREATE TABLE IF NOT EXISTS intervento_logs (
+    id TEXT PRIMARY KEY,
+    intervento_id TEXT NOT NULL,
+    user_id TEXT,
+    action TEXT NOT NULL,
+    note TEXT,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(intervento_id) REFERENCES interventions(id),
+    FOREIGN KEY(user_id) REFERENCES users(id)
+  );
   CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
     username TEXT NOT NULL UNIQUE,
@@ -795,6 +840,9 @@ try { db.exec('ALTER TABLE users ADD COLUMN email TEXT UNIQUE') } catch { /* Col
 try { db.exec('ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT \'active\'') } catch { /* Column may already exist in migrated databases. */ }
 try { db.exec('ALTER TABLE users ADD COLUMN approved INTEGER NOT NULL DEFAULT 1') } catch { /* Column may already exist in migrated databases. */ }
 try { db.exec('ALTER TABLE users ADD COLUMN operator_code TEXT UNIQUE') } catch { /* Column may already exist in migrated databases. */ }
+try { db.exec('ALTER TABLE interventions ADD COLUMN assigned_to_id TEXT') } catch { /* Column may already exist in migrated databases. */ }
+try { db.exec('ALTER TABLE interventions ADD COLUMN updated_by_user_id TEXT') } catch { /* Column may already exist in migrated databases. */ }
+
 try {
   db.exec("UPDATE users SET email = LOWER(username) WHERE email IS NULL OR email = ''")
   db.exec("UPDATE users SET status = COALESCE(NULLIF(status, ''), 'active')")
@@ -2003,6 +2051,7 @@ const handleApiRequest = async (req, res, url) => {
         ...(typeFilter ? { type: typeFilter } : {}),
         ...(statusFilter ? { status: statusFilter } : {}),
       },
+      include: { logs: { orderBy: { createdAt: 'asc' } } },
       orderBy: { openedAt: 'desc' },
     })
     return respond(res, 200, rows.map(mapPrismaIntervention))
@@ -2021,13 +2070,23 @@ const handleApiRequest = async (req, res, url) => {
         type: value.type,
         status: value.status,
         priority: value.urgency,
+        assignedToId: sanitizeString(payload.assignedToId || payload.assignedTo) || null,
         description: value.description,
         openedAt: ensureDate(value.openedAt),
         closedAt: value.closedAt ? ensureDate(value.closedAt) : null,
         additionalData: JSON.parse(value.additionalData || '{}'),
       },
     })
-    return respond(res, 201, mapPrismaIntervention(created))
+    await prisma.interventoLog.create({
+      data: {
+        interventoId: created.id,
+        userId: user.id,
+        action: 'intervento_creato',
+        note: value.description || '',
+      },
+    })
+    const enriched = await prisma.intervention.findUnique({ where: { id: created.id }, include: { logs: { orderBy: { createdAt: 'asc' } } } })
+    return respond(res, 201, mapPrismaIntervention(enriched || created))
   }
 
   if (isDatabaseConfigured && (req.method === 'PUT' || req.method === 'PATCH') && url.pathname.startsWith('/api/interventions/')) {
@@ -2036,13 +2095,19 @@ const handleApiRequest = async (req, res, url) => {
     if (!id) return respond(res, 404, { error: 'Intervento non trovato.' })
     const payload = await readJsonBody(req)
     const data = {}
+    const logsToWrite = []
     if (payload.status) {
       if (!INTERVENTION_STATUSES.has(payload.status)) return respond(res, 400, { error: 'Stato intervento non valido.' })
       data.status = payload.status
+      logsToWrite.push({ action: 'status_changed', note: `Nuovo stato: ${payload.status}` })
     }
     if (payload.priority !== undefined || payload.urgency !== undefined) data.priority = sanitizeNumber(payload.priority ?? payload.urgency, 2)
-    if (payload.assignedTo !== undefined) data.assignedTo = sanitizeString(payload.assignedTo) || null
+    if (payload.assignedToId !== undefined || payload.assignedTo !== undefined) {
+      data.assignedToId = sanitizeString(payload.assignedToId || payload.assignedTo) || null
+      logsToWrite.push({ action: 'assigned_operator', note: data.assignedToId || 'assegnazione rimossa' })
+    }
     if (payload.description !== undefined || payload.notes !== undefined) data.description = sanitizeString(payload.description || payload.notes)
+    if (sanitizeString(payload.note)) logsToWrite.push({ action: 'note_added', note: sanitizeString(payload.note) })
     if (Object.keys(data).length === 0) {
       const { error, value } = validateInterventionPayload({ ...payload, id })
       if (error) return respond(res, 400, { error })
@@ -2059,7 +2124,63 @@ const handleApiRequest = async (req, res, url) => {
     if (payload.notes) {
       await prisma.note.create({ data: { interventionId: id, content: sanitizeString(payload.notes) } })
     }
-    return respond(res, 200, mapPrismaIntervention(updated))
+    for (const entry of logsToWrite) {
+      await prisma.interventoLog.create({ data: { interventoId: id, userId: user.id, action: entry.action, note: entry.note } })
+    }
+    const enriched = await prisma.intervention.findUnique({ where: { id: updated.id }, include: { logs: { orderBy: { createdAt: 'asc' } } } })
+    return respond(res, 200, mapPrismaIntervention(enriched || updated))
+  }
+
+
+  if (isDatabaseConfigured && req.method === 'PATCH' && url.pathname.startsWith('/api/interventi/')) {
+    if (!ensureRole(res, user, ['admin', 'tech'])) return
+    const id = match(/^\/api\/interventi\/(.+)$/)
+    if (!id) return respond(res, 404, { error: 'Intervento non trovato.' })
+    const payload = await readJsonBody(req)
+    const status = sanitizeString(payload?.status)
+    if (!INTERVENTION_STATUSES.has(status)) return respond(res, 400, { error: 'Stato intervento non valido.' })
+    const updated = await prisma.intervention.update({
+      where: { id },
+      data: { status, version: { increment: 1 } },
+    })
+    await prisma.interventoLog.create({
+      data: { interventoId: id, userId: user.id, action: 'status_changed', note: `Nuovo stato: ${status}` },
+    })
+    const enriched = await prisma.intervention.findUnique({ where: { id: updated.id }, include: { logs: { orderBy: { createdAt: 'asc' } } } })
+    return respond(res, 200, {
+      ...mapPrismaIntervention(enriched || updated),
+      updatedByUserId: user.id,
+    })
+  }
+
+  if (isDatabaseConfigured && req.method === 'POST' && url.pathname.startsWith('/api/riparazioni/from-chiamata/')) {
+    if (!ensureRole(res, user, ['admin', 'tech'])) return
+    const callId = match(/^\/api\/riparazioni\/from-chiamata\/(.+)$/)
+    if (!callId) return respond(res, 404, { error: 'Chiamata non trovata.' })
+    const source = await prisma.intervention.findUnique({ where: { id: callId } })
+    if (!source || source.type !== 'chiamata') return respond(res, 404, { error: 'Chiamata non trovata.' })
+    const created = await prisma.intervention.create({
+      data: {
+        code: interventionCode(),
+        customerId: source.customerId,
+        type: 'riparazione',
+        status: 'pendente',
+        priority: source.priority,
+        assignedToId: source.assignedToId,
+        description: source.description,
+        openedAt: new Date(),
+        additionalData: source.additionalData || {},
+      },
+    })
+    await prisma.intervention.update({ where: { id: source.id }, data: { status: 'completato', closedAt: new Date(), version: { increment: 1 } } })
+    await prisma.interventoLog.createMany({
+      data: [
+        { interventoId: source.id, userId: user.id, action: 'converted_to_repair', note: `Riparazione creata: ${created.id}` },
+        { interventoId: created.id, userId: user.id, action: 'created_from_call', note: `Da chiamata: ${source.id}` },
+      ],
+    })
+    const enriched = await prisma.intervention.findUnique({ where: { id: created.id }, include: { logs: { orderBy: { createdAt: 'asc' } } } })
+    return respond(res, 201, mapPrismaIntervention(enriched || created))
   }
 
   if (isDatabaseConfigured && req.method === 'GET' && url.pathname === '/api/calendar') {
@@ -2284,7 +2405,10 @@ const handleApiRequest = async (req, res, url) => {
       `SELECT * FROM interventions ${whereClause} ORDER BY ${sortColumn} ${direction} LIMIT ? OFFSET ?`,
       [...params, pageSize, offset],
     )
-    return respond(res, 200, rows.map(mapInterventionRow))
+    return respond(res, 200, rows.map((row) => ({
+      ...mapInterventionRow(row),
+      logs: getInterventoLogsSqlite(row.id),
+    })))
   }
 
   if (req.method === 'POST' && url.pathname === '/api/interventions') {
@@ -2292,11 +2416,14 @@ const handleApiRequest = async (req, res, url) => {
     const payload = await readJsonBody(req)
     const { error, value } = validateInterventionPayload(payload)
     if (error) return respond(res, 400, { error })
+    const assignedToId = sanitizeString(payload.assignedToId || payload.assignedTo) || null
     runQuery(
-      'INSERT INTO interventions (id, client_id, type, status, urgency, opened_at, closed_at, description, parent_intervention_id, additional_data, created_at, updated_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [value.id, value.clientId, value.type, value.status, value.urgency, value.openedAt, value.closedAt, value.description, value.parentInterventionId, value.additionalData, nowIso(), value.updatedAt, 1],
+      'INSERT INTO interventions (id, client_id, type, status, urgency, opened_at, closed_at, description, assigned_to_id, updated_by_user_id, parent_intervention_id, additional_data, created_at, updated_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [value.id, value.clientId, value.type, value.status, value.urgency, value.openedAt, value.closedAt, value.description, assignedToId, user.id, value.parentInterventionId, value.additionalData, nowIso(), value.updatedAt, 1],
     )
-    return respond(res, 201, mapInterventionRow(getRow('SELECT * FROM interventions WHERE id = ?', [value.id])))
+    saveInterventoLogSqlite({ interventoId: value.id, userId: user.id, action: 'intervento_creato', note: value.description })
+    const createdRow = mapInterventionRow(getRow('SELECT * FROM interventions WHERE id = ?', [value.id]))
+    return respond(res, 201, { ...createdRow, logs: getInterventoLogsSqlite(value.id) })
   }
 
   if (req.method === 'PUT' && url.pathname.startsWith('/api/interventions/')) {
@@ -2313,10 +2440,51 @@ const handleApiRequest = async (req, res, url) => {
       return sendConflict(res, 'Conflitto intervento: aggiorna i dati.', mapInterventionRow(existing))
     }
     runQuery(
-      'UPDATE interventions SET client_id = ?, type = ?, status = ?, urgency = ?, opened_at = ?, closed_at = ?, description = ?, parent_intervention_id = ?, additional_data = ?, updated_at = ?, version = ? WHERE id = ?',
-      [value.clientId, value.type, value.status, value.urgency, value.openedAt, value.closedAt, value.description, value.parentInterventionId, value.additionalData, value.updatedAt, existing.version + 1, id],
+      'UPDATE interventions SET client_id = ?, type = ?, status = ?, urgency = ?, opened_at = ?, closed_at = ?, description = ?, assigned_to_id = ?, updated_by_user_id = ?, parent_intervention_id = ?, additional_data = ?, updated_at = ?, version = ? WHERE id = ?',
+      [value.clientId, value.type, value.status, value.urgency, value.openedAt, value.closedAt, value.description, sanitizeString(payload.assignedToId || payload.assignedTo) || existing.assigned_to_id || null, user.id, value.parentInterventionId, value.additionalData, value.updatedAt, existing.version + 1, id],
     )
-    return respond(res, 200, mapInterventionRow(getRow('SELECT * FROM interventions WHERE id = ?', [id])))
+    saveInterventoLogSqlite({ interventoId: id, userId: user.id, action: 'intervento_aggiornato', note: sanitizeString(payload.note || payload.notes || '') })
+    const updatedRow = mapInterventionRow(getRow('SELECT * FROM interventions WHERE id = ?', [id]))
+    return respond(res, 200, { ...updatedRow, logs: getInterventoLogsSqlite(id) })
+  }
+
+
+  if (req.method === 'PATCH' && url.pathname.startsWith('/api/interventi/')) {
+    if (!ensureRole(res, user, ['admin', 'tech'])) return
+    const id = match(/^\/api\/interventi\/(.+)$/)
+    if (!id) return respond(res, 404, { error: 'Intervento non trovato.' })
+    const payload = await readJsonBody(req)
+    const status = sanitizeString(payload?.status)
+    if (!INTERVENTION_STATUSES.has(status)) return respond(res, 400, { error: 'Stato intervento non valido.' })
+    const existing = getRow('SELECT * FROM interventions WHERE id = ?', [id])
+    if (!existing) return respond(res, 404, { error: 'Intervento non trovato.' })
+    const updatedAt = nowIso()
+    runQuery(
+      'UPDATE interventions SET status = ?, updated_at = ?, updated_by_user_id = ?, version = ? WHERE id = ?',
+      [status, updatedAt, user.id, existing.version + 1, id],
+    )
+    saveInterventoLogSqlite({ interventoId: id, userId: user.id, action: 'status_changed', note: `Nuovo stato: ${status}` })
+    const updated = mapInterventionRow(getRow('SELECT * FROM interventions WHERE id = ?', [id]))
+    return respond(res, 200, { ...updated, updatedByUserId: user.id, logs: getInterventoLogsSqlite(id) })
+  }
+
+  if (req.method === 'POST' && url.pathname.startsWith('/api/riparazioni/from-chiamata/')) {
+    if (!ensureRole(res, user, ['admin', 'tech'])) return
+    const callId = match(/^\/api\/riparazioni\/from-chiamata\/(.+)$/)
+    if (!callId) return respond(res, 404, { error: 'Chiamata non trovata.' })
+    const source = getRow('SELECT * FROM interventions WHERE id = ?', [callId])
+    if (!source || source.type !== 'chiamata') return respond(res, 404, { error: 'Chiamata non trovata.' })
+    const newId = ensureId()
+    const now = nowIso()
+    runQuery(
+      'INSERT INTO interventions (id, client_id, type, status, urgency, opened_at, closed_at, description, assigned_to_id, updated_by_user_id, parent_intervention_id, additional_data, created_at, updated_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [newId, source.client_id, 'riparazione', 'pendente', source.urgency, now, null, source.description, source.assigned_to_id || null, user.id, source.id, source.additional_data, now, now, 1],
+    )
+    runQuery('UPDATE interventions SET status = ?, closed_at = ?, updated_at = ?, updated_by_user_id = ?, version = version + 1 WHERE id = ?', ['completato', now, now, user.id, source.id])
+    saveInterventoLogSqlite({ interventoId: source.id, userId: user.id, action: 'converted_to_repair', note: `Riparazione creata: ${newId}` })
+    saveInterventoLogSqlite({ interventoId: newId, userId: user.id, action: 'created_from_call', note: `Da chiamata: ${source.id}` })
+    const created = mapInterventionRow(getRow('SELECT * FROM interventions WHERE id = ?', [newId]))
+    return respond(res, 201, { ...created, logs: getInterventoLogsSqlite(newId) })
   }
 
   if (req.method === 'DELETE' && url.pathname.startsWith('/api/interventions/')) {
@@ -2339,7 +2507,7 @@ const handleApiRequest = async (req, res, url) => {
       'INSERT INTO spare_parts_orders (id, intervention_id, parts, status, supplier, notes, created_at, updated_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
       [value.id, value.interventionId, value.parts, value.status, value.supplier, value.notes, nowIso(), value.updatedAt, 1],
     )
-    runQuery('UPDATE interventions SET status = ?, updated_at = ?, version = version + 1 WHERE id = ?', ['ordine_ricambi', nowIso(), value.interventionId])
+    runQuery('UPDATE interventions SET status = ?, updated_at = ?, version = version + 1 WHERE id = ?', ['in_lavorazione', nowIso(), value.interventionId])
     return respond(res, 201, mapSparePartOrderRow(getRow('SELECT * FROM spare_parts_orders WHERE id = ?', [value.id])))
   }
   if (req.method === 'PUT' && url.pathname.startsWith('/api/spare-parts-orders/')) {
@@ -2377,7 +2545,7 @@ const handleApiRequest = async (req, res, url) => {
       'INSERT INTO quotes (id, intervention_id, items, total_amount, discount, valid_until, status, notes, created_at, updated_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       [value.id, value.interventionId, value.items, value.totalAmount, value.discount, value.validUntil, value.status, value.notes, nowIso(), value.updatedAt, 1],
     )
-    runQuery('UPDATE interventions SET status = ?, updated_at = ?, version = version + 1 WHERE id = ?', ['preventivato', nowIso(), value.interventionId])
+    runQuery('UPDATE interventions SET status = ?, updated_at = ?, version = version + 1 WHERE id = ?', ['in_lavorazione', nowIso(), value.interventionId])
     return respond(res, 201, mapQuoteRow(getRow('SELECT * FROM quotes WHERE id = ?', [value.id])))
   }
   if (req.method === 'PUT' && url.pathname.startsWith('/api/quotes/')) {
@@ -2394,7 +2562,7 @@ const handleApiRequest = async (req, res, url) => {
       [value.interventionId, value.items, value.totalAmount, value.discount, value.validUntil, value.status, value.notes, value.updatedAt, existing.version + 1, id],
     )
     if (value.status === 'accettato') {
-      runQuery('UPDATE interventions SET status = ?, updated_at = ?, version = version + 1 WHERE id = ?', ['saldato', nowIso(), value.interventionId])
+      runQuery('UPDATE interventions SET status = ?, updated_at = ?, version = version + 1 WHERE id = ?', ['completato', nowIso(), value.interventionId])
     }
     return respond(res, 200, mapQuoteRow(getRow('SELECT * FROM quotes WHERE id = ?', [id])))
   }

@@ -16,12 +16,9 @@ enum InterventionType {
 
 enum InterventionStatus {
   pendente
-  preso_in_carico
-  diagnosticato
-  ordine_ricambi
-  preventivato
-  saldato
-  chiuso
+  in_lavorazione
+  completato
+  annullato
 }
 
 enum UserRole {
@@ -85,7 +82,8 @@ model Intervention {
   type           InterventionType
   status         InterventionStatus @default(pendente)
   priority       Int                @default(2)
-  assignedTo     String?
+  assignedToId   String?
+  assignedTo     User?              @relation("InterventionAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
   description    String?
   openedAt       DateTime           @default(now())
   closedAt       DateTime?
@@ -95,6 +93,9 @@ model Intervention {
   updatedAt      DateTime           @updatedAt
   notes          Note[]
   calendarItems  CalendarItem[]
+  logs           InterventoLog[]
+
+  @@index([assignedToId])
 
   @@index([customerId])
   @@index([status])
@@ -130,6 +131,21 @@ model Note {
   @@map("notes")
 }
 
+
+model InterventoLog {
+  id           String       @id @default(uuid())
+  interventoId String
+  intervento   Intervention @relation(fields: [interventoId], references: [id], onDelete: Cascade)
+  userId       String?
+  user         User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action       String
+  note         String?
+  createdAt    DateTime     @default(now())
+
+  @@index([interventoId, createdAt])
+  @@map("intervento_logs")
+}
+
 model AuditLog {
   id         String   @id @default(uuid())
   action     String
@@ -148,8 +164,10 @@ model User {
   passwordHash String
   role         UserRole @default(operatore)
   operatorCode String   @unique
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt               DateTime       @default(now())
+  updatedAt               DateTime       @updatedAt
+  assignedInterventions   Intervention[] @relation("InterventionAssignee")
+  interventoLogs          InterventoLog[]
 
   @@index([role])
   @@map("users")
