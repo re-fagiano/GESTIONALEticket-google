@@ -239,6 +239,16 @@ const sanitizeNumber = (value, fallback = 0) => {
   return Number.isFinite(parsed) ? parsed : fallback
 }
 
+const parseListQuery = (url, { defaultSort = 'created_at', allowedSort = [] } = {}) => {
+  const q = sanitizeString(url.searchParams.get('q')).toLowerCase()
+  const sort = sanitizeString(url.searchParams.get('sort'), defaultSort)
+  const order = sanitizeString(url.searchParams.get('order'), 'desc').toLowerCase() === 'asc' ? 'ASC' : 'DESC'
+  const skip = Math.max(0, sanitizeNumber(url.searchParams.get('skip'), 0))
+  const take = Math.min(100, Math.max(1, sanitizeNumber(url.searchParams.get('take'), 20)))
+  const sortColumn = allowedSort.includes(sort) ? sort : defaultSort
+  return { q, sortColumn, order, skip, take }
+}
+
 const validators = {
   requiredString: (value, errorMessage) => {
     const normalized = sanitizeString(value)
@@ -2008,11 +2018,23 @@ const handleApiRequest = async (req, res, url) => {
   }
 
 
-  if (isDatabaseConfigured && req.method === 'GET' && url.pathname === '/api/customers') {
-    const q = sanitizeString(url.searchParams.get('q'))
+  if (isDatabaseConfigured && req.method === 'GET' && (url.pathname === '/api/customers' || url.pathname === '/api/clienti')) {
+    const { q, sortColumn, order, skip, take } = parseListQuery(url, {
+      defaultSort: 'createdAt',
+      allowedSort: ['createdAt', 'updatedAt', 'name', 'email', 'phone'],
+    })
     const rows = await prisma.customer.findMany({
-      where: q ? { OR: [{ name: { contains: q, mode: 'insensitive' } }, { email: { contains: q, mode: 'insensitive' } }, { phone: { contains: q, mode: 'insensitive' } }] } : undefined,
-      orderBy: { createdAt: 'desc' },
+      where: q ? {
+        OR: [
+          { name: { contains: q, mode: 'insensitive' } },
+          { email: { contains: q, mode: 'insensitive' } },
+          { phone: { contains: q, mode: 'insensitive' } },
+          { address: { contains: q, mode: 'insensitive' } },
+        ],
+      } : undefined,
+      orderBy: { [sortColumn]: order.toLowerCase() },
+      skip,
+      take,
     })
     return respond(res, 200, rows)
   }
@@ -2039,20 +2061,33 @@ const handleApiRequest = async (req, res, url) => {
     return respond(res, 200, updated)
   }
 
-  if (isDatabaseConfigured && req.method === 'GET' && url.pathname === '/api/interventions') {
+  if (isDatabaseConfigured && req.method === 'GET' && (url.pathname === '/api/interventions' || url.pathname === '/api/chiamate' || url.pathname === '/api/riparazioni')) {
     const customerId = sanitizeString(url.searchParams.get('customerId') || url.searchParams.get('clientId'))
     const type = sanitizeString(url.searchParams.get('type'))
+    const typeFromPath = url.pathname === '/api/chiamate' ? 'chiamata' : (url.pathname === '/api/riparazioni' ? 'riparazione' : '')
     const status = sanitizeString(url.searchParams.get('status'))
-    const typeFilter = INTERVENTION_TYPES.has(type) ? type : ''
+    const typeFilter = INTERVENTION_TYPES.has(typeFromPath || type) ? (typeFromPath || type) : ''
     const statusFilter = INTERVENTION_STATUSES.has(status) ? status : ''
+    const { q, sortColumn, order, skip, take } = parseListQuery(url, {
+      defaultSort: 'openedAt',
+      allowedSort: ['openedAt', 'updatedAt', 'priority', 'status', 'type', 'code'],
+    })
     const rows = await prisma.intervention.findMany({
       where: {
         ...(customerId ? { customerId } : {}),
         ...(typeFilter ? { type: typeFilter } : {}),
         ...(statusFilter ? { status: statusFilter } : {}),
+        ...(q ? {
+          OR: [
+            { code: { contains: q, mode: 'insensitive' } },
+            { description: { contains: q, mode: 'insensitive' } },
+            { customer: { name: { contains: q, mode: 'insensitive' } } },
+          ],
+        } : {}),
       },
-      include: { logs: { orderBy: { createdAt: 'asc' } } },
-      orderBy: { openedAt: 'desc' },
+      orderBy: { [sortColumn]: order.toLowerCase() },
+      skip,
+      take,
     })
     return respond(res, 200, rows.map(mapPrismaIntervention))
   }
@@ -2237,8 +2272,15 @@ const handleApiRequest = async (req, res, url) => {
     return respond(res, 200, updated)
   }
 
-  if (req.method === 'GET' && url.pathname === '/api/customers') {
-    return respond(res, 200, getAll('SELECT * FROM customers').map(mapCustomerRow))
+  if (req.method === 'GET' && (url.pathname === '/api/customers' || url.pathname === '/api/clienti')) {
+    const { q, sortColumn, order, skip, take } = parseListQuery(url, {
+      defaultSort: 'created_at',
+      allowedSort: ['created_at', 'updated_at', 'name', 'email', 'phone'],
+    })
+    const where = q ? 'WHERE lower(name) LIKE ? OR lower(email) LIKE ? OR lower(phone) LIKE ? OR lower(address) LIKE ?' : ''
+    const queryParams = q ? [`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`] : []
+    const rows = getAll(`SELECT * FROM customers ${where} ORDER BY ${sortColumn} ${order} LIMIT ? OFFSET ?`, [...queryParams, take, skip])
+    return respond(res, 200, rows.map(mapCustomerRow))
   }
   if (req.method === 'POST' && url.pathname === '/api/customers') {
     if (!ensureRole(res, user, ['admin', 'tech'])) return
@@ -2279,7 +2321,14 @@ const handleApiRequest = async (req, res, url) => {
   }
 
   if (req.method === 'GET' && url.pathname === '/api/tickets') {
-    return respond(res, 200, getAll('SELECT * FROM tickets').map(mapTicketRow))
+    const { q, sortColumn, order, skip, take } = parseListQuery(url, {
+      defaultSort: 'created_at',
+      allowedSort: ['created_at', 'updated_at', 'subject', 'status', 'date'],
+    })
+    const where = q ? 'WHERE lower(subject) LIKE ? OR lower(description) LIKE ? OR lower(customer_id) LIKE ?' : ''
+    const queryParams = q ? [`%${q}%`, `%${q}%`, `%${q}%`] : []
+    const rows = getAll(`SELECT * FROM tickets ${where} ORDER BY ${sortColumn} ${order} LIMIT ? OFFSET ?`, [...queryParams, take, skip])
+    return respond(res, 200, rows.map(mapTicketRow))
   }
   if (req.method === 'POST' && url.pathname === '/api/tickets') {
     if (!ensureRole(res, user, ['admin', 'tech'])) return
@@ -2320,7 +2369,14 @@ const handleApiRequest = async (req, res, url) => {
   }
 
   if (req.method === 'GET' && url.pathname === '/api/inventory') {
-    return respond(res, 200, getAll('SELECT * FROM inventory').map(mapInventoryRow))
+    const { q, sortColumn, order, skip, take } = parseListQuery(url, {
+      defaultSort: 'created_at',
+      allowedSort: ['created_at', 'updated_at', 'name', 'location', 'qty', 'price', 'min_qty'],
+    })
+    const where = q ? 'WHERE lower(name) LIKE ? OR lower(location) LIKE ?' : ''
+    const queryParams = q ? [`%${q}%`, `%${q}%`] : []
+    const rows = getAll(`SELECT * FROM inventory ${where} ORDER BY ${sortColumn} ${order} LIMIT ? OFFSET ?`, [...queryParams, take, skip])
+    return respond(res, 200, rows.map(mapInventoryRow))
   }
   if (req.method === 'POST' && url.pathname === '/api/inventory') {
     if (!ensureRole(res, user, ['admin', 'tech'])) return
@@ -2360,18 +2416,19 @@ const handleApiRequest = async (req, res, url) => {
     return respond(res, 204, '')
   }
 
-  if (req.method === 'GET' && url.pathname === '/api/interventions') {
+  if (req.method === 'GET' && (url.pathname === '/api/interventions' || url.pathname === '/api/chiamate' || url.pathname === '/api/riparazioni')) {
     const filters = []
     const params = []
     const type = sanitizeString(url.searchParams.get('type'))
+    const typeFromPath = url.pathname === '/api/chiamate' ? 'chiamata' : (url.pathname === '/api/riparazioni' ? 'riparazione' : '')
     const status = sanitizeString(url.searchParams.get('status'))
     const clientId = sanitizeString(url.searchParams.get('clientId'))
     const urgency = sanitizeNumber(url.searchParams.get('urgency'), null)
     const from = normalizeIso(url.searchParams.get('from'))
     const to = normalizeIso(url.searchParams.get('to'))
-    if (type) {
+    if (typeFromPath || type) {
       filters.push('type = ?')
-      params.push(type)
+      params.push(typeFromPath || type)
     }
     if (status) {
       filters.push('status = ?')
@@ -2393,17 +2450,18 @@ const handleApiRequest = async (req, res, url) => {
       filters.push('opened_at <= ?')
       params.push(to)
     }
+    const { q, sortColumn, order, skip, take } = parseListQuery(url, {
+      defaultSort: 'opened_at',
+      allowedSort: ['opened_at', 'updated_at', 'urgency', 'status', 'type', 'id'],
+    })
+    if (q) {
+      filters.push('(lower(id) LIKE ? OR lower(description) LIKE ? OR lower(client_id) LIKE ?)')
+      params.push(`%${q}%`, `%${q}%`, `%${q}%`)
+    }
     const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : ''
-    const orderBy = sanitizeString(url.searchParams.get('orderBy'), 'opened_at')
-    const direction = sanitizeString(url.searchParams.get('direction'), 'DESC').toUpperCase() === 'ASC' ? 'ASC' : 'DESC'
-    const allowedOrderBy = new Set(['opened_at', 'urgency', 'status', 'type'])
-    const sortColumn = allowedOrderBy.has(orderBy) ? orderBy : 'opened_at'
-    const page = Math.max(1, sanitizeNumber(url.searchParams.get('page'), 1))
-    const pageSize = Math.min(100, Math.max(1, sanitizeNumber(url.searchParams.get('pageSize'), 25)))
-    const offset = (page - 1) * pageSize
     const rows = getAll(
-      `SELECT * FROM interventions ${whereClause} ORDER BY ${sortColumn} ${direction} LIMIT ? OFFSET ?`,
-      [...params, pageSize, offset],
+      `SELECT * FROM interventions ${whereClause} ORDER BY ${sortColumn} ${order} LIMIT ? OFFSET ?`,
+      [...params, take, skip],
     )
     return respond(res, 200, rows.map((row) => ({
       ...mapInterventionRow(row),
@@ -2738,6 +2796,19 @@ const handleStaticRequest = async (pathname, res) => {
 }
 
 
+
+const ensurePostgresSearchIndexes = async () => {
+  if (!isDatabaseConfigured) return
+  try {
+    await prisma.$executeRawUnsafe('CREATE EXTENSION IF NOT EXISTS pg_trgm')
+    await prisma.$executeRawUnsafe('CREATE INDEX IF NOT EXISTS customers_name_trgm_idx ON "customers" USING gin ("name" gin_trgm_ops)')
+    await prisma.$executeRawUnsafe('CREATE INDEX IF NOT EXISTS interventions_description_trgm_idx ON "interventions" USING gin ("description" gin_trgm_ops)')
+    await prisma.$executeRawUnsafe('CREATE INDEX IF NOT EXISTS tickets_subject_trgm_idx ON "tickets" USING gin ("subject" gin_trgm_ops)')
+  } catch (error) {
+    logEvent('warn', 'postgres_search_index_setup_failed', { error: error?.message || 'unknown_error' })
+  }
+}
+
 const backupIntervalMs = Math.max(1, sanitizeNumber(BACKUP_INTERVAL_HOURS, 24)) * 60 * 60 * 1000
 
 const scheduleAutomaticBackup = () => {
@@ -2768,10 +2839,12 @@ const server = createServer(async (req, res) => {
   }
 })
 
+ensurePostgresSearchIndexes().finally(() => {
 server.listen(PORT, () => {
   logEvent('info', 'server_started', { url: `http://localhost:${PORT}` })
   if (!isProduction) {
     logEvent('info', 'default_users_available')
   }
   scheduleAutomaticBackup()
+})
 })
