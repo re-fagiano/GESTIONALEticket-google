@@ -1,5 +1,8 @@
 CREATE TYPE "InterventionStatus_new" AS ENUM ('pendente', 'in_lavorazione', 'completato', 'annullato');
 
+-- Drop the default first, otherwise Postgres cannot cast it
+ALTER TABLE "interventions" ALTER COLUMN "status" DROP DEFAULT;
+
 ALTER TABLE "interventions"
   ALTER COLUMN "status" TYPE "InterventionStatus_new"
   USING (
@@ -13,6 +16,7 @@ ALTER TABLE "interventions"
 
 DROP TYPE "InterventionStatus";
 ALTER TYPE "InterventionStatus_new" RENAME TO "InterventionStatus";
+ALTER TABLE "interventions" ALTER COLUMN "status" SET DEFAULT 'pendente';
 
 ALTER TABLE "interventions" ADD COLUMN IF NOT EXISTS "assignedToId" TEXT;
 
