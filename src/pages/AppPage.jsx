@@ -38,7 +38,8 @@ import {
   register,
   setUnauthorizedHandler,
   syncData,
-  triggerAdminBackup
+  triggerAdminBackup,
+  apiFetch
 } from '../services/api';
 import {
   getStorageState,
@@ -434,8 +435,22 @@ export default function AppPage() {
   const [inventoryImportHeaderError, setInventoryImportHeaderError] = useState('');
   const [showInventoryImportModal, setShowInventoryImportModal] = useState(false);
   const [isImportingInventory, setIsImportingInventory] = useState(false);
-  const [interventionSearch, setInterventionSearch] = useState('');
-  const [interventionFilters, setInterventionFilters] = useState({ clientId: '', type: '', status: '', urgency: '' });
+  const [interventionSearchInput, setInterventionSearchInput] = useState(() => isBrowser() ? new URLSearchParams(window.location.search).get('q') || '' : '');
+  const [interventionSearch, setInterventionSearch] = useState(() => isBrowser() ? new URLSearchParams(window.location.search).get('q') || '' : '');
+  const [interventionFilters, setInterventionFilters] = useState(() => ({
+    clientId: isBrowser() ? (new URLSearchParams(window.location.search).get('clientId') || '') : '',
+    type: isBrowser() ? (new URLSearchParams(window.location.search).get('type') || '') : '',
+    status: isBrowser() ? (new URLSearchParams(window.location.search).get('status') || '') : '',
+    urgency: isBrowser() ? (new URLSearchParams(window.location.search).get('urgency') || '') : '',
+  }));
+  const [interventionSort, setInterventionSort] = useState(() => ({
+    sort: isBrowser() ? (new URLSearchParams(window.location.search).get('sort') || 'opened_at') : 'opened_at',
+    order: isBrowser() ? (new URLSearchParams(window.location.search).get('order') || 'desc') : 'desc',
+  }));
+  const [interventionPagination, setInterventionPagination] = useState(() => ({
+    skip: isBrowser() ? Number(new URLSearchParams(window.location.search).get('skip') || 0) : 0,
+    take: isBrowser() ? Number(new URLSearchParams(window.location.search).get('take') || 20) : 20,
+  }));
   const [inventorySearch, setInventorySearch] = useState('');
   const [inventorySearchField, setInventorySearchField] = useState('all');
   const [selectedIntervention, setSelectedIntervention] = useState(null);
@@ -473,6 +488,64 @@ export default function AppPage() {
     return searchable.toLowerCase().includes(normalizedInventorySearch);
   });
 
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setInterventionSearch(interventionSearchInput);
+      setInterventionPagination((prev) => ({ ...prev, skip: 0 }));
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [interventionSearchInput]);
+
+  useEffect(() => {
+    if (!isBrowser()) return;
+    const params = new URLSearchParams(window.location.search);
+    const entries = {
+      q: interventionSearch,
+      sort: interventionSort.sort,
+      order: interventionSort.order,
+      skip: String(interventionPagination.skip),
+      take: String(interventionPagination.take),
+      clientId: interventionFilters.clientId,
+      type: interventionFilters.type,
+      status: interventionFilters.status,
+      urgency: interventionFilters.urgency,
+    };
+    Object.entries(entries).forEach(([key, value]) => {
+      if (!value || value === '0' && key === 'skip') {
+        params.delete(key);
+      } else {
+        params.set(key, value);
+      }
+    });
+    const next = `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ''}`;
+    window.history.replaceState({}, '', next);
+  }, [interventionSearch, interventionSort, interventionPagination, interventionFilters]);
+
+  useEffect(() => {
+    if (!authState.user) return;
+    const isInterventionsView = ['interventions', 'chiamate', 'riparazioni'].includes(activeTab);
+    if (!isInterventionsView) return;
+    const endpoint = activeTab === 'chiamate' ? '/api/chiamate' : (activeTab === 'riparazioni' ? '/api/riparazioni' : '/api/interventions');
+    const params = new URLSearchParams();
+    if (interventionSearch) params.set('q', interventionSearch);
+    params.set('sort', interventionSort.sort);
+    params.set('order', interventionSort.order);
+    params.set('skip', String(interventionPagination.skip));
+    params.set('take', String(interventionPagination.take));
+    if (interventionFilters.clientId) params.set('clientId', interventionFilters.clientId);
+    if (interventionFilters.type) params.set('type', interventionFilters.type);
+    if (interventionFilters.status) params.set('status', interventionFilters.status);
+    if (interventionFilters.urgency) params.set('urgency', interventionFilters.urgency);
+
+    apiFetch({ path: `${endpoint}?${params.toString()}`, options: { method: 'GET' } })
+      .then((rows) => {
+        if (Array.isArray(rows)) {
+          setInterventions(sanitizeInterventions(rows, initialInterventions));
+        }
+      })
+      .catch(() => {});
+  }, [authState.user, activeTab, interventionSearch, interventionSort, interventionPagination, interventionFilters]);
   const switchToTab = (tab) => {
     setActiveTab(tab);
     const mappedType = dedicatedTabToType[tab];
@@ -1578,20 +1651,20 @@ const buildBackup = () => ({
         </div>
 
         <div className="bg-white rounded-xl shadow border border-slate-200 p-4 grid md:grid-cols-5 gap-3">
-          <input className="border rounded p-2 md:col-span-2" placeholder="Ricerca globale per codice, cliente o descrizione" value={interventionSearch} onChange={(e) => setInterventionSearch(e.target.value)} />
-          <select className="border rounded p-2" value={interventionFilters.clientId} onChange={(e) => setInterventionFilters((p) => ({ ...p, clientId: e.target.value }))}>
+          <input className="border rounded p-2 md:col-span-2" placeholder="Ricerca globale per codice, cliente o descrizione" value={interventionSearchInput} onChange={(e) => setInterventionSearchInput(e.target.value)} />
+          <select className="border rounded p-2" value={interventionFilters.clientId} onChange={(e) => { setInterventionPagination((p) => ({ ...p, skip: 0 })); setInterventionFilters((p) => ({ ...p, clientId: e.target.value })); }}>
             <option value="">Tutti i clienti</option>
             {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
-          <select className="border rounded p-2" value={interventionFilters.type} onChange={(e) => setInterventionFilters((p) => ({ ...p, type: e.target.value }))}>
+          <select className="border rounded p-2" value={interventionFilters.type} onChange={(e) => { setInterventionPagination((p) => ({ ...p, skip: 0 })); setInterventionFilters((p) => ({ ...p, type: e.target.value })); }}>
             <option value="">Tutti i tipi</option>
             {interventionTypes.map((t) => <option key={t} value={t}>{t}</option>)}
           </select>
-          <select className="border rounded p-2" value={interventionFilters.status} onChange={(e) => setInterventionFilters((p) => ({ ...p, status: e.target.value }))}>
+          <select className="border rounded p-2" value={interventionFilters.status} onChange={(e) => { setInterventionPagination((p) => ({ ...p, skip: 0 })); setInterventionFilters((p) => ({ ...p, status: e.target.value })); }}>
             <option value="">Tutti gli stati</option>
             {interventionStatuses.map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
-          <select className="border rounded p-2" value={interventionFilters.urgency} onChange={(e) => setInterventionFilters((p) => ({ ...p, urgency: e.target.value }))}>
+          <select className="border rounded p-2" value={interventionFilters.urgency} onChange={(e) => { setInterventionPagination((p) => ({ ...p, skip: 0 })); setInterventionFilters((p) => ({ ...p, urgency: e.target.value })); }}>
             <option value="">Tutte le urgenze</option>
             <option value="1">Bassa</option>
             <option value="2">Media</option>
@@ -1682,7 +1755,7 @@ const buildBackup = () => ({
 
         <div className="bg-white rounded-xl shadow border border-slate-200 overflow-hidden">
           <div className="grid grid-cols-1 md:grid-cols-[1.2fr,1fr,1fr,1fr,1fr,1fr,0.8fr,0.8fr] gap-3 px-4 py-3 bg-slate-50 text-xs uppercase font-semibold text-slate-500">
-            <div>Codice</div><div>Cliente</div><div>Tipo</div><div>Stato</div><div>Urgenza</div><div>Data apertura</div><div>Durata</div><div>Azioni</div>
+            <button type="button" onClick={() => setInterventionSort((prev) => ({ sort: 'id', order: prev.sort === 'id' && prev.order === 'asc' ? 'desc' : 'asc' }))}>Codice</button><div>Cliente</div><button type="button" onClick={() => setInterventionSort((prev) => ({ sort: 'type', order: prev.sort === 'type' && prev.order === 'asc' ? 'desc' : 'asc' }))}>Tipo</button><button type="button" onClick={() => setInterventionSort((prev) => ({ sort: 'status', order: prev.sort === 'status' && prev.order === 'asc' ? 'desc' : 'asc' }))}>Stato</button><button type="button" onClick={() => setInterventionSort((prev) => ({ sort: 'urgency', order: prev.sort === 'urgency' && prev.order === 'asc' ? 'desc' : 'asc' }))}>Urgenza</button><button type="button" onClick={() => setInterventionSort((prev) => ({ sort: 'opened_at', order: prev.sort === 'opened_at' && prev.order === 'asc' ? 'desc' : 'asc' }))}>Data apertura</button><div>Durata</div><div>Azioni</div>
           </div>
           <div className="divide-y divide-slate-100">
             {filtered.map((item) => (
@@ -1704,6 +1777,10 @@ const buildBackup = () => ({
               </div>
             ))}
           </div>
+        </div>
+        <div className="flex items-center justify-end gap-2">
+          <button type="button" className="px-3 py-1 text-sm border rounded disabled:opacity-50" disabled={interventionPagination.skip === 0} onClick={() => setInterventionPagination((p) => ({ ...p, skip: Math.max(0, p.skip - p.take) }))}>Precedente</button>
+          <button type="button" className="px-3 py-1 text-sm border rounded" onClick={() => setInterventionPagination((p) => ({ ...p, skip: p.skip + p.take }))}>Successiva</button>
         </div>
       </div>
     );
@@ -1800,6 +1877,10 @@ const buildBackup = () => ({
               </div>
             ))}
           </div>
+        </div>
+        <div className="flex items-center justify-end gap-2">
+          <button type="button" className="px-3 py-1 text-sm border rounded disabled:opacity-50" disabled={interventionPagination.skip === 0} onClick={() => setInterventionPagination((p) => ({ ...p, skip: Math.max(0, p.skip - p.take) }))}>Precedente</button>
+          <button type="button" className="px-3 py-1 text-sm border rounded" onClick={() => setInterventionPagination((p) => ({ ...p, skip: p.skip + p.take }))}>Successiva</button>
         </div>
       </div>
     );
