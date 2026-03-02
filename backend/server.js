@@ -8,7 +8,7 @@ import clientiRouter from './routes/clienti.js';
 import magazzinoRouter from './routes/magazzino.js';
 
 const app = express();
-const PORT = Number(process.env.PORT || 3000);
+const PORT = 3000;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -58,7 +58,9 @@ if (fs.existsSync(distDir)) {
   });
 }
 
-app.listen(PORT, () => {
+const runtimePort = process.env.PORT || PORT;
+
+app.listen(runtimePort, () => {
   // eslint-disable-next-line no-console
-  console.log(`Server avviato su http://localhost:${PORT}`);
+  console.log('Server running on', runtimePort);
 });
