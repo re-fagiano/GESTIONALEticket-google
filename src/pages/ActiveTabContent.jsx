@@ -3,16 +3,24 @@ import React from 'react';
 export default function ActiveTabContent(props) {
   const { activeTab, ticketsContent } = props;
 
+  const renderView = (ViewComponent, extraProps = {}) => {
+    if (typeof ViewComponent !== 'function') {
+      console.warn('Vista non valida ignorata:', ViewComponent);
+      return null;
+    }
+    return <ViewComponent {...extraProps} />;
+  };
+
   return (
     <>
-      {activeTab === 'dashboard' && <props.DashboardView />}
-      {activeTab === 'calendar' && <props.CalendarView />}
-      {activeTab === 'customers' && <props.CustomerListView />}
-      {activeTab === 'interventions' && <props.InterventionsView />}
-      {activeTab === 'inventory' && <props.InventoryView />}
-      {activeTab === 'settings' && <props.SettingsPanel />}
+      {activeTab === 'dashboard' && renderView(props.DashboardView)}
+      {activeTab === 'calendar' && renderView(props.CalendarView)}
+      {activeTab === 'customers' && renderView(props.CustomerListView)}
+      {activeTab === 'interventions' && renderView(props.InterventionsView)}
+      {activeTab === 'inventory' && renderView(props.InventoryView)}
+      {activeTab === 'settings' && renderView(props.SettingsPanel)}
       {(activeTab === 'chiamate' || activeTab === 'riparazioni' || activeTab === 'ordine-ricambi' || activeTab === 'preventivi-nuovi') && (
-        <props.DedicatedInterventionDashboard tabKey={activeTab} />
+        renderView(props.DedicatedInterventionDashboard, { tabKey: activeTab })
       )}
       {activeTab === 'tickets' && ticketsContent}
     </>
