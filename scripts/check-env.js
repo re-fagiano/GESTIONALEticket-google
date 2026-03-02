@@ -1,4 +1,6 @@
-const requiredInProduction = ['API_TOKEN', 'DATABASE_URL']
+// Check ambiente: blocca deploy quando mancano variabili critiche.
+// Rollback: ridurre l'elenco `requiredInProduction` per deploy permissivo.
+const requiredInProduction = ['API_TOKEN', 'DATABASE_URL', 'JWT_SECRET', 'JWT_REFRESH_SECRET']
 
 const missing = requiredInProduction.filter((name) => !process.env[name])
 

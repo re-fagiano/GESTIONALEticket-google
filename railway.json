@@ -1,6 +1,6 @@
 {
   "$schema": "https://railway.app/railway.schema.json",
   "build": {
-    "cmd": "npx prisma migrate deploy && npm run build"
+    "cmd": "pnpm prisma:deploy && pnpm build"
   }
 }

@@ -21,8 +21,8 @@ const {
   JWT_REFRESH_SECRET,
   ACCESS_TOKEN_TTL_SECONDS,
   REFRESH_TOKEN_TTL_SECONDS,
-  ADMIN_USER,
-  ADMIN_PASS,
+  ADMIN_EMAIL,
+  ADMIN_PASSWORD,
   NODE_ENV,
   DB_PATH,
   DATABASE_URL,
@@ -115,8 +115,12 @@ const logEvent = (level, message, context = {}) => {
   }
 }
 
-if (!DATABASE_URL) {
-  console.error(JSON.stringify({ ts: new Date().toISOString(), level: 'error', message: 'database_url_missing', detail: 'DATABASE_URL non configurata: backend in fallback SQLite.' }))
+// Ambiente obbligatorio: blocchiamo l'avvio se mancano variabili critiche.
+// Rollback: ridurre l'elenco requiredEnv se vuoi avvio permissivo in locale.
+const requiredEnv = ['DATABASE_URL', 'JWT_SECRET', 'JWT_REFRESH_SECRET']
+const missingRequiredEnv = requiredEnv.filter((name) => !(process.env[name] || '').trim())
+if (missingRequiredEnv.length > 0) {
+  throw new Error(`Variabili ambiente obbligatorie mancanti: ${missingRequiredEnv.join(', ')}`)
 }
 
 const createHttpError = (status, message, code = 'request_error') => {
@@ -589,7 +593,24 @@ const getInterventoLogsSqlite = (interventoId) => getAll(
   [interventoId],
 ).map(mapInterventoLogRow)
 
-const USER_ROLES = new Set(['admin', 'tech', 'read', 'operator', 'operatore'])
+// Ruoli uniformati: singola fonte di verità per auth/autorizzazioni.
+// Rollback: aggiungere alias legacy (tech/read/operator/operatore) se servono token storici.
+const USER_ROLES = new Set(['ADMIN', 'OPERATOR', 'READER'])
+
+const LEGACY_ROLE_MAP = {
+  admin: 'ADMIN',
+  operatore: 'OPERATOR',
+  operator: 'OPERATOR',
+  tech: 'OPERATOR',
+  read: 'READER',
+  reader: 'READER',
+}
+
+const normalizeUserRole = (value, fallback = 'OPERATOR') => {
+  const raw = sanitizeString(value)
+  if (USER_ROLES.has(raw)) return raw
+  return LEGACY_ROLE_MAP[raw.toLowerCase()] || fallback
+}
 const CSRF_SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 
 const toBase64Url = (value) => Buffer.from(value).toString('base64').replace(/=+$/g, '').replace(/\+/g, '-').replace(/\//g, '_')
@@ -743,6 +764,7 @@ const ensureCsrf = (req, res) => {
   return true
 }
 
+// Legacy SQLite bootstrap mantenuto solo per rollback tecnico; con DATABASE_URL impostata il runtime usa Prisma/Postgres.
 await mkdir(path.dirname(DB_PATH), { recursive: true })
 const db = new DatabaseSync(DB_PATH)
 db.exec('PRAGMA journal_mode = WAL;')
@@ -1115,20 +1137,63 @@ const performBackup = async ({ triggeredBy = 'manual' } = {}) => {
   }
 }
 
-const ensureAdminUser = () => {
-  const adminUsername = sanitizeString(ADMIN_USER || 'admin')
-  const adminPassword = sanitizeString(ADMIN_PASS)
-  const existingAdmin = getRow('SELECT id FROM users WHERE username = ?', [adminUsername])
-  if (!existingAdmin && adminPassword) {
+const ensureAdminUser = async () => {
+  // Seed admin sicuro: credenziali solo da env per evitare hardcode e leakage.
+  // Rollback: ripristinare seed basato su ADMIN_USER/ADMIN_PASS se necessario.
+  const adminEmail = normalizeEmail(ADMIN_EMAIL)
+  const adminPassword = sanitizeString(ADMIN_PASSWORD)
+  if (!adminEmail || !adminPassword) {
+    logEvent('warn', 'admin_seed_skipped', { reason: 'missing_admin_env', required: ['ADMIN_EMAIL', 'ADMIN_PASSWORD'] })
+    return
+  }
+
+  if (shouldUsePrisma()) {
+    const existingByEmail = await prisma.user.findUnique({ where: { email: adminEmail } })
+    const passwordHash = await hashPassword(adminPassword)
+    if (!existingByEmail) {
+      await prisma.user.create({
+        data: {
+          email: adminEmail,
+          passwordHash,
+          role: 'ADMIN',
+          operatorCode: generateOperatorCode(),
+        },
+      })
+      logEvent('info', 'admin_seed_created', { email: adminEmail })
+      return
+    }
+
+    const updateData = {}
+    if (existingByEmail.role !== 'ADMIN') updateData.role = 'ADMIN'
+    const passwordMatches = await verifyPassword(adminPassword, existingByEmail.passwordHash)
+    if (!passwordMatches) updateData.passwordHash = passwordHash
+    if (Object.keys(updateData).length > 0) {
+      await prisma.user.update({ where: { id: existingByEmail.id }, data: updateData })
+      logEvent('info', 'admin_seed_aligned', { email: adminEmail, fields: Object.keys(updateData) })
+    }
+    return
+  }
+
+  const existing = getRow("SELECT * FROM users WHERE LOWER(COALESCE(email, username)) = LOWER(?)", [adminEmail])
+  if (!existing) {
     runQuery(
-      'INSERT INTO users (id, username, email, password_hash, role, status, approved, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [ensureId(), adminUsername, normalizeEmail(adminUsername), hashPassword(adminPassword), 'admin', 'active', 1, nowIso(), nowIso()],
+      'INSERT INTO users (id, username, email, password_hash, role, status, approved, operator_code, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [ensureId(), adminEmail, adminEmail, await hashPassword(adminPassword), 'ADMIN', 'active', 1, generateOperatorCode(), nowIso(), nowIso()],
     )
-    console.log(`[auth] Admin seed creato per utente ${adminUsername}.`)
+    logEvent('info', 'admin_seed_created', { email: adminEmail })
+    return
+  }
+
+  const patchRole = existing.role !== 'ADMIN'
+  const patchApproved = !Number(existing.approved)
+  const patchStatus = sanitizeString(existing.status, 'active') !== 'active'
+  if (patchRole || patchApproved || patchStatus) {
+    runQuery('UPDATE users SET role = ?, approved = ?, status = ?, updated_at = ? WHERE id = ?', ['ADMIN', 1, 'active', nowIso(), existing.id])
+    logEvent('info', 'admin_seed_promoted', { email: adminEmail })
   }
 }
 
-ensureAdminUser()
+await ensureAdminUser()
 
 const ticketsCount = getRow('SELECT COUNT(*) AS total FROM tickets')?.total || 0
 const interventionsCount = getRow('SELECT COUNT(*) AS total FROM interventions')?.total || 0
@@ -1578,7 +1643,7 @@ const authenticateRequest = (req) => {
   const token = getTokenFromRequest(req)
   const payload = verifyJwt(token, JWT_SECRET || JWT_ACCESS_SECRET)
   if (!payload || payload.type !== 'access') return null
-  const role = sanitizeString(payload.role)
+  const role = normalizeUserRole(payload.role, '')
   if (!payload.sub || !USER_ROLES.has(role)) return null
   return { id: payload.sub, role, email: sanitizeString(payload.email), operatorCode: sanitizeString(payload.operatorCode) }
 }
@@ -1601,9 +1666,9 @@ const ensureRole = (res, user, allowedRoles = []) => {
 }
 
 const ensureRouteAuthorization = (req, res, user, pathname) => {
-  if (user.role === 'admin') return true
+  if (user.role === 'ADMIN') return true
 
-  if (user.role === 'tech' || user.role === 'operator' || user.role === 'operatore') {
+  if (user.role === 'OPERATOR') {
     if (pathname.startsWith('/api/import')) {
       respond(res, 403, { error: 'Permessi insufficienti per questa operazione.' })
       return false
@@ -1611,7 +1676,7 @@ const ensureRouteAuthorization = (req, res, user, pathname) => {
     return true
   }
 
-  if (user.role === 'read') {
+  if (user.role === 'READER') {
     if (!CSRF_SAFE_METHODS.has(req.method || 'GET')) {
       respond(res, 403, { error: 'Permessi insufficienti per questa operazione.' })
       return false
@@ -1659,7 +1724,7 @@ const handleApiRequest = async (req, res, url) => {
         if (!dbUser) return respond(res, 404, { error: 'Utente non trovato.', code: 'user_not_found' })
         const passwordOk = await verifyPassword(password, dbUser.passwordHash)
         if (!passwordOk) return respond(res, 401, { error: 'Credenziali errate.', code: 'invalid_credentials' })
-        const user = { id: dbUser.id, email: dbUser.email, username: dbUser.email, role: dbUser.role, operatorCode: dbUser.operatorCode }
+        const user = { id: dbUser.id, email: dbUser.email, username: dbUser.email, role: normalizeUserRole(dbUser.role), operatorCode: dbUser.operatorCode }
         const { accessToken, refreshToken, refreshId, csrfToken } = createAuthTokens(user)
         runQuery(
           'INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at, revoked_at, created_at) VALUES (?, ?, ?, ?, ?, ?)',
@@ -1679,7 +1744,7 @@ const handleApiRequest = async (req, res, url) => {
       if (!['active', 'pending'].includes(sanitizeString(user.status, 'active'))) {
         return respond(res, 403, { error: 'Utente non attivo.', code: 'user_inactive' })
       }
-      const authUser = { id: user.id, username: user.username, email: user.email || user.username, role: user.role, status: user.status, approved: Boolean(user.approved), operatorCode: user.operator_code }
+      const authUser = { id: user.id, username: user.username, email: user.email || user.username, role: normalizeUserRole(user.role), status: user.status, approved: Boolean(user.approved), operatorCode: user.operator_code }
       const { accessToken, refreshToken, refreshId, csrfToken } = createAuthTokens(authUser)
       runQuery(
         'INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at, revoked_at, created_at) VALUES (?, ?, ?, ?, ?, ?)',
@@ -1714,7 +1779,7 @@ const handleApiRequest = async (req, res, url) => {
           data: {
             email,
             passwordHash: await hashPassword(password),
-            role: 'operatore',
+            role: 'OPERATOR',
             operatorCode: generateOperatorCode(),
           },
         })
@@ -1735,7 +1800,7 @@ const handleApiRequest = async (req, res, url) => {
         id: ensureId(),
         username: email,
         email,
-        role: 'operator',
+        role: 'OPERATOR',
         status: 'pending',
         approved: 1,
         operatorCode: generateOperatorCode(),
@@ -1882,7 +1947,7 @@ const handleApiRequest = async (req, res, url) => {
   }
 
   if (req.method === 'POST' && url.pathname === '/api/import') {
-    if (!ensureRole(res, user, ['admin'])) return
+    if (!ensureRole(res, user, ['ADMIN'])) return
     try {
       const payload = await readJsonBody(req)
       const customers = Array.isArray(payload?.customers) ? payload.customers : []
@@ -2060,7 +2125,7 @@ const handleApiRequest = async (req, res, url) => {
   }
 
   if (shouldUsePrisma() && req.method === 'POST' && url.pathname === '/api/customers') {
-    if (!ensureRole(res, user, ['admin', 'tech'])) return
+    if (!ensureRole(res, user, ['ADMIN', 'OPERATOR'])) return
     const payload = await readJsonBody(req)
     const { error, value } = validateCustomerPayload(payload)
     if (error) return respond(res, 400, { error })
@@ -2071,7 +2136,7 @@ const handleApiRequest = async (req, res, url) => {
   }
 
   if (shouldUsePrisma() && req.method === 'PUT' && url.pathname.startsWith('/api/customers/')) {
-    if (!ensureRole(res, user, ['admin', 'tech'])) return
+    if (!ensureRole(res, user, ['ADMIN', 'OPERATOR'])) return
     const id = match(/^\/api\/customers\/(.+)$/)
     if (!id) return respond(res, 404, { error: 'Cliente non trovato.' })
     const payload = await readJsonBody(req)
@@ -2113,7 +2178,7 @@ const handleApiRequest = async (req, res, url) => {
   }
 
   if (shouldUsePrisma() && req.method === 'POST' && url.pathname === '/api/interventions') {
-    if (!ensureRole(res, user, ['admin', 'tech'])) return
+    if (!ensureRole(res, user, ['ADMIN', 'OPERATOR'])) return
     const payload = await readJsonBody(req)
     const { error, value } = validateInterventionPayload(payload)
     if (error) return respond(res, 400, { error })
@@ -2145,7 +2210,7 @@ const handleApiRequest = async (req, res, url) => {
   }
 
   if (shouldUsePrisma() && (req.method === 'PUT' || req.method === 'PATCH') && url.pathname.startsWith('/api/interventions/')) {
-    if (!ensureRole(res, user, ['admin', 'tech'])) return
+    if (!ensureRole(res, user, ['ADMIN', 'OPERATOR'])) return
     const id = match(/^\/api\/interventions\/(.+)$/)
     if (!id) return respond(res, 404, { error: 'Intervento non trovato.' })
     const payload = await readJsonBody(req)
@@ -2188,7 +2253,7 @@ const handleApiRequest = async (req, res, url) => {
 
 
   if (shouldUsePrisma() && req.method === 'PATCH' && url.pathname.startsWith('/api/interventi/')) {
-    if (!ensureRole(res, user, ['admin', 'tech'])) return
+    if (!ensureRole(res, user, ['ADMIN', 'OPERATOR'])) return
     const id = match(/^\/api\/interventi\/(.+)$/)
     if (!id) return respond(res, 404, { error: 'Intervento non trovato.' })
     const payload = await readJsonBody(req)
@@ -2209,7 +2274,7 @@ const handleApiRequest = async (req, res, url) => {
   }
 
   if (shouldUsePrisma() && req.method === 'POST' && url.pathname.startsWith('/api/riparazioni/from-chiamata/')) {
-    if (!ensureRole(res, user, ['admin', 'tech'])) return
+    if (!ensureRole(res, user, ['ADMIN', 'OPERATOR'])) return
     const callId = match(/^\/api\/riparazioni\/from-chiamata\/(.+)$/)
     if (!callId) return respond(res, 404, { error: 'Chiamata non trovata.' })
     const source = await prisma.intervention.findUnique({ where: { id: callId } })
@@ -2256,7 +2321,7 @@ const handleApiRequest = async (req, res, url) => {
   }
 
   if (shouldUsePrisma() && req.method === 'POST' && url.pathname === '/api/calendar') {
-    if (!ensureRole(res, user, ['admin', 'tech'])) return
+    if (!ensureRole(res, user, ['ADMIN', 'OPERATOR'])) return
     const payload = await readJsonBody(req)
     const title = sanitizeString(payload?.title)
     if (!title) return respond(res, 400, { error: 'title obbligatorio.' })
@@ -2275,7 +2340,7 @@ const handleApiRequest = async (req, res, url) => {
   }
 
   if (shouldUsePrisma() && (req.method === 'PATCH' || req.method === 'PUT') && url.pathname.startsWith('/api/calendar/')) {
-    if (!ensureRole(res, user, ['admin', 'tech'])) return
+    if (!ensureRole(res, user, ['ADMIN', 'OPERATOR'])) return
     const id = match(/^\/api\/calendar\/(.+)$/)
     if (!id) return respond(res, 404, { error: 'Evento non trovato.' })
     const payload = await readJsonBody(req)
@@ -2303,7 +2368,7 @@ const handleApiRequest = async (req, res, url) => {
     return respond(res, 200, rows.map(mapCustomerRow))
   }
   if (req.method === 'POST' && url.pathname === '/api/customers') {
-    if (!ensureRole(res, user, ['admin', 'tech'])) return
+    if (!ensureRole(res, user, ['ADMIN', 'OPERATOR'])) return
     const payload = await readJsonBody(req)
     const { error, value } = validateCustomerPayload(payload)
     if (error) return respond(res, 400, { error })
@@ -2314,7 +2379,7 @@ const handleApiRequest = async (req, res, url) => {
     return respond(res, 201, mapCustomerRow(getRow('SELECT * FROM customers WHERE id = ?', [value.id])))
   }
   if (req.method === 'PUT' && url.pathname.startsWith('/api/customers/')) {
-    if (!ensureRole(res, user, ['admin', 'tech'])) return
+    if (!ensureRole(res, user, ['ADMIN', 'OPERATOR'])) return
     const id = match(/^\/api\/customers\/(.+)$/)
     if (!id) return respond(res, 404, { error: 'Cliente non trovato.' })
     const payload = await readJsonBody(req)
@@ -2333,7 +2398,7 @@ const handleApiRequest = async (req, res, url) => {
     return respond(res, 200, mapCustomerRow(getRow('SELECT * FROM customers WHERE id = ?', [id])))
   }
   if (req.method === 'DELETE' && url.pathname.startsWith('/api/customers/')) {
-    if (!ensureRole(res, user, ['admin'])) return
+    if (!ensureRole(res, user, ['ADMIN'])) return
     const id = match(/^\/api\/customers\/(.+)$/)
     if (!id) return respond(res, 404, { error: 'Cliente non trovato.' })
     runQuery('DELETE FROM customers WHERE id = ?', [id])
@@ -2351,7 +2416,7 @@ const handleApiRequest = async (req, res, url) => {
     return respond(res, 200, rows.map(mapTicketRow))
   }
   if (req.method === 'POST' && url.pathname === '/api/tickets') {
-    if (!ensureRole(res, user, ['admin', 'tech'])) return
+    if (!ensureRole(res, user, ['ADMIN', 'OPERATOR'])) return
     const payload = await readJsonBody(req)
     const { error, value } = validateTicketPayload(payload)
     if (error) return respond(res, 400, { error })
@@ -2362,7 +2427,7 @@ const handleApiRequest = async (req, res, url) => {
     return respond(res, 201, mapTicketRow(getRow('SELECT * FROM tickets WHERE id = ?', [value.id])))
   }
   if (req.method === 'PUT' && url.pathname.startsWith('/api/tickets/')) {
-    if (!ensureRole(res, user, ['admin', 'tech'])) return
+    if (!ensureRole(res, user, ['ADMIN', 'OPERATOR'])) return
     const id = match(/^\/api\/tickets\/(.+)$/)
     if (!id) return respond(res, 404, { error: 'Ticket non trovato.' })
     const payload = await readJsonBody(req)
@@ -2381,7 +2446,7 @@ const handleApiRequest = async (req, res, url) => {
     return respond(res, 200, mapTicketRow(getRow('SELECT * FROM tickets WHERE id = ?', [id])))
   }
   if (req.method === 'DELETE' && url.pathname.startsWith('/api/tickets/')) {
-    if (!ensureRole(res, user, ['admin'])) return
+    if (!ensureRole(res, user, ['ADMIN'])) return
     const id = match(/^\/api\/tickets\/(.+)$/)
     if (!id) return respond(res, 404, { error: 'Ticket non trovato.' })
     runQuery('DELETE FROM tickets WHERE id = ?', [id])
@@ -2399,7 +2464,7 @@ const handleApiRequest = async (req, res, url) => {
     return respond(res, 200, rows.map(mapInventoryRow))
   }
   if (req.method === 'POST' && url.pathname === '/api/inventory') {
-    if (!ensureRole(res, user, ['admin', 'tech'])) return
+    if (!ensureRole(res, user, ['ADMIN', 'OPERATOR'])) return
     const payload = await readJsonBody(req)
     const { error, value } = validateInventoryPayload(payload)
     if (error) return respond(res, 400, { error })
@@ -2410,7 +2475,7 @@ const handleApiRequest = async (req, res, url) => {
     return respond(res, 201, mapInventoryRow(getRow('SELECT * FROM inventory WHERE id = ?', [value.id])))
   }
   if (req.method === 'PUT' && url.pathname.startsWith('/api/inventory/')) {
-    if (!ensureRole(res, user, ['admin', 'tech'])) return
+    if (!ensureRole(res, user, ['ADMIN', 'OPERATOR'])) return
     const id = match(/^\/api\/inventory\/(.+)$/)
     if (!id) return respond(res, 404, { error: 'Ricambio non trovato.' })
     const payload = await readJsonBody(req)
@@ -2429,7 +2494,7 @@ const handleApiRequest = async (req, res, url) => {
     return respond(res, 200, mapInventoryRow(getRow('SELECT * FROM inventory WHERE id = ?', [id])))
   }
   if (req.method === 'DELETE' && url.pathname.startsWith('/api/inventory/')) {
-    if (!ensureRole(res, user, ['admin'])) return
+    if (!ensureRole(res, user, ['ADMIN'])) return
     const id = match(/^\/api\/inventory\/(.+)$/)
     if (!id) return respond(res, 404, { error: 'Ricambio non trovato.' })
     runQuery('DELETE FROM inventory WHERE id = ?', [id])
@@ -2490,7 +2555,7 @@ const handleApiRequest = async (req, res, url) => {
   }
 
   if (req.method === 'POST' && url.pathname === '/api/interventions') {
-    if (!ensureRole(res, user, ['admin', 'tech'])) return
+    if (!ensureRole(res, user, ['ADMIN', 'OPERATOR'])) return
     const payload = await readJsonBody(req)
     const { error, value } = validateInterventionPayload(payload)
     if (error) return respond(res, 400, { error })
@@ -2505,7 +2570,7 @@ const handleApiRequest = async (req, res, url) => {
   }
 
   if (req.method === 'PUT' && url.pathname.startsWith('/api/interventions/')) {
-    if (!ensureRole(res, user, ['admin', 'tech'])) return
+    if (!ensureRole(res, user, ['ADMIN', 'OPERATOR'])) return
     const id = match(/^\/api\/interventions\/(.+)$/)
     if (!id) return respond(res, 404, { error: 'Intervento non trovato.' })
     const payload = await readJsonBody(req)
@@ -2528,7 +2593,7 @@ const handleApiRequest = async (req, res, url) => {
 
 
   if (req.method === 'PATCH' && url.pathname.startsWith('/api/interventi/')) {
-    if (!ensureRole(res, user, ['admin', 'tech'])) return
+    if (!ensureRole(res, user, ['ADMIN', 'OPERATOR'])) return
     const id = match(/^\/api\/interventi\/(.+)$/)
     if (!id) return respond(res, 404, { error: 'Intervento non trovato.' })
     const payload = await readJsonBody(req)
@@ -2547,7 +2612,7 @@ const handleApiRequest = async (req, res, url) => {
   }
 
   if (req.method === 'POST' && url.pathname.startsWith('/api/riparazioni/from-chiamata/')) {
-    if (!ensureRole(res, user, ['admin', 'tech'])) return
+    if (!ensureRole(res, user, ['ADMIN', 'OPERATOR'])) return
     const callId = match(/^\/api\/riparazioni\/from-chiamata\/(.+)$/)
     if (!callId) return respond(res, 404, { error: 'Chiamata non trovata.' })
     const source = getRow('SELECT * FROM interventions WHERE id = ?', [callId])
@@ -2566,7 +2631,7 @@ const handleApiRequest = async (req, res, url) => {
   }
 
   if (req.method === 'DELETE' && url.pathname.startsWith('/api/interventions/')) {
-    if (!ensureRole(res, user, ['admin'])) return
+    if (!ensureRole(res, user, ['ADMIN'])) return
     const id = match(/^\/api\/interventions\/(.+)$/)
     if (!id) return respond(res, 404, { error: 'Intervento non trovato.' })
     runQuery('DELETE FROM interventions WHERE id = ?', [id])
@@ -2577,7 +2642,7 @@ const handleApiRequest = async (req, res, url) => {
     return respond(res, 200, getAll('SELECT * FROM spare_parts_orders').map(mapSparePartOrderRow))
   }
   if (req.method === 'POST' && url.pathname === '/api/spare-parts-orders') {
-    if (!ensureRole(res, user, ['admin', 'tech'])) return
+    if (!ensureRole(res, user, ['ADMIN', 'OPERATOR'])) return
     const payload = await readJsonBody(req)
     const { error, value } = validateSparePartOrderPayload(payload)
     if (error) return respond(res, 400, { error })
@@ -2589,7 +2654,7 @@ const handleApiRequest = async (req, res, url) => {
     return respond(res, 201, mapSparePartOrderRow(getRow('SELECT * FROM spare_parts_orders WHERE id = ?', [value.id])))
   }
   if (req.method === 'PUT' && url.pathname.startsWith('/api/spare-parts-orders/')) {
-    if (!ensureRole(res, user, ['admin', 'tech'])) return
+    if (!ensureRole(res, user, ['ADMIN', 'OPERATOR'])) return
     const id = match(/^\/api\/spare-parts-orders\/(.+)$/)
     if (!id) return respond(res, 404, { error: 'Ordine ricambi non trovato.' })
     const payload = await readJsonBody(req)
@@ -2604,7 +2669,7 @@ const handleApiRequest = async (req, res, url) => {
     return respond(res, 200, mapSparePartOrderRow(getRow('SELECT * FROM spare_parts_orders WHERE id = ?', [id])))
   }
   if (req.method === 'DELETE' && url.pathname.startsWith('/api/spare-parts-orders/')) {
-    if (!ensureRole(res, user, ['admin'])) return
+    if (!ensureRole(res, user, ['ADMIN'])) return
     const id = match(/^\/api\/spare-parts-orders\/(.+)$/)
     if (!id) return respond(res, 404, { error: 'Ordine ricambi non trovato.' })
     runQuery('DELETE FROM spare_parts_orders WHERE id = ?', [id])
@@ -2615,7 +2680,7 @@ const handleApiRequest = async (req, res, url) => {
     return respond(res, 200, getAll('SELECT * FROM quotes').map(mapQuoteRow))
   }
   if (req.method === 'POST' && url.pathname === '/api/quotes') {
-    if (!ensureRole(res, user, ['admin', 'tech'])) return
+    if (!ensureRole(res, user, ['ADMIN', 'OPERATOR'])) return
     const payload = await readJsonBody(req)
     const { error, value } = validateQuotePayload(payload)
     if (error) return respond(res, 400, { error })
@@ -2627,7 +2692,7 @@ const handleApiRequest = async (req, res, url) => {
     return respond(res, 201, mapQuoteRow(getRow('SELECT * FROM quotes WHERE id = ?', [value.id])))
   }
   if (req.method === 'PUT' && url.pathname.startsWith('/api/quotes/')) {
-    if (!ensureRole(res, user, ['admin', 'tech'])) return
+    if (!ensureRole(res, user, ['ADMIN', 'OPERATOR'])) return
     const id = match(/^\/api\/quotes\/(.+)$/)
     if (!id) return respond(res, 404, { error: 'Preventivo non trovato.' })
     const payload = await readJsonBody(req)
@@ -2645,7 +2710,7 @@ const handleApiRequest = async (req, res, url) => {
     return respond(res, 200, mapQuoteRow(getRow('SELECT * FROM quotes WHERE id = ?', [id])))
   }
   if (req.method === 'DELETE' && url.pathname.startsWith('/api/quotes/')) {
-    if (!ensureRole(res, user, ['admin'])) return
+    if (!ensureRole(res, user, ['ADMIN'])) return
     const id = match(/^\/api\/quotes\/(.+)$/)
     if (!id) return respond(res, 404, { error: 'Preventivo non trovato.' })
     runQuery('DELETE FROM quotes WHERE id = ?', [id])
@@ -2653,7 +2718,7 @@ const handleApiRequest = async (req, res, url) => {
   }
 
   if (req.method === 'POST' && url.pathname === '/api/admin/backup') {
-    if (!ensureRole(res, user, ['admin'])) return
+    if (!ensureRole(res, user, ['ADMIN'])) return
     if (!ensureCsrf(req, res)) return
     const result = await performBackup({ triggeredBy: 'manual-api' })
     if (!result.ok) {
@@ -2663,12 +2728,12 @@ const handleApiRequest = async (req, res, url) => {
   }
 
   if (req.method === 'GET' && url.pathname === '/api/admin/backup/latest') {
-    if (!ensureRole(res, user, ['admin'])) return
+    if (!ensureRole(res, user, ['ADMIN'])) return
     return respond(res, 200, { lastRun: getLastBackupRun() })
   }
 
   if (req.method === 'GET' && url.pathname === '/api/admin/export/json') {
-    if (!ensureRole(res, user, ['admin'])) return
+    if (!ensureRole(res, user, ['ADMIN'])) return
     const payload = buildBackupPayload()
     const filename = `backup-${formatBackupTimestampForName(new Date())}.json`
     res.writeHead(200, {
@@ -2681,7 +2746,7 @@ const handleApiRequest = async (req, res, url) => {
   }
 
   if (req.method === 'GET' && url.pathname === '/api/admin/export/csv') {
-    if (!ensureRole(res, user, ['admin'])) return
+    if (!ensureRole(res, user, ['ADMIN'])) return
     const tickets = getAll('SELECT id, subject, description, customer_id, status, date, time, created_at, updated_at, version FROM tickets ORDER BY created_at ASC')
     const interventions = getAll('SELECT id, client_id, type, status, urgency, opened_at, closed_at, description, parent_intervention_id, additional_data, created_at, updated_at, version FROM interventions ORDER BY created_at ASC')
 

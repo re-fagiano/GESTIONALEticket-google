@@ -37,13 +37,17 @@ export const config = {
   RAG_API_URL: rawRagUrl ? rawRagUrl.replace(/\/$/, '') : '',
   API_TOKEN: (process.env.API_TOKEN || '').trim(),
   DEFAULT_TOKEN: (process.env.DEFAULT_API_TOKEN || '').trim() || crypto.randomUUID(),
-  JWT_SECRET: (process.env.JWT_SECRET || '').trim() || crypto.randomBytes(32).toString('hex'),
-  JWT_ACCESS_SECRET: (process.env.JWT_ACCESS_SECRET || process.env.JWT_SECRET || '').trim() || crypto.randomBytes(32).toString('hex'),
-  JWT_REFRESH_SECRET: (process.env.JWT_REFRESH_SECRET || '').trim() || crypto.randomBytes(32).toString('hex'),
+  // Security hardening: non generiamo più segreti JWT random ad ogni boot.
+  // Rollback: ripristinare i fallback crypto.randomBytes(...) se serve avvio senza env valorizzate.
+  JWT_SECRET: (process.env.JWT_SECRET || '').trim(),
+  JWT_ACCESS_SECRET: (process.env.JWT_ACCESS_SECRET || process.env.JWT_SECRET || '').trim(),
+  JWT_REFRESH_SECRET: (process.env.JWT_REFRESH_SECRET || '').trim(),
   ACCESS_TOKEN_TTL_SECONDS: Number(process.env.ACCESS_TOKEN_TTL_SECONDS || 900),
   REFRESH_TOKEN_TTL_SECONDS: Number(process.env.REFRESH_TOKEN_TTL_SECONDS || 60 * 60 * 24 * 14),
-  ADMIN_USER: (process.env.ADMIN_USER || 'admin').trim(),
-  ADMIN_PASS: (process.env.ADMIN_PASS || '').trim(),
+  // Admin seed allineato a email/password esplicite via env.
+  // Rollback: reintrodurre ADMIN_USER/ADMIN_PASS e relativa logica in server.js.
+  ADMIN_EMAIL: (process.env.ADMIN_EMAIL || '').trim(),
+  ADMIN_PASSWORD: (process.env.ADMIN_PASSWORD || '').trim(),
   DB_PATH: process.env.DB_PATH || path.join(__dirname, 'data', 'gestionale.db'),
   DATABASE_URL: (process.env.DATABASE_URL || '').trim(),
   BACKUP_INTERVAL_HOURS: Number(process.env.BACKUP_INTERVAL_HOURS || 24),

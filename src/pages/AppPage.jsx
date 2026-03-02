@@ -304,7 +304,7 @@ export default function AppPage() {
   }, [exportNotice]);
 
   useEffect(() => {
-    if (!authState.user || authState.user.role !== 'admin') {
+    if (!authState.user || authState.user.role !== 'ADMIN') {
       setServerBackupRun(null);
       return;
     }
@@ -2089,7 +2089,7 @@ const buildBackup = () => ({
         <button onClick={handleLogout} className="px-3 py-1 text-xs bg-slate-100 border rounded">Logout</button>
       </div>
 
-      {authState.user?.role === 'admin' && (
+      {authState.user?.role === 'ADMIN' && (
         <div className="bg-white rounded shadow p-4 border border-slate-200 space-y-3">
           <h2 className="text-lg font-bold text-slate-800">Backup server (Google Drive)</h2>
           <p className="text-sm text-slate-500">Ultimo backup: <strong>{serverBackupRun?.created_at ? new Date(serverBackupRun.created_at).toLocaleString('it-IT') : 'Nessun backup registrato'}</strong></p>
@@ -2605,7 +2605,7 @@ const buildBackup = () => ({
                 className="w-full border p-2 rounded md:col-span-2"
                 value={selectedIntervention.assignedToId || ''}
                 onChange={(e) => setSelectedIntervention((prev) => ({ ...prev, assignedToId: e.target.value }))}
-                disabled={authState.user?.role !== 'admin'}
+                disabled={authState.user?.role !== 'ADMIN'}
               >
                 <option value="">Nessun operatore assegnato</option>
                 {authState.user && <option value={authState.user.id}>Operatore corrente ({authState.user.username || authState.user.email})</option>}
