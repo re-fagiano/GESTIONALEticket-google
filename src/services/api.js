@@ -10,6 +10,12 @@ const AUTH_TOKEN_KEY = 'gestionale_jwt';
 
 let unauthorizedHandler = null;
 
+const assertFunction = (fn) => {
+  if (typeof fn !== 'function') {
+    throw new Error('INVALID_PERSISTED_STATE_FN');
+  }
+};
+
 const getStorage = () => {
   if (typeof window === 'undefined') return null;
   return window.localStorage || window.sessionStorage || null;
@@ -21,7 +27,12 @@ let authToken = (() => {
 })();
 
 export const setUnauthorizedHandler = (handler) => {
-  unauthorizedHandler = typeof handler === 'function' ? handler : null;
+  if (handler == null) {
+    unauthorizedHandler = null;
+    return;
+  }
+  assertFunction(handler);
+  unauthorizedHandler = handler;
 };
 
 export const setAuthToken = (token, persist = true) => {
@@ -156,6 +167,7 @@ export const apiFetchWithRetry = async (input, maybeOptions = {}, maybeConfig = 
       }
     : (input || {});
   const { path, options = {}, apiToken = '', onRetryStatus = () => {} } = normalized;
+  assertFunction(onRetryStatus);
   const method = (options.method || 'GET').toUpperCase();
   const retryable = ['GET', 'PUT'].includes(method);
   const maxAttempts = 3;

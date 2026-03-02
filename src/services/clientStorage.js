@@ -1,6 +1,12 @@
 const memoryStore = new Map();
 const listeners = new Set();
 
+const assertFunction = (fn) => {
+  if (typeof fn !== 'function') {
+    throw new Error('INVALID_PERSISTED_STATE_FN');
+  }
+};
+
 const cacheKeys = {
   customers: 'cache_customers',
   tickets: 'cache_tickets',
@@ -10,7 +16,10 @@ const cacheKeys = {
 };
 
 const notify = (key) => {
-  listeners.forEach((listener) => listener(key));
+  listeners.forEach((listener) => {
+    assertFunction(listener);
+    listener(key);
+  });
 };
 
 const readRawSync = (key, fallback = null) => (memoryStore.has(key) ? memoryStore.get(key) : fallback);
@@ -72,7 +81,7 @@ const idbSet = async (key, value) => {
 };
 
 const subscribeStorageUpdates = (listener) => {
-  if (typeof listener !== 'function') return () => {};
+  assertFunction(listener);
   listeners.add(listener);
   return () => listeners.delete(listener);
 };
