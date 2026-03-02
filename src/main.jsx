@@ -4,6 +4,36 @@ import App from './App'
 import './index.css'
 import { clearAllClientData } from './services/clientStorage'
 
+const STORAGE_VERSION = 'v3'
+const APP_VERSION_KEY = '__app_version__'
+const LEGACY_DB_NAMES = ['gestionale-ticket-db']
+const SAFE_BOOT = true
+
+const resetStorageOnVersionMismatch = () => {
+  if (typeof window === 'undefined') return
+
+  const storedVersion = window.localStorage?.getItem(APP_VERSION_KEY)
+  if (storedVersion === STORAGE_VERSION) return
+
+  console.warn('STORAGE VERSION MISMATCH — RESET')
+  window.localStorage?.clear()
+
+  if (window.indexedDB) {
+    LEGACY_DB_NAMES.forEach((dbName) => {
+      window.indexedDB.deleteDatabase(dbName)
+    })
+  }
+
+  window.localStorage?.setItem(APP_VERSION_KEY, STORAGE_VERSION)
+}
+
+resetStorageOnVersionMismatch()
+
+// rehydrate DISABILITATO per debug
+if (!SAFE_BOOT) {
+  // rehydrate()
+}
+
 class RootErrorBoundary extends React.Component {
   constructor(props) {
     super(props)
