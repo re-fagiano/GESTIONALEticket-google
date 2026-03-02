@@ -40,6 +40,26 @@ const DIST_DIR = path.join(__dirname, 'dist')
 const DIST_INDEX = path.join(DIST_DIR, 'index.html')
 const isProduction = NODE_ENV === 'production'
 
+let prismaEnabled = isDatabaseConfigured
+
+const isPrismaSchemaMissingError = (error) => {
+  if (!error) return false
+  if (error?.code === 'P2021') return true
+  const message = `${error?.message || ''}`.toLowerCase()
+  return message.includes('does not exist in the current database') || message.includes('relation') && message.includes('does not exist')
+}
+
+const disablePrismaIfUnavailable = (error, context) => {
+  if (!prismaEnabled || !isPrismaSchemaMissingError(error)) return
+  prismaEnabled = false
+  logEvent('warn', 'prisma_disabled_missing_schema', {
+    context,
+    error: error?.message || 'unknown_error',
+    hint: 'Esegui `pnpm prisma:deploy` (o `pnpm prisma:migrate`) per creare le tabelle PostgreSQL, poi riavvia il server.',
+  })
+}
+
+const shouldUsePrisma = () => prismaEnabled
 
 let bcryptLib = null
 let jwtLib = null
@@ -1634,7 +1654,7 @@ const handleApiRequest = async (req, res, url) => {
       if (!email || !password) return respond(res, 400, { error: 'Email e password sono obbligatorie.', code: 'missing_credentials' })
       if (!checkLoginRateLimit(req, res, email)) return
 
-      if (isDatabaseConfigured) {
+      if (shouldUsePrisma()) {
         const dbUser = await prisma.user.findUnique({ where: { email } })
         if (!dbUser) return respond(res, 404, { error: 'Utente non trovato.', code: 'user_not_found' })
         const passwordOk = await verifyPassword(password, dbUser.passwordHash)
@@ -1687,7 +1707,7 @@ const handleApiRequest = async (req, res, url) => {
         return respond(res, 400, { error: 'La password deve avere almeno 8 caratteri.', code: 'weak_password' })
       }
 
-      if (isDatabaseConfigured) {
+      if (shouldUsePrisma()) {
         const existing = await prisma.user.findUnique({ where: { email } })
         if (existing) return respond(res, 409, { error: 'Utente già registrato.', code: 'user_exists' })
         const created = await prisma.user.create({
@@ -1751,7 +1771,7 @@ const handleApiRequest = async (req, res, url) => {
       return respond(res, 401, { error: 'Sessione scaduta.', code: 'session_expired' })
     }
     let user = null
-    if (isDatabaseConfigured) {
+    if (shouldUsePrisma()) {
       const dbUser = await prisma.user.findUnique({ where: { id: record.user_id } })
       if (dbUser) user = { id: dbUser.id, email: dbUser.email, username: dbUser.email, role: dbUser.role, operatorCode: dbUser.operatorCode, approved: 1, status: 'active' }
     } else {
@@ -1800,7 +1820,7 @@ const handleApiRequest = async (req, res, url) => {
     const user = ensureAuth(req, res)
     if (!user) return
     const operatorCode = generateOperatorCode()
-    if (isDatabaseConfigured) {
+    if (shouldUsePrisma()) {
       const updated = await prisma.user.update({ where: { id: user.id }, data: { operatorCode } })
       return respond(res, 200, { operatorCode: updated.operatorCode })
     }
@@ -2018,7 +2038,7 @@ const handleApiRequest = async (req, res, url) => {
   }
 
 
-  if (isDatabaseConfigured && req.method === 'GET' && (url.pathname === '/api/customers' || url.pathname === '/api/clienti')) {
+  if (shouldUsePrisma() && req.method === 'GET' && (url.pathname === '/api/customers' || url.pathname === '/api/clienti')) {
     const { q, sortColumn, order, skip, take } = parseListQuery(url, {
       defaultSort: 'createdAt',
       allowedSort: ['createdAt', 'updatedAt', 'name', 'email', 'phone'],
@@ -2039,7 +2059,7 @@ const handleApiRequest = async (req, res, url) => {
     return respond(res, 200, rows)
   }
 
-  if (isDatabaseConfigured && req.method === 'POST' && url.pathname === '/api/customers') {
+  if (shouldUsePrisma() && req.method === 'POST' && url.pathname === '/api/customers') {
     if (!ensureRole(res, user, ['admin', 'tech'])) return
     const payload = await readJsonBody(req)
     const { error, value } = validateCustomerPayload(payload)
@@ -2050,7 +2070,7 @@ const handleApiRequest = async (req, res, url) => {
     return respond(res, 201, created)
   }
 
-  if (isDatabaseConfigured && req.method === 'PUT' && url.pathname.startsWith('/api/customers/')) {
+  if (shouldUsePrisma() && req.method === 'PUT' && url.pathname.startsWith('/api/customers/')) {
     if (!ensureRole(res, user, ['admin', 'tech'])) return
     const id = match(/^\/api\/customers\/(.+)$/)
     if (!id) return respond(res, 404, { error: 'Cliente non trovato.' })
@@ -2061,7 +2081,7 @@ const handleApiRequest = async (req, res, url) => {
     return respond(res, 200, updated)
   }
 
-  if (isDatabaseConfigured && req.method === 'GET' && (url.pathname === '/api/interventions' || url.pathname === '/api/chiamate' || url.pathname === '/api/riparazioni')) {
+  if (shouldUsePrisma() && req.method === 'GET' && (url.pathname === '/api/interventions' || url.pathname === '/api/chiamate' || url.pathname === '/api/riparazioni')) {
     const customerId = sanitizeString(url.searchParams.get('customerId') || url.searchParams.get('clientId'))
     const type = sanitizeString(url.searchParams.get('type'))
     const typeFromPath = url.pathname === '/api/chiamate' ? 'chiamata' : (url.pathname === '/api/riparazioni' ? 'riparazione' : '')
@@ -2092,7 +2112,7 @@ const handleApiRequest = async (req, res, url) => {
     return respond(res, 200, rows.map(mapPrismaIntervention))
   }
 
-  if (isDatabaseConfigured && req.method === 'POST' && url.pathname === '/api/interventions') {
+  if (shouldUsePrisma() && req.method === 'POST' && url.pathname === '/api/interventions') {
     if (!ensureRole(res, user, ['admin', 'tech'])) return
     const payload = await readJsonBody(req)
     const { error, value } = validateInterventionPayload(payload)
@@ -2124,7 +2144,7 @@ const handleApiRequest = async (req, res, url) => {
     return respond(res, 201, mapPrismaIntervention(enriched || created))
   }
 
-  if (isDatabaseConfigured && (req.method === 'PUT' || req.method === 'PATCH') && url.pathname.startsWith('/api/interventions/')) {
+  if (shouldUsePrisma() && (req.method === 'PUT' || req.method === 'PATCH') && url.pathname.startsWith('/api/interventions/')) {
     if (!ensureRole(res, user, ['admin', 'tech'])) return
     const id = match(/^\/api\/interventions\/(.+)$/)
     if (!id) return respond(res, 404, { error: 'Intervento non trovato.' })
@@ -2167,7 +2187,7 @@ const handleApiRequest = async (req, res, url) => {
   }
 
 
-  if (isDatabaseConfigured && req.method === 'PATCH' && url.pathname.startsWith('/api/interventi/')) {
+  if (shouldUsePrisma() && req.method === 'PATCH' && url.pathname.startsWith('/api/interventi/')) {
     if (!ensureRole(res, user, ['admin', 'tech'])) return
     const id = match(/^\/api\/interventi\/(.+)$/)
     if (!id) return respond(res, 404, { error: 'Intervento non trovato.' })
@@ -2188,7 +2208,7 @@ const handleApiRequest = async (req, res, url) => {
     })
   }
 
-  if (isDatabaseConfigured && req.method === 'POST' && url.pathname.startsWith('/api/riparazioni/from-chiamata/')) {
+  if (shouldUsePrisma() && req.method === 'POST' && url.pathname.startsWith('/api/riparazioni/from-chiamata/')) {
     if (!ensureRole(res, user, ['admin', 'tech'])) return
     const callId = match(/^\/api\/riparazioni\/from-chiamata\/(.+)$/)
     if (!callId) return respond(res, 404, { error: 'Chiamata non trovata.' })
@@ -2218,7 +2238,7 @@ const handleApiRequest = async (req, res, url) => {
     return respond(res, 201, mapPrismaIntervention(enriched || created))
   }
 
-  if (isDatabaseConfigured && req.method === 'GET' && url.pathname === '/api/calendar') {
+  if (shouldUsePrisma() && req.method === 'GET' && url.pathname === '/api/calendar') {
     const from = normalizeIso(url.searchParams.get('from'))
     const to = normalizeIso(url.searchParams.get('to'))
     const rows = await prisma.calendarItem.findMany({
@@ -2235,7 +2255,7 @@ const handleApiRequest = async (req, res, url) => {
     return respond(res, 200, rows)
   }
 
-  if (isDatabaseConfigured && req.method === 'POST' && url.pathname === '/api/calendar') {
+  if (shouldUsePrisma() && req.method === 'POST' && url.pathname === '/api/calendar') {
     if (!ensureRole(res, user, ['admin', 'tech'])) return
     const payload = await readJsonBody(req)
     const title = sanitizeString(payload?.title)
@@ -2254,7 +2274,7 @@ const handleApiRequest = async (req, res, url) => {
     return respond(res, 201, created)
   }
 
-  if (isDatabaseConfigured && (req.method === 'PATCH' || req.method === 'PUT') && url.pathname.startsWith('/api/calendar/')) {
+  if (shouldUsePrisma() && (req.method === 'PATCH' || req.method === 'PUT') && url.pathname.startsWith('/api/calendar/')) {
     if (!ensureRole(res, user, ['admin', 'tech'])) return
     const id = match(/^\/api\/calendar\/(.+)$/)
     if (!id) return respond(res, 404, { error: 'Evento non trovato.' })
@@ -2797,14 +2817,27 @@ const handleStaticRequest = async (pathname, res) => {
 
 
 
+const initializePrismaAvailability = async () => {
+  if (!shouldUsePrisma()) return
+  try {
+    await prisma.$queryRawUnsafe('SELECT 1 FROM "users" LIMIT 1')
+  } catch (error) {
+    disablePrismaIfUnavailable(error, 'startup_probe_users_table')
+    if (shouldUsePrisma()) {
+      logEvent('warn', 'prisma_startup_probe_failed', { error: error?.message || 'unknown_error' })
+    }
+  }
+}
+
 const ensurePostgresSearchIndexes = async () => {
-  if (!isDatabaseConfigured) return
+  if (!shouldUsePrisma()) return
   try {
     await prisma.$executeRawUnsafe('CREATE EXTENSION IF NOT EXISTS pg_trgm')
     await prisma.$executeRawUnsafe('CREATE INDEX IF NOT EXISTS customers_name_trgm_idx ON "customers" USING gin ("name" gin_trgm_ops)')
     await prisma.$executeRawUnsafe('CREATE INDEX IF NOT EXISTS interventions_description_trgm_idx ON "interventions" USING gin ("description" gin_trgm_ops)')
     await prisma.$executeRawUnsafe('CREATE INDEX IF NOT EXISTS tickets_subject_trgm_idx ON "tickets" USING gin ("subject" gin_trgm_ops)')
   } catch (error) {
+    disablePrismaIfUnavailable(error, 'postgres_search_indexes')
     logEvent('warn', 'postgres_search_index_setup_failed', { error: error?.message || 'unknown_error' })
   }
 }
@@ -2841,12 +2874,12 @@ const server = createServer(async (req, res) => {
   }
 })
 
-ensurePostgresSearchIndexes().finally(() => {
-server.listen(runtimePort, () => {
-  logEvent('info', 'server_started', { url: `http://localhost:${runtimePort}` })
-  if (!isProduction) {
-    logEvent('info', 'default_users_available')
-  }
-  scheduleAutomaticBackup()
-})
+initializePrismaAvailability().then(() => ensurePostgresSearchIndexes()).finally(() => {
+  server.listen(runtimePort, () => {
+    logEvent('info', 'server_started', { url: `http://localhost:${runtimePort}` })
+    if (!isProduction) {
+      logEvent('info', 'default_users_available')
+    }
+    scheduleAutomaticBackup()
+  })
 })
