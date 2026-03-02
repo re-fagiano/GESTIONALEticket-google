@@ -2821,9 +2821,11 @@ const scheduleAutomaticBackup = () => {
   }, backupIntervalMs)
 }
 
+const runtimePort = process.env.PORT || PORT || 4173
+
 const server = createServer(async (req, res) => {
   try {
-    const url = new URL(req.url, `http://localhost:${PORT}`)
+    const url = new URL(req.url, `http://localhost:${runtimePort}`)
 
     if (url.pathname.startsWith('/api/')) {
       return handleApiRequest(req, res, url)
@@ -2838,8 +2840,6 @@ const server = createServer(async (req, res) => {
     handleErrorResponse(res, error, { path: req.url, method: req.method })
   }
 })
-
-const runtimePort = process.env.PORT || PORT
 
 ensurePostgresSearchIndexes().finally(() => {
 server.listen(runtimePort, () => {
