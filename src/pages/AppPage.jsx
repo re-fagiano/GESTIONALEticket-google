@@ -437,21 +437,21 @@ export default function AppPage() {
   const [inventoryImportHeaderError, setInventoryImportHeaderError] = useState('');
   const [showInventoryImportModal, setShowInventoryImportModal] = useState(false);
   const [isImportingInventory, setIsImportingInventory] = useState(false);
-  const [interventionSearchInput, setInterventionSearchInput] = useState(() => isBrowser() ? new URLSearchParams(window.location.search).get('q') || '' : '');
-  const [interventionSearch, setInterventionSearch] = useState(() => isBrowser() ? new URLSearchParams(window.location.search).get('q') || '' : '');
+  const [interventionSearchInput, setInterventionSearchInput] = useState(() => isBrowser ? new URLSearchParams(window.location.search).get('q') || '' : '');
+  const [interventionSearch, setInterventionSearch] = useState(() => isBrowser ? new URLSearchParams(window.location.search).get('q') || '' : '');
   const [interventionFilters, setInterventionFilters] = useState(() => ({
-    clientId: isBrowser() ? (new URLSearchParams(window.location.search).get('clientId') || '') : '',
-    type: isBrowser() ? (new URLSearchParams(window.location.search).get('type') || '') : '',
-    status: isBrowser() ? (new URLSearchParams(window.location.search).get('status') || '') : '',
-    urgency: isBrowser() ? (new URLSearchParams(window.location.search).get('urgency') || '') : '',
+    clientId: isBrowser ? (new URLSearchParams(window.location.search).get('clientId') || '') : '',
+    type: isBrowser ? (new URLSearchParams(window.location.search).get('type') || '') : '',
+    status: isBrowser ? (new URLSearchParams(window.location.search).get('status') || '') : '',
+    urgency: isBrowser ? (new URLSearchParams(window.location.search).get('urgency') || '') : '',
   }));
   const [interventionSort, setInterventionSort] = useState(() => ({
-    sort: isBrowser() ? (new URLSearchParams(window.location.search).get('sort') || 'opened_at') : 'opened_at',
-    order: isBrowser() ? (new URLSearchParams(window.location.search).get('order') || 'desc') : 'desc',
+    sort: isBrowser ? (new URLSearchParams(window.location.search).get('sort') || 'opened_at') : 'opened_at',
+    order: isBrowser ? (new URLSearchParams(window.location.search).get('order') || 'desc') : 'desc',
   }));
   const [interventionPagination, setInterventionPagination] = useState(() => ({
-    skip: isBrowser() ? Number(new URLSearchParams(window.location.search).get('skip') || 0) : 0,
-    take: isBrowser() ? Number(new URLSearchParams(window.location.search).get('take') || 20) : 20,
+    skip: isBrowser ? Number(new URLSearchParams(window.location.search).get('skip') || 0) : 0,
+    take: isBrowser ? Number(new URLSearchParams(window.location.search).get('take') || 20) : 20,
   }));
   const [inventorySearch, setInventorySearch] = useState('');
   const [inventorySearchField, setInventorySearchField] = useState('all');
@@ -500,7 +500,7 @@ export default function AppPage() {
   }, [interventionSearchInput]);
 
   useEffect(() => {
-    if (!isBrowser()) return;
+    if (!isBrowser) return;
     const params = new URLSearchParams(window.location.search);
     const entries = {
       q: interventionSearch,
