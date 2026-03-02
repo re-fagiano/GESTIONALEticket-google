@@ -2840,10 +2840,11 @@ const server = createServer(async (req, res) => {
 })
 
 const runtimePort = process.env.PORT || PORT
+const runtimeHost = '0.0.0.0'
 
 ensurePostgresSearchIndexes().finally(() => {
-server.listen(runtimePort, () => {
-  logEvent('info', 'server_started', { url: `http://localhost:${runtimePort}` })
+server.listen(runtimePort, runtimeHost, () => {
+  logEvent('info', 'server_started', { url: `http://${runtimeHost}:${runtimePort}` })
   if (!isProduction) {
     logEvent('info', 'default_users_available')
   }
