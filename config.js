@@ -30,7 +30,7 @@ const rawDeepSeekUrl = process.env.DEEPSEEK_API_URL || process.env.DEEPSEEK_BASE
 const rawRagUrl = process.env.RAG_API_URL || ''
 
 export const config = {
-  PORT: process.env.PORT || 4173,
+  PORT: process.env.PORT,
   NODE_ENV: process.env.NODE_ENV || 'development',
   DEEPSEEK_API_URL: rawDeepSeekUrl.replace(/\/$/, ''),
   DEEPSEEK_API_KEY: (process.env.DEEPSEEK_API_KEY || '').trim(),
