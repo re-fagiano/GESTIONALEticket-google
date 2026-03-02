@@ -9,7 +9,7 @@
   "packageManager": "pnpm@9.1.0",
   "scripts": {
     "dev": "vite",
-    "build": "prisma generate && node scripts/check-duplicate-intervention-handlers.js && vite build",
+    "build": "prisma generate && node scripts/check-duplicate-intervention-handlers.js && node scripts/check-icon-usage.js && vite build",
     "start": "node server.js",
     "lint": "eslint .",
     "preview": "vite preview",
@@ -17,7 +17,8 @@
     "start:sqlite": "pnpm run build && node backend/server.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
-    "prisma:deploy": "prisma migrate deploy"
+    "prisma:deploy": "prisma migrate deploy",
+    "check:icons": "node scripts/check-icon-usage.js"
   },
   "dependencies": {
     "lucide-react": "^0.556.0",
