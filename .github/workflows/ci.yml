@@ -32,3 +32,29 @@ jobs:
 
       - name: Build
         run: pnpm run build
+
+  prisma-deploy:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.DATABASE_URL != ''
+    env:
+      PNPM_HOME: /tmp/.pnpm
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.1.0
+
+      - name: Install dependencies
+        run: pnpm install --store-dir /tmp/.pnpm-store --no-frozen-lockfile --no-optional
+
+      - name: Run Prisma migrate deploy
+        run: pnpm run prisma:deploy

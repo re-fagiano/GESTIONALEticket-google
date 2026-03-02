@@ -3,6 +3,7 @@ CREATE TYPE "InterventionStatus_new" AS ENUM ('pendente', 'in_lavorazione', 'com
 -- Drop the default first, otherwise Postgres cannot cast it
 ALTER TABLE "interventions" ALTER COLUMN "status" DROP DEFAULT;
 
+-- Map old values to new enum
 ALTER TABLE "interventions"
   ALTER COLUMN "status" TYPE "InterventionStatus_new"
   USING (
