@@ -15,7 +15,7 @@ class RootErrorBoundary extends React.Component {
   }
 
   componentDidCatch(error, info) {
-    console.error('Errore inatteso render:', error, info)
+    console.error('ERROR_BOUNDARY_CAUGHT', error, info)
   }
 
   handleReload = async () => {
@@ -45,6 +45,10 @@ class RootErrorBoundary extends React.Component {
 
 window.addEventListener('unhandledrejection', (event) => {
   console.error('Promise non gestita:', event.reason)
+})
+
+window.addEventListener('error', (event) => {
+  console.error('GLOBAL_ERROR', event.error)
 })
 
 createRoot(document.getElementById('root')).render(
