@@ -26,3 +26,6 @@ dist-ssr
 # File di ambiente con password (IMPORTANTE)
 .env
 .env.production
+
+# npm lockfile rimosso: standardizziamo su pnpm
+package-lock.json
