@@ -1,4 +1,4 @@
-const requiredInProduction = ['API_TOKEN']
+const requiredInProduction = ['API_TOKEN', 'DATABASE_URL']
 
 const missing = requiredInProduction.filter((name) => !process.env[name])
 
