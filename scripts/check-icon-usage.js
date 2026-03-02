@@ -23,6 +23,10 @@ const walk = (dir) => {
       issues.push(`${path.relative(process.cwd(), fullPath)}: trovato uso non valido di fa(...)`);
     }
 
+    if (/\bfa[A-Z]\w*\s*\(/.test(content)) {
+      issues.push(`${path.relative(process.cwd(), fullPath)}: trovato uso non valido di icona chiamata come funzione (es. faPlus())`);
+    }
+
     if (/from\s+['\"]react-icons\/fa['\"]/.test(content) && /import\s*\{[^}]*\bfa[A-Z]\w*/.test(content)) {
       issues.push(`${path.relative(process.cwd(), fullPath)}: import errato da react-icons/fa (usa componenti con prefisso Fa...)`);
     }
@@ -37,4 +41,4 @@ if (issues.length > 0) {
   process.exit(1);
 }
 
-console.log('Controllo icone OK: nessun uso di fa(...) rilevato.');
+console.log('Controllo icone OK: nessun uso non valido di icone FontAwesome rilevato.');
