@@ -2821,7 +2821,7 @@ const scheduleAutomaticBackup = () => {
   }, backupIntervalMs)
 }
 
-const runtimePort = process.env.PORT || PORT || 4173
+const runtimePort = process.env.PORT || PORT
 
 const server = createServer(async (req, res) => {
   try {
