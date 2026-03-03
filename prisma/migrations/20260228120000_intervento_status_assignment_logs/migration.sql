@@ -1,11 +1,6 @@
 DO $$
 BEGIN
-  IF NOT EXISTS (
-    SELECT 1
-    FROM pg_type t
-    JOIN pg_namespace n ON n.oid = t.typnamespace
-    WHERE t.typname = 'InterventionStatus_new' AND n.nspname = 'public'
-  ) THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'InterventionStatus_new') THEN
     CREATE TYPE "InterventionStatus_new" AS ENUM ('pendente', 'in_lavorazione', 'completato', 'annullato');
   END IF;
 END $$;
@@ -27,27 +22,12 @@ ALTER TABLE "interventions"
 
 DO $$
 BEGIN
-  IF EXISTS (
-    SELECT 1
-    FROM pg_type t
-    JOIN pg_namespace n ON n.oid = t.typnamespace
-    WHERE t.typname = 'InterventionStatus' AND n.nspname = 'public'
-  ) THEN
+  IF EXISTS (SELECT 1 FROM pg_type WHERE typname = 'InterventionStatus') THEN
     DROP TYPE "InterventionStatus";
   END IF;
 
-  IF EXISTS (
-    SELECT 1
-    FROM pg_type t
-    JOIN pg_namespace n ON n.oid = t.typnamespace
-    WHERE t.typname = 'InterventionStatus_new' AND n.nspname = 'public'
-  )
-     AND NOT EXISTS (
-    SELECT 1
-    FROM pg_type t
-    JOIN pg_namespace n ON n.oid = t.typnamespace
-    WHERE t.typname = 'InterventionStatus' AND n.nspname = 'public'
-  ) THEN
+  IF EXISTS (SELECT 1 FROM pg_type WHERE typname = 'InterventionStatus_new')
+     AND NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'InterventionStatus') THEN
     ALTER TYPE "InterventionStatus_new" RENAME TO "InterventionStatus";
   END IF;
 END $$;
@@ -71,43 +51,19 @@ CREATE INDEX IF NOT EXISTS "interventions_assignedToId_idx" ON "interventions"("
 
 DO $$
 BEGIN
-  IF NOT EXISTS (
-    SELECT 1
-    FROM pg_constraint c
-    JOIN pg_class r ON r.oid = c.conrelid
-    JOIN pg_namespace n ON n.oid = r.relnamespace
-    WHERE c.conname = 'interventions_assignedToId_fkey'
-      AND r.relname = 'interventions'
-      AND n.nspname = 'public'
-  ) THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'interventions_assignedToId_fkey') THEN
     ALTER TABLE "interventions"
       ADD CONSTRAINT "interventions_assignedToId_fkey"
       FOREIGN KEY ("assignedToId") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
   END IF;
 
-  IF NOT EXISTS (
-    SELECT 1
-    FROM pg_constraint c
-    JOIN pg_class r ON r.oid = c.conrelid
-    JOIN pg_namespace n ON n.oid = r.relnamespace
-    WHERE c.conname = 'intervento_logs_interventoId_fkey'
-      AND r.relname = 'intervento_logs'
-      AND n.nspname = 'public'
-  ) THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'intervento_logs_interventoId_fkey') THEN
     ALTER TABLE "intervento_logs"
       ADD CONSTRAINT "intervento_logs_interventoId_fkey"
       FOREIGN KEY ("interventoId") REFERENCES "interventions"("id") ON DELETE CASCADE ON UPDATE CASCADE;
   END IF;
 
-  IF NOT EXISTS (
-    SELECT 1
-    FROM pg_constraint c
-    JOIN pg_class r ON r.oid = c.conrelid
-    JOIN pg_namespace n ON n.oid = r.relnamespace
-    WHERE c.conname = 'intervento_logs_userId_fkey'
-      AND r.relname = 'intervento_logs'
-      AND n.nspname = 'public'
-  ) THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'intervento_logs_userId_fkey') THEN
     ALTER TABLE "intervento_logs"
       ADD CONSTRAINT "intervento_logs_userId_fkey"
       FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
