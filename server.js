@@ -6,8 +6,17 @@ import { createServer } from 'node:http'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
+import { PrismaClient } from '@prisma/client'
 import { config } from './config.js'
 import prisma, { isDatabaseConfigured } from './src/db/prisma.js'
+
+const bootstrapPrisma = new PrismaClient()
+
+async function initDatabase() {
+  await bootstrapPrisma.$connect()
+}
+
+await initDatabase()
 
 const {
   PORT,
@@ -1193,7 +1202,11 @@ const ensureAdminUser = async () => {
   }
 }
 
-await ensureAdminUser()
+try {
+  await ensureAdminUser()
+} catch (err) {
+  console.error('Admin bootstrap skipped:', err)
+}
 
 const ticketsCount = getRow('SELECT COUNT(*) AS total FROM tickets')?.total || 0
 const interventionsCount = getRow('SELECT COUNT(*) AS total FROM interventions')?.total || 0
