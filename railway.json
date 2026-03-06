@@ -1,6 +1,6 @@
 {
   "$schema": "https://railway.app/railway.schema.json",
   "build": {
-    "cmd": "pnpm prisma:deploy && pnpm build"
+    "cmd": "bash scripts/railway-build.sh"
   }
 }
