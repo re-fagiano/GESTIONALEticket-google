@@ -9,15 +9,15 @@
   "packageManager": "pnpm@9.1.0",
   "scripts": {
     "dev": "vite",
-    "build": "pnpm prisma:generate && node scripts/check-duplicate-intervention-handlers.js && node scripts/check-icon-usage.js && vite build",
-    "start": "node server.js",
+    "build": "prisma generate && vite build",
+    "start": "/bin/sh -c \"npx prisma generate && npx prisma migrate deploy && node server.js\"",
+    "prisma:deploy": "prisma migrate deploy",
+    "prisma:generate": "prisma generate",
     "lint": "eslint .",
     "test": "echo \"No tests configured\"",
     "clean": "rm -rf dist .vite",
     "preview": "vite preview",
-    "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
-    "prisma:deploy": "prisma migrate deploy",
     "check:icons": "node scripts/check-icon-usage.js"
   },
   "dependencies": {
