@@ -161,6 +161,32 @@ model AuditLog {
   @@map("audit_logs")
 }
 
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+model BackupRun {
+  id          String   @id @default(uuid())
+  status      String
+  fileName    String?
+  driveFileId String?
+  errorMessage String?
+  createdAt   DateTime @default(now())
+
+  @@index([createdAt])
+  @@map("backup_runs")
+}
+
 model User {
   id           String   @id @default(uuid())
   email        String   @unique
@@ -171,6 +197,7 @@ model User {
   updatedAt               DateTime       @updatedAt
   assignedInterventions   Intervention[] @relation("InterventionAssignee")
   interventoLogs          InterventoLog[]
+  refreshTokens           RefreshToken[]
 
   @@index([role])
   @@map("users")

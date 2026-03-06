@@ -6,17 +6,8 @@ import { createServer } from 'node:http'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
-import { PrismaClient } from '@prisma/client'
 import { config } from './config.js'
 import prisma, { isDatabaseConfigured } from './src/db/prisma.js'
-
-const bootstrapPrisma = new PrismaClient()
-
-async function initDatabase() {
-  await bootstrapPrisma.$connect()
-}
-
-await initDatabase()
 
 const {
   PORT,
@@ -1083,19 +1074,26 @@ Content-Type: application/json
   })
 }
 
-const readBackupDataset = () => ({
-  users: getAll('SELECT id, username, email, role, status, approved, operator_code, created_at, updated_at FROM users ORDER BY created_at ASC'),
-  tickets: getAll('SELECT * FROM tickets ORDER BY created_at ASC'),
-  interventions: getAll('SELECT * FROM interventions ORDER BY created_at ASC'),
-  customers: getAll('SELECT * FROM customers ORDER BY created_at ASC'),
-  inventory: getAll('SELECT * FROM inventory ORDER BY created_at ASC'),
-})
+const readBackupDataset = async () => {
+  if (shouldUsePrisma()) {
+    const [users, tickets, interventions, customers, inventory] = await Promise.all([
+      prisma.user.findMany({ orderBy: { createdAt: 'asc' } }),
+      prisma.ticket.findMany({ orderBy: { createdAt: 'asc' } }),
+      prisma.intervention.findMany({ orderBy: { createdAt: 'asc' } }),
+      prisma.customer.findMany({ orderBy: { createdAt: 'asc' } }),
+      prisma.inventoryItem.findMany({ orderBy: { createdAt: 'asc' } }),
+    ])
+    return { users, tickets, interventions, customers, inventory }
+  }
 
-const buildBackupPayload = () => ({
-  exportedAt: nowIso(),
-  source: 'server',
-  ...readBackupDataset(),
-})
+  return {
+    users: getAll('SELECT id, username, email, role, status, approved, operator_code, created_at, updated_at FROM users ORDER BY created_at ASC'),
+    tickets: getAll('SELECT * FROM tickets ORDER BY created_at ASC'),
+    interventions: getAll('SELECT * FROM interventions ORDER BY created_at ASC'),
+    customers: getAll('SELECT * FROM customers ORDER BY created_at ASC'),
+    inventory: getAll('SELECT * FROM inventory ORDER BY created_at ASC'),
+  }
+}
 
 const toCsvValue = (value) => {
   if (value === null || value === undefined) return ''
@@ -1111,17 +1109,43 @@ const toCsvBuffer = (headers = [], rows = []) => {
   return Buffer.from(`${csvRows.join('\n')}\n`, 'utf-8')
 }
 
-const storeBackupRun = ({ status, fileName = '', driveFileId = '', errorMessage = '' }) => {
+const storeBackupRun = async ({ status, fileName = '', driveFileId = '', errorMessage = '' }) => {
+  if (shouldUsePrisma()) {
+    await prisma.backupRun.create({
+      data: {
+        status,
+        fileName: fileName || null,
+        driveFileId: driveFileId || null,
+        errorMessage: errorMessage || null,
+      },
+    })
+    return
+  }
+
   runQuery(
     'INSERT INTO backup_runs (id, status, file_name, drive_file_id, error_message, created_at) VALUES (?, ?, ?, ?, ?, ?)',
     [ensureId(), status, fileName || null, driveFileId || null, errorMessage || null, nowIso()],
   )
 }
 
-const getLastBackupRun = () => getRow('SELECT id, status, file_name, drive_file_id, error_message, created_at FROM backup_runs ORDER BY created_at DESC LIMIT 1')
+const getLastBackupRun = async () => {
+  if (shouldUsePrisma()) {
+    const row = await prisma.backupRun.findFirst({ orderBy: { createdAt: 'desc' } })
+    if (!row) return null
+    return {
+      id: row.id,
+      status: row.status,
+      file_name: row.fileName,
+      drive_file_id: row.driveFileId,
+      error_message: row.errorMessage,
+      created_at: row.createdAt?.toISOString?.() || row.createdAt,
+    }
+  }
+  return getRow('SELECT id, status, file_name, drive_file_id, error_message, created_at FROM backup_runs ORDER BY created_at DESC LIMIT 1')
+}
 
 const performBackup = async ({ triggeredBy = 'manual' } = {}) => {
-  const payload = buildBackupPayload()
+  const payload = await buildBackupPayload()
   const backupFileName = `backup-${formatBackupTimestampForName(new Date())}.json`
   const backupJson = Buffer.from(JSON.stringify(payload, null, 2), 'utf-8')
   try {
@@ -1129,18 +1153,18 @@ const performBackup = async ({ triggeredBy = 'manual' } = {}) => {
     if (!accessToken) {
       const message = 'Google Drive non configurato: backup salvato solo localmente/log.'
       console.warn(`[backup] ${message}`)
-      storeBackupRun({ status: 'degraded', fileName: backupFileName, errorMessage: message })
+      await storeBackupRun({ status: 'degraded', fileName: backupFileName, errorMessage: message })
       return { ok: true, mode: 'degraded', fileName: backupFileName, exportedAt: payload.exportedAt, message }
     }
     const folderId = await ensureDriveFolder(accessToken)
     const created = await uploadBackupToDrive({ accessToken, fileName: backupFileName, jsonBuffer: backupJson, folderId })
     const driveFileId = created?.id || ''
-    storeBackupRun({ status: 'success', fileName: backupFileName, driveFileId })
+    await storeBackupRun({ status: 'success', fileName: backupFileName, driveFileId })
     console.log(`[backup] ${triggeredBy} completato: ${backupFileName} (${driveFileId || 'no-id'})`)
     return { ok: true, mode: 'drive', fileName: backupFileName, exportedAt: payload.exportedAt, driveFileId }
   } catch (error) {
     const message = error?.message || 'Errore backup sconosciuto'
-    storeBackupRun({ status: 'failed', fileName: backupFileName, errorMessage: message })
+    await storeBackupRun({ status: 'failed', fileName: backupFileName, errorMessage: message })
     logEvent('error', 'backup_failed', { error: message })
     return { ok: false, mode: 'failed', fileName: backupFileName, exportedAt: payload.exportedAt, message }
   }
@@ -1202,11 +1226,6 @@ const ensureAdminUser = async () => {
   }
 }
 
-try {
-  await ensureAdminUser()
-} catch (err) {
-  console.error('Admin bootstrap skipped:', err)
-}
 
 const ticketsCount = getRow('SELECT COUNT(*) AS total FROM tickets')?.total || 0
 const interventionsCount = getRow('SELECT COUNT(*) AS total FROM interventions')?.total || 0
@@ -1701,6 +1720,55 @@ const ensureRouteAuthorization = (req, res, user, pathname) => {
   return false
 }
 
+const createRefreshTokenData = (token, userId, id = ensureId()) => ({
+  id,
+  userId,
+  tokenHash: hashValue(token),
+  expiresAt: new Date(Date.now() + REFRESH_TOKEN_TTL_SECONDS * 1000),
+  revokedAt: null,
+})
+
+const createRefreshTokenRecord = async ({ id, userId, token, createdAt = nowIso() }) => {
+  if (shouldUsePrisma()) {
+    const data = createRefreshTokenData(token, userId, id)
+    await prisma.refreshToken.create({ data })
+    return
+  }
+  runQuery(
+    'INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at, revoked_at, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+    [id, userId, hashValue(token), new Date(Date.now() + REFRESH_TOKEN_TTL_SECONDS * 1000).toISOString(), null, createdAt],
+  )
+}
+
+const getRefreshTokenRecord = async (id) => {
+  if (shouldUsePrisma()) {
+    const record = await prisma.refreshToken.findUnique({ where: { id } })
+    if (!record) return null
+    return {
+      id: record.id,
+      user_id: record.userId,
+      token_hash: record.tokenHash,
+      expires_at: record.expiresAt?.toISOString?.() || record.expiresAt,
+      revoked_at: record.revokedAt?.toISOString?.() || record.revokedAt,
+    }
+  }
+  return getRow('SELECT * FROM refresh_tokens WHERE id = ?', [id])
+}
+
+const revokeRefreshTokenRecord = async (id, revokedAt = nowIso()) => {
+  if (shouldUsePrisma()) {
+    await prisma.refreshToken.updateMany({ where: { id }, data: { revokedAt: new Date(revokedAt) } })
+    return
+  }
+  runQuery('UPDATE refresh_tokens SET revoked_at = ? WHERE id = ?', [revokedAt, id])
+}
+
+const buildBackupPayload = async () => ({
+  exportedAt: nowIso(),
+  source: 'server',
+  ...(await readBackupDataset()),
+})
+
 const handleApiRequest = async (req, res, url) => {
   if (url.pathname === '/api/health' && req.method === 'GET') {
     const user = ensureAuth(req, res)
@@ -1739,10 +1807,7 @@ const handleApiRequest = async (req, res, url) => {
         if (!passwordOk) return respond(res, 401, { error: 'Credenziali errate.', code: 'invalid_credentials' })
         const user = { id: dbUser.id, email: dbUser.email, username: dbUser.email, role: normalizeUserRole(dbUser.role), operatorCode: dbUser.operatorCode }
         const { accessToken, refreshToken, refreshId, csrfToken } = createAuthTokens(user)
-        runQuery(
-          'INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at, revoked_at, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-          [refreshId, user.id, hashValue(refreshToken), new Date(Date.now() + REFRESH_TOKEN_TTL_SECONDS * 1000).toISOString(), null, nowIso()],
-        )
+        await createRefreshTokenRecord({ id: refreshId, userId: user.id, token: refreshToken })
         setAuthCookies(res, accessToken, refreshToken, csrfToken)
         return respond(res, 200, { accessToken, user })
       }
@@ -1759,10 +1824,7 @@ const handleApiRequest = async (req, res, url) => {
       }
       const authUser = { id: user.id, username: user.username, email: user.email || user.username, role: normalizeUserRole(user.role), status: user.status, approved: Boolean(user.approved), operatorCode: user.operator_code }
       const { accessToken, refreshToken, refreshId, csrfToken } = createAuthTokens(authUser)
-      runQuery(
-        'INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at, revoked_at, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-        [refreshId, user.id, hashValue(refreshToken), new Date(Date.now() + REFRESH_TOKEN_TTL_SECONDS * 1000).toISOString(), null, nowIso()],
-      )
+      await createRefreshTokenRecord({ id: refreshId, userId: user.id, token: refreshToken })
       setAuthCookies(res, accessToken, refreshToken, csrfToken)
       return respond(res, 200, { accessToken, user: authUser })
     } catch (error) {
@@ -1798,10 +1860,7 @@ const handleApiRequest = async (req, res, url) => {
         })
         const user = { id: created.id, email: created.email, username: created.email, role: created.role, operatorCode: created.operatorCode }
         const { accessToken, refreshToken, refreshId, csrfToken } = createAuthTokens(user)
-        runQuery(
-          'INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at, revoked_at, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-          [refreshId, user.id, hashValue(refreshToken), new Date(Date.now() + REFRESH_TOKEN_TTL_SECONDS * 1000).toISOString(), null, nowIso()],
-        )
+        await createRefreshTokenRecord({ id: refreshId, userId: user.id, token: refreshToken })
         setAuthCookies(res, accessToken, refreshToken, csrfToken)
         return respond(res, 201, { accessToken, user })
       }
@@ -1823,10 +1882,7 @@ const handleApiRequest = async (req, res, url) => {
         [user.id, user.username, user.email, await hashPassword(password), user.role, user.status, user.approved, user.operatorCode, nowIso(), nowIso()],
       )
       const { accessToken, refreshToken, refreshId, csrfToken } = createAuthTokens(user)
-      runQuery(
-        'INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at, revoked_at, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-        [refreshId, user.id, hashValue(refreshToken), new Date(Date.now() + REFRESH_TOKEN_TTL_SECONDS * 1000).toISOString(), null, nowIso()],
-      )
+      await createRefreshTokenRecord({ id: refreshId, userId: user.id, token: refreshToken })
       setAuthCookies(res, accessToken, refreshToken, csrfToken)
       return respond(res, 201, { accessToken, user: { id: user.id, username: user.username, email: user.email, role: user.role, status: user.status, approved: true, operatorCode: user.operatorCode } })
     } catch (error) {
@@ -1843,7 +1899,7 @@ const handleApiRequest = async (req, res, url) => {
       clearAuthCookies(res)
       return respond(res, 401, { error: 'Sessione scaduta.', code: 'session_expired' })
     }
-    const record = getRow('SELECT * FROM refresh_tokens WHERE id = ?', [payload.jti])
+    const record = await getRefreshTokenRecord(payload.jti)
     if (!record || record.revoked_at || record.token_hash !== hashValue(refreshToken) || new Date(record.expires_at).getTime() <= Date.now()) {
       clearAuthCookies(res)
       return respond(res, 401, { error: 'Sessione scaduta.', code: 'session_expired' })
@@ -1861,12 +1917,9 @@ const handleApiRequest = async (req, res, url) => {
       clearAuthCookies(res)
       return respond(res, 401, { error: 'Sessione non valida.', code: 'session_invalid' })
     }
-    runQuery('UPDATE refresh_tokens SET revoked_at = ? WHERE id = ?', [nowIso(), record.id])
+    await revokeRefreshTokenRecord(record.id)
     const next = createAuthTokens(user)
-    runQuery(
-      'INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at, revoked_at, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-      [next.refreshId, user.id, hashValue(next.refreshToken), new Date(Date.now() + REFRESH_TOKEN_TTL_SECONDS * 1000).toISOString(), null, nowIso()],
-    )
+    await createRefreshTokenRecord({ id: next.refreshId, userId: user.id, token: next.refreshToken })
     setAuthCookies(res, next.accessToken, next.refreshToken, next.csrfToken)
     return respond(res, 200, { accessToken: next.accessToken, user: { ...user, approved: Boolean(user.approved) } })
   }
@@ -1877,7 +1930,7 @@ const handleApiRequest = async (req, res, url) => {
     const refreshToken = cookies.refresh_token || ''
     const payload = verifyJwt(refreshToken, JWT_REFRESH_SECRET)
     if (payload?.jti) {
-      runQuery('UPDATE refresh_tokens SET revoked_at = ? WHERE id = ?', [nowIso(), payload.jti])
+      await revokeRefreshTokenRecord(payload.jti)
     }
     clearAuthCookies(res)
     return respond(res, 200, { ok: true })
@@ -1917,6 +1970,24 @@ const handleApiRequest = async (req, res, url) => {
   if (!checkApiRateLimit(req, res, user.id)) return
 
   if (req.method === 'GET' && url.pathname === '/api/bootstrap') {
+    if (shouldUsePrisma()) {
+      const [customers, tickets, interventions, inventory] = await Promise.all([
+        prisma.customer.findMany(),
+        prisma.ticket.findMany(),
+        prisma.intervention.findMany({ include: { logs: true } }),
+        prisma.inventoryItem.findMany(),
+      ])
+      return respond(res, 200, {
+        customers,
+        tickets,
+        interventions: interventions.map(mapPrismaIntervention),
+        sparePartsOrders: [],
+        quotes: [],
+        inventory,
+        settings: [],
+      })
+    }
+
     return respond(res, 200, {
       customers: getAll('SELECT * FROM customers').map(mapCustomerRow),
       tickets: getAll('SELECT * FROM tickets').map(mapTicketRow),
@@ -2735,19 +2806,19 @@ const handleApiRequest = async (req, res, url) => {
     if (!ensureCsrf(req, res)) return
     const result = await performBackup({ triggeredBy: 'manual-api' })
     if (!result.ok) {
-      return respond(res, 503, { error: 'Backup non riuscito.', detail: result.message, lastRun: getLastBackupRun() })
+      return respond(res, 503, { error: 'Backup non riuscito.', detail: result.message, lastRun: await getLastBackupRun() })
     }
-    return respond(res, 200, { message: 'Backup completato.', result, lastRun: getLastBackupRun() })
+    return respond(res, 200, { message: 'Backup completato.', result, lastRun: await getLastBackupRun() })
   }
 
   if (req.method === 'GET' && url.pathname === '/api/admin/backup/latest') {
     if (!ensureRole(res, user, ['ADMIN'])) return
-    return respond(res, 200, { lastRun: getLastBackupRun() })
+    return respond(res, 200, { lastRun: await getLastBackupRun() })
   }
 
   if (req.method === 'GET' && url.pathname === '/api/admin/export/json') {
     if (!ensureRole(res, user, ['ADMIN'])) return
-    const payload = buildBackupPayload()
+    const payload = await buildBackupPayload()
     const filename = `backup-${formatBackupTimestampForName(new Date())}.json`
     res.writeHead(200, {
       'Content-Type': 'application/json',
@@ -2938,6 +3009,10 @@ const server = createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://localhost:${runtimePort}`)
 
+    if (url.pathname === '/healthz' && req.method === 'GET') {
+      return respond(res, 200, { ok: true, prisma: shouldUsePrisma(), time: nowIso() })
+    }
+
     if (url.pathname.startsWith('/api/')) {
       return handleApiRequest(req, res, url)
     }
@@ -2952,12 +3027,33 @@ const server = createServer(async (req, res) => {
   }
 })
 
-initializePrismaAvailability().then(() => ensurePostgresSearchIndexes()).finally(() => {
+const startup = async () => {
+  await initializePrismaAvailability()
+
+  if (shouldUsePrisma()) {
+    await ensurePostgresSearchIndexes()
+    try {
+      await ensureAdminUser()
+    } catch (error) {
+      logEvent('warn', 'admin_seed_failed', { error: error?.message || 'unknown_error' })
+    }
+  } else {
+    logEvent('warn', 'startup_without_prisma')
+  }
+
   server.listen(runtimePort, () => {
     logEvent('info', 'server_started', { url: `http://localhost:${runtimePort}` })
     if (!isProduction) {
       logEvent('info', 'default_users_available')
     }
+    scheduleAutomaticBackup()
+  })
+}
+
+startup().catch((error) => {
+  logEvent('error', 'startup_failed', { error: error?.message || 'unknown_error' })
+  server.listen(runtimePort, () => {
+    logEvent('warn', 'server_started_degraded', { url: `http://localhost:${runtimePort}` })
     scheduleAutomaticBackup()
   })
 })
