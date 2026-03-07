@@ -10,7 +10,7 @@
   "scripts": {
     "dev": "vite",
     "build": "prisma generate && vite build",
-    "start": "/bin/sh -c \"npx prisma generate && npx prisma migrate deploy && node server.js\"",
+    "start": "pnpm prisma migrate deploy && node server.js",
     "prisma:deploy": "prisma migrate deploy",
     "prisma:generate": "prisma generate",
     "lint": "eslint .",
