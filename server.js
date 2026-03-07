@@ -10,7 +10,6 @@ import { config } from './config.js'
 import prisma, { isDatabaseConfigured } from './src/db/prisma.js'
 
 const {
-  PORT,
   DEEPSEEK_API_URL,
   DEEPSEEK_API_KEY,
   RAG_API_URL,
@@ -3003,7 +3002,7 @@ const scheduleAutomaticBackup = () => {
   }, backupIntervalMs)
 }
 
-const runtimePort = process.env.PORT || PORT
+const runtimePort = process.env.PORT || 3000
 
 const server = createServer(async (req, res) => {
   try {
