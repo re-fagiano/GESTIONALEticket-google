@@ -60,9 +60,10 @@ Il backend ora supporta PostgreSQL via `DATABASE_URL` (Railway) con Prisma.
 
 ### Deploy su Railway (produzione)
 1. Verifica nel service backend che sia presente `DATABASE_URL=postgresql://...` e che punti al database Postgres corretto in Architecture.
-2. In produzione **non** usare `prisma migrate dev`.
-3. Esegui obbligatoriamente le migration con `pnpm prisma:deploy`.
-4. Questo repository include `railway.json` con build command `pnpm prisma:deploy && pnpm build`, così le tabelle Prisma (es. `users`) vengono create/aggiornate ad ogni deploy.
+2. Imposta anche `NODE_VERSION=22` nelle variabili ambiente Railway per usare Node.js compatibile con `node:sqlite`.
+3. In produzione **non** usare `prisma migrate dev`.
+4. Esegui obbligatoriamente le migration con `pnpm prisma:deploy`.
+5. Questo repository include `railway.json` con build command `pnpm prisma:deploy && pnpm build`, così le tabelle Prisma (es. `users`) vengono create/aggiornate ad ogni deploy.
 
 ### Note operative
 - Se `DATABASE_URL` manca, il server termina con errore esplicito per evitare fallback legacy non coerenti.
