@@ -112,6 +112,7 @@ export default function AppPage() {
   const [customers, setCustomers] = useState(() => sanitizeCustomers(loadCache('customers', initialCustomers), initialCustomers));
   const [tickets, setTickets] = useState(() => sanitizeTickets(loadCache('tickets', initialTickets), initialTickets));
   const [interventions, setInterventions] = useState(() => sanitizeInterventions(loadCache('interventions', initialInterventions), initialInterventions));
+  const interventionsRef = useRef(interventions);
   const [inventory, setInventory] = useState(() => sanitizeInventoryList(loadCache('inventory', initialInventory), initialInventory));
   const [settings, setSettings] = useState(() => loadCache('settings', []));
   const [storageWarning, setStorageWarning] = useState(null);
@@ -191,6 +192,10 @@ export default function AppPage() {
     if (!saveCache('interventions', sanitizeInterventions(interventions, initialInterventions))) {
       setStorageWarning('Impossibile salvare gli interventi nel browser: storage disabilitato.');
     }
+  }, [interventions]);
+
+  useEffect(() => {
+    interventionsRef.current = interventions;
   }, [interventions]);
 
   useEffect(() => {
@@ -2333,7 +2338,7 @@ const buildBackup = () => ({
           calendarDateRef.current = info.startStr || info.view.currentStart?.toISOString() || nowIso();
         },
         eventDrop: async (info) => {
-          const intervention = interventions.find((entry) => entry.id === info.event.id);
+          const intervention = interventionsRef.current.find((entry) => entry.id === info.event.id);
           if (!intervention) {
             info.revert();
             return;
@@ -2346,7 +2351,7 @@ const buildBackup = () => ({
           addToast('La durata non è ancora modificabile: puoi spostare solo data e ora di inizio.', 'warning');
         },
         eventClick: (info) => {
-          const intervention = interventions.find((entry) => entry.id === info.event.id);
+          const intervention = interventionsRef.current.find((entry) => entry.id === info.event.id);
           if (!intervention) return;
           openInterventionDetails(intervention);
         },
