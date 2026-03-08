@@ -2363,9 +2363,9 @@ const handleApiRequest = async (req, res, url) => {
   }
 
 
-  if (shouldUsePrisma() && req.method === 'PATCH' && url.pathname.startsWith('/api/interventi/')) {
+  if (shouldUsePrisma() && req.method === 'PATCH' && (url.pathname.startsWith('/api/interventions/') || url.pathname.startsWith('/api/interventi/'))) {
     if (!ensureRole(res, user, ['ADMIN', 'OPERATOR'])) return
-    const id = match(/^\/api\/interventi\/(.+)$/)
+    const id = match(/^\/api\/(?:interventi|interventions)\/(.+)$/)
     if (!id) return respond(res, 404, { error: 'Intervento non trovato.' })
     const payload = await readJsonBody(req)
     const status = sanitizeString(payload?.status)
@@ -2714,9 +2714,9 @@ const handleApiRequest = async (req, res, url) => {
   }
 
 
-  if (req.method === 'PATCH' && url.pathname.startsWith('/api/interventi/')) {
+  if (req.method === 'PATCH' && (url.pathname.startsWith('/api/interventions/') || url.pathname.startsWith('/api/interventi/'))) {
     if (!ensureRole(res, user, ['ADMIN', 'OPERATOR'])) return
-    const id = match(/^\/api\/interventi\/(.+)$/)
+    const id = match(/^\/api\/(?:interventi|interventions)\/(.+)$/)
     if (!id) return respond(res, 404, { error: 'Intervento non trovato.' })
     const payload = await readJsonBody(req)
     const status = sanitizeString(payload?.status)
@@ -2896,7 +2896,17 @@ const handleDeepSeekProxy = async (req, res) => {
   const deepSeekApiKey = (process.env.DEEPSEEK_API_KEY || DEEPSEEK_API_KEY || '').trim()
 
   if (!deepSeekApiKey) {
-    return respond(res, 500, { error: 'DEEPSEEK_API_KEY non configurata lato server.' })
+    return respond(res, 200, {
+      choices: [
+        {
+          message: {
+            content: 'Diagnosi fallback: AI non configurata. Verifica alimentazione, cablaggi, componenti principali e prova funzionale prima di ordinare ricambi.',
+          },
+        },
+      ],
+      fallback: true,
+      reason: 'DEEPSEEK_API_KEY missing',
+    })
   }
 
   let payload = {}

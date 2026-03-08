@@ -2256,10 +2256,10 @@ const buildBackup = () => ({
       const typeLabel = interventionTypeMeta[item.type]?.singularLabel || 'Intervento';
       const title = `${typeLabel} • ${customer?.name || 'Cliente non assegnato'}`;
       const statusColors = {
-        pendente: '#2563eb',
-        in_corso: '#d97706',
-        completato: '#16a34a',
-        chiuso: '#64748b'
+        pendente: 'gray',
+        in_lavorazione: 'blue',
+        completato: 'green',
+        annullato: 'red'
       };
       const eventColor = statusColors[item.status] || '#334155';
       return {
