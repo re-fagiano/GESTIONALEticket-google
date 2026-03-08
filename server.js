@@ -356,9 +356,12 @@ const validateTicketPayload = (payload) => {
 const validateInventoryPayload = (payload) => {
   const nameValidation = validators.requiredString(payload?.name, 'Nome ricambio obbligatorio.')
   if (nameValidation.error) return nameValidation
+  const id = ensureId(payload?.id)
+  const code = sanitizeString(payload?.code)
   return {
     value: {
-      id: ensureId(payload?.id),
+      id,
+      code: code || id,
       name: nameValidation.value,
       location: sanitizeString(payload?.location),
       qty: sanitizeNumber(payload?.qty, 0),
@@ -470,6 +473,7 @@ const mapTicketRow = (row) => (row ? ({
 
 const mapInventoryRow = (row) => (row ? ({
   id: row.id,
+  code: row.code || row.id,
   name: row.name,
   location: row.location,
   qty: row.qty,
@@ -792,6 +796,7 @@ db.exec(`
   );
   CREATE TABLE IF NOT EXISTS inventory (
     id TEXT PRIMARY KEY,
+    code TEXT,
     name TEXT NOT NULL,
     location TEXT,
     qty INTEGER,
@@ -887,6 +892,7 @@ db.exec(`
 `)
 
 try { db.exec('ALTER TABLE inventory ADD COLUMN price_date TEXT') } catch { /* Column may already exist in migrated databases. */ }
+try { db.exec('ALTER TABLE inventory ADD COLUMN code TEXT') } catch { /* Column may already exist in migrated databases. */ }
 try { db.exec('ALTER TABLE users ADD COLUMN email TEXT UNIQUE') } catch { /* Column may already exist in migrated databases. */ }
 try { db.exec('ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT \'active\'') } catch { /* Column may already exist in migrated databases. */ }
 try { db.exec('ALTER TABLE users ADD COLUMN approved INTEGER NOT NULL DEFAULT 1') } catch { /* Column may already exist in migrated databases. */ }
@@ -895,6 +901,7 @@ try { db.exec('ALTER TABLE interventions ADD COLUMN assigned_to_id TEXT') } catc
 try { db.exec('ALTER TABLE interventions ADD COLUMN updated_by_user_id TEXT') } catch { /* Column may already exist in migrated databases. */ }
 
 try {
+  db.exec("UPDATE inventory SET code = id WHERE code IS NULL OR code = ''")
   db.exec("UPDATE users SET email = LOWER(username) WHERE email IS NULL OR email = ''")
   db.exec("UPDATE users SET status = COALESCE(NULLIF(status, ''), 'active')")
   db.exec('UPDATE users SET approved = COALESCE(approved, 1)')
@@ -1396,12 +1403,12 @@ const syncEntities = {
     validate: validateInventoryPayload,
     map: mapInventoryRow,
     insert: (value) => runQuery(
-      'INSERT INTO inventory (id, name, location, qty, price, min_qty, price_date, created_at, updated_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [value.id, value.name, value.location, value.qty, value.price, value.minQty, value.priceDate, nowIso(), value.updatedAt, Math.max(1, parseVersion(value.version) || 1)],
+      'INSERT INTO inventory (id, code, name, location, qty, price, min_qty, price_date, created_at, updated_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [value.id, value.code, value.name, value.location, value.qty, value.price, value.minQty, value.priceDate, nowIso(), value.updatedAt, Math.max(1, parseVersion(value.version) || 1)],
     ),
     update: (existing, value) => runQuery(
-      'UPDATE inventory SET name = ?, location = ?, qty = ?, price = ?, min_qty = ?, price_date = ?, updated_at = ?, version = ? WHERE id = ?',
-      [value.name, value.location, value.qty, value.price, value.minQty, value.priceDate, value.updatedAt, Math.max((parseVersion(existing.version) || 0) + 1, parseVersion(value.version) || 1), value.id],
+      'UPDATE inventory SET code = ?, name = ?, location = ?, qty = ?, price = ?, min_qty = ?, price_date = ?, updated_at = ?, version = ? WHERE id = ?',
+      [value.code, value.name, value.location, value.qty, value.price, value.minQty, value.priceDate, value.updatedAt, Math.max((parseVersion(existing.version) || 0) + 1, parseVersion(value.version) || 1), value.id],
     ),
   },
   interventions: {
@@ -2092,8 +2099,8 @@ const handleApiRequest = async (req, res, url) => {
         const { error, value } = validateInventoryPayload(item)
         if (error) throw new Error(error)
         runQuery(
-          'INSERT INTO inventory (id, name, location, qty, price, min_qty, price_date, created_at, updated_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-          [value.id, value.name, value.location, value.qty, value.price, value.minQty, value.priceDate, nowIso(), value.updatedAt, value.version || 1],
+          'INSERT INTO inventory (id, code, name, location, qty, price, min_qty, price_date, created_at, updated_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          [value.id, value.code, value.name, value.location, value.qty, value.price, value.minQty, value.priceDate, nowIso(), value.updatedAt, value.version || 1],
         )
       })
       settings.forEach((setting) => {
@@ -2134,6 +2141,7 @@ const handleApiRequest = async (req, res, url) => {
     rows.forEach((row) => {
       const payload = {
         id: row.id || row.codice || row.sku,
+        code: row.codice || row.code || row.sku || row.id,
         name: row.name || row.prodotto || row.nome,
         location: row.location || row.posizione || '',
         qty: row.qty || row.quantita || 0,
@@ -2146,8 +2154,9 @@ const handleApiRequest = async (req, res, url) => {
       if (existing) {
         const newQty = sanitizeNumber(existing.qty, 0) + sanitizeNumber(value.qty, 0)
         runQuery(
-          'UPDATE inventory SET name = ?, location = ?, qty = ?, price = ?, min_qty = ?, price_date = ?, updated_at = ?, version = ? WHERE id = ?',
+          'UPDATE inventory SET code = ?, name = ?, location = ?, qty = ?, price = ?, min_qty = ?, price_date = ?, updated_at = ?, version = ? WHERE id = ?',
           [
+            value.code,
             value.name,
             value.location,
             newQty,
@@ -2162,8 +2171,8 @@ const handleApiRequest = async (req, res, url) => {
         updatedItems.push(mapInventoryRow(getRow('SELECT * FROM inventory WHERE id = ?', [value.id])))
       } else {
         runQuery(
-          'INSERT INTO inventory (id, name, location, qty, price, min_qty, price_date, created_at, updated_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-          [value.id, value.name, value.location, value.qty, value.price, value.minQty, value.priceDate, nowIso(), value.updatedAt, 1],
+          'INSERT INTO inventory (id, code, name, location, qty, price, min_qty, price_date, created_at, updated_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          [value.id, value.code, value.name, value.location, value.qty, value.price, value.minQty, value.priceDate, nowIso(), value.updatedAt, 1],
         )
         updatedItems.push(mapInventoryRow(getRow('SELECT * FROM inventory WHERE id = ?', [value.id])))
       }
@@ -2539,10 +2548,10 @@ const handleApiRequest = async (req, res, url) => {
   if (req.method === 'GET' && url.pathname === '/api/inventory') {
     const { q, sortColumn, order, skip, take } = parseListQuery(url, {
       defaultSort: 'created_at',
-      allowedSort: ['created_at', 'updated_at', 'name', 'location', 'qty', 'price', 'min_qty'],
+      allowedSort: ['created_at', 'updated_at', 'code', 'name', 'location', 'qty', 'price', 'min_qty'],
     })
-    const where = q ? 'WHERE lower(name) LIKE ? OR lower(location) LIKE ?' : ''
-    const queryParams = q ? [`%${q}%`, `%${q}%`] : []
+    const where = q ? 'WHERE lower(code) LIKE ? OR lower(name) LIKE ? OR lower(location) LIKE ?' : ''
+    const queryParams = q ? [`%${q}%`, `%${q}%`, `%${q}%`] : []
     const rows = getAll(`SELECT * FROM inventory ${where} ORDER BY ${sortColumn} ${order} LIMIT ? OFFSET ?`, [...queryParams, take, skip])
     return respond(res, 200, rows.map(mapInventoryRow))
   }
@@ -2552,8 +2561,8 @@ const handleApiRequest = async (req, res, url) => {
     const { error, value } = validateInventoryPayload(payload)
     if (error) return respond(res, 400, { error })
     runQuery(
-      'INSERT INTO inventory (id, name, location, qty, price, min_qty, price_date, created_at, updated_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [value.id, value.name, value.location, value.qty, value.price, value.minQty, value.priceDate, nowIso(), value.updatedAt, 1],
+      'INSERT INTO inventory (id, code, name, location, qty, price, min_qty, price_date, created_at, updated_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [value.id, value.code, value.name, value.location, value.qty, value.price, value.minQty, value.priceDate, nowIso(), value.updatedAt, 1],
     )
     return respond(res, 201, mapInventoryRow(getRow('SELECT * FROM inventory WHERE id = ?', [value.id])))
   }
@@ -2571,8 +2580,8 @@ const handleApiRequest = async (req, res, url) => {
       return sendConflict(res, 'Conflitto magazzino: aggiorna i dati.', mapInventoryRow(existing))
     }
     runQuery(
-      'UPDATE inventory SET name = ?, location = ?, qty = ?, price = ?, min_qty = ?, price_date = ?, updated_at = ?, version = ? WHERE id = ?',
-      [value.name, value.location, value.qty, value.price, value.minQty, value.priceDate, value.updatedAt, existing.version + 1, id],
+      'UPDATE inventory SET code = ?, name = ?, location = ?, qty = ?, price = ?, min_qty = ?, price_date = ?, updated_at = ?, version = ? WHERE id = ?',
+      [value.code, value.name, value.location, value.qty, value.price, value.minQty, value.priceDate, value.updatedAt, existing.version + 1, id],
     )
     return respond(res, 200, mapInventoryRow(getRow('SELECT * FROM inventory WHERE id = ?', [id])))
   }
