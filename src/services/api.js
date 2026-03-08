@@ -368,7 +368,7 @@ export const deleteIntervention = async (id) => apiFetch({
 
 
 export const patchInterventoStatus = async (id, status) => apiFetch({
-  path: `/api/interventi/${id}`,
+  path: `/api/interventions/${id}`,
   options: { method: 'PATCH', body: JSON.stringify({ status }) },
 });
 
