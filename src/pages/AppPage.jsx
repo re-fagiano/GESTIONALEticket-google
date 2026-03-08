@@ -2418,11 +2418,17 @@ const buildBackup = () => ({
         </div>
 
         {showCalendarQuickAdd && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-            <div className="bg-white w-full max-w-xl rounded-xl shadow-2xl p-6">
+          <div
+            className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+            onClick={() => setShowCalendarQuickAdd(false)}
+          >
+            <div
+              className="bg-white w-full max-w-xl rounded-xl shadow-2xl p-6 max-h-[90vh] flex flex-col"
+              onClick={(e) => e.stopPropagation()}
+            >
               <h3 className="text-xl font-bold mb-1">Nuovo intervento</h3>
               <p className="text-sm text-slate-500 mb-4">{new Date(newIntervention.openedAt || nowIso()).toLocaleString('it-IT')}</p>
-              <div className="space-y-3">
+              <div className="space-y-3 overflow-y-auto pr-1">
                 <select
                   className="w-full border rounded p-2"
                   value={newIntervention.clientId}
@@ -2510,7 +2516,7 @@ const buildBackup = () => ({
                   )}
                 </div>
               </div>
-              <div className="flex justify-end gap-2 mt-4">
+              <div className="flex justify-end gap-2 mt-4 pt-3 border-t border-slate-100">
                 <button onClick={() => setShowCalendarQuickAdd(false)} className="px-4 py-2 text-slate-500">Chiudi</button>
                 <button onClick={handleAddIntervention} className="px-4 py-2 bg-indigo-600 text-white rounded">Salva intervento</button>
               </div>
