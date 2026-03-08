@@ -8,7 +8,10 @@ export default function ActiveTabContent(props) {
       console.warn('Vista non valida ignorata:', ViewComponent);
       return null;
     }
-    return <ViewComponent {...extraProps} />;
+    // Queste viste sono funzioni definite dentro AppPage:
+    // renderizzarle come <ViewComponent /> le farebbe rimontare a ogni re-render
+    // (perché cambia l'identità della funzione), causando perdita di focus negli input.
+    return ViewComponent(extraProps);
   };
 
   return (
