@@ -351,7 +351,7 @@ export const updateTicket = async (id, ticket) => apiFetchWithRetry({
   options: { method: 'PUT', body: JSON.stringify(ticket) },
 });
 
-export const createIntervention = async (intervention) => apiFetch({
+export const createIntervention = async (intervention) => apiFetchWithRetry({
   path: '/api/interventions',
   options: { method: 'POST', body: JSON.stringify(intervention) },
 });
