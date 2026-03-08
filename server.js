@@ -533,6 +533,27 @@ const mapInterventionRow = (row) => {
   }
 }
 
+const writeInterventoLogPrismaSafe = async ({ interventoId, userId = null, action = '', note = '' }) => {
+  if (!interventoId || !action) return
+  try {
+    await prisma.interventoLog.create({
+      data: {
+        interventoId,
+        userId: userId || null,
+        action,
+        note,
+      },
+    })
+  } catch (error) {
+    logEvent('warn', 'intervento_log_write_failed', {
+      interventoId,
+      userId,
+      action,
+      reason: error?.message || 'unknown_error',
+    })
+  }
+}
+
 const mapSparePartOrderRow = (row) => (row ? ({
   id: row.id,
   interventionId: row.intervention_id,
@@ -2289,13 +2310,11 @@ const handleApiRequest = async (req, res, url) => {
         additionalData: JSON.parse(value.additionalData || '{}'),
       },
     })
-    await prisma.interventoLog.create({
-      data: {
-        interventoId: created.id,
-        userId: user.id,
-        action: 'intervento_creato',
-        note: value.description || '',
-      },
+    await writeInterventoLogPrismaSafe({
+      interventoId: created.id,
+      userId: user.id,
+      action: 'intervento_creato',
+      note: value.description || '',
     })
     const enriched = await prisma.intervention.findUnique({ where: { id: created.id }, include: { logs: { orderBy: { createdAt: 'asc' } } } })
     return respond(res, 201, mapPrismaIntervention(enriched || created))
@@ -2337,7 +2356,7 @@ const handleApiRequest = async (req, res, url) => {
       await prisma.note.create({ data: { interventionId: id, content: sanitizeString(payload.notes) } })
     }
     for (const entry of logsToWrite) {
-      await prisma.interventoLog.create({ data: { interventoId: id, userId: user.id, action: entry.action, note: entry.note } })
+      await writeInterventoLogPrismaSafe({ interventoId: id, userId: user.id, action: entry.action, note: entry.note })
     }
     const enriched = await prisma.intervention.findUnique({ where: { id: updated.id }, include: { logs: { orderBy: { createdAt: 'asc' } } } })
     return respond(res, 200, mapPrismaIntervention(enriched || updated))
@@ -2355,8 +2374,11 @@ const handleApiRequest = async (req, res, url) => {
       where: { id },
       data: { status, version: { increment: 1 } },
     })
-    await prisma.interventoLog.create({
-      data: { interventoId: id, userId: user.id, action: 'status_changed', note: `Nuovo stato: ${status}` },
+    await writeInterventoLogPrismaSafe({
+      interventoId: id,
+      userId: user.id,
+      action: 'status_changed',
+      note: `Nuovo stato: ${status}`,
     })
     const enriched = await prisma.intervention.findUnique({ where: { id: updated.id }, include: { logs: { orderBy: { createdAt: 'asc' } } } })
     return respond(res, 200, {
@@ -2385,12 +2407,20 @@ const handleApiRequest = async (req, res, url) => {
       },
     })
     await prisma.intervention.update({ where: { id: source.id }, data: { status: 'completato', closedAt: new Date(), version: { increment: 1 } } })
-    await prisma.interventoLog.createMany({
-      data: [
-        { interventoId: source.id, userId: user.id, action: 'converted_to_repair', note: `Riparazione creata: ${created.id}` },
-        { interventoId: created.id, userId: user.id, action: 'created_from_call', note: `Da chiamata: ${source.id}` },
-      ],
-    })
+    await Promise.all([
+      writeInterventoLogPrismaSafe({
+        interventoId: source.id,
+        userId: user.id,
+        action: 'converted_to_repair',
+        note: `Riparazione creata: ${created.id}`,
+      }),
+      writeInterventoLogPrismaSafe({
+        interventoId: created.id,
+        userId: user.id,
+        action: 'created_from_call',
+        note: `Da chiamata: ${source.id}`,
+      }),
+    ])
     const enriched = await prisma.intervention.findUnique({ where: { id: created.id }, include: { logs: { orderBy: { createdAt: 'asc' } } } })
     return respond(res, 201, mapPrismaIntervention(enriched || created))
   }
