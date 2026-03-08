@@ -1578,8 +1578,13 @@ const buildBackup = () => ({
       setInterventionAiSuggestion(content);
     } catch (error) {
       const offline = buildOfflineSuggestion(safeSubject, safeDescription);
+      const status = Number(error?.status || error?.payload?.status || 0);
       let message = error?.message || 'Errore connessione AI.';
-      if (message.toLowerCase().includes('failed to fetch')) {
+      if (status === 403) {
+        message = 'DeepSeek non autorizzato (403). Verifica DEEPSEEK_API_KEY lato server e i permessi del provider.';
+      } else if (status === 502 || status === 503) {
+        message = 'Proxy DeepSeek temporaneamente non disponibile. Procedi pure a salvare l\'intervento e riprova la diagnosi più tardi.';
+      } else if (message.toLowerCase().includes('failed to fetch')) {
         message = 'Impossibile contattare il proxy DeepSeek (/api/deepseek). Verifica che il server sia avviato e che la variabile DEEPSEEK_API_KEY sia impostata lato backend.';
       }
       setInterventionAiSuggestion(offline);
@@ -1948,6 +1953,15 @@ const buildBackup = () => ({
             value={toLocalDateTimeInput(newIntervention.openedAt)}
             onChange={(e) => setNewIntervention((p) => ({ ...p, type: typeKey, openedAt: new Date(e.target.value).toISOString() }))}
           />
+          <select
+            className="w-full border rounded p-2"
+            value={newIntervention.assignedToId || ''}
+            onChange={(e) => setNewIntervention((p) => ({ ...p, type: typeKey, assignedToId: e.target.value }))}
+            disabled={authState.user?.role !== 'ADMIN'}
+          >
+            <option value="">Nessun operatore assegnato</option>
+            {authState.user && <option value={authState.user.id}>Operatore corrente ({authState.user.username || authState.user.email})</option>}
+          </select>
           <textarea
             className="w-full border rounded p-2"
             placeholder="Descrizione"
@@ -2404,11 +2418,17 @@ const buildBackup = () => ({
         </div>
 
         {showCalendarQuickAdd && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-            <div className="bg-white w-full max-w-xl rounded-xl shadow-2xl p-6">
+          <div
+            className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+            onClick={() => setShowCalendarQuickAdd(false)}
+          >
+            <div
+              className="bg-white w-full max-w-xl rounded-xl shadow-2xl p-6 max-h-[90vh] flex flex-col"
+              onClick={(e) => e.stopPropagation()}
+            >
               <h3 className="text-xl font-bold mb-1">Nuovo intervento</h3>
               <p className="text-sm text-slate-500 mb-4">{new Date(newIntervention.openedAt || nowIso()).toLocaleString('it-IT')}</p>
-              <div className="space-y-3">
+              <div className="space-y-3 overflow-y-auto pr-1">
                 <select
                   className="w-full border rounded p-2"
                   value={newIntervention.clientId}
@@ -2496,7 +2516,7 @@ const buildBackup = () => ({
                   )}
                 </div>
               </div>
-              <div className="flex justify-end gap-2 mt-4">
+              <div className="flex justify-end gap-2 mt-4 pt-3 border-t border-slate-100">
                 <button onClick={() => setShowCalendarQuickAdd(false)} className="px-4 py-2 text-slate-500">Chiudi</button>
                 <button onClick={handleAddIntervention} className="px-4 py-2 bg-indigo-600 text-white rounded">Salva intervento</button>
               </div>
