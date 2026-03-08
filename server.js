@@ -2616,7 +2616,7 @@ const handleApiRequest = async (req, res, url) => {
     return respond(res, 200, mapInventoryRow(getRow('SELECT * FROM inventory WHERE id = ?', [id])))
   }
   if (req.method === 'DELETE' && url.pathname.startsWith('/api/inventory/')) {
-    if (!ensureRole(res, user, ['ADMIN'])) return
+    if (!ensureRole(res, user, ['ADMIN', 'OPERATOR'])) return
     const id = match(/^\/api\/inventory\/(.+)$/)
     if (!id) return respond(res, 404, { error: 'Ricambio non trovato.' })
     runQuery('DELETE FROM inventory WHERE id = ?', [id])
