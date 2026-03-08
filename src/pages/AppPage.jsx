@@ -407,6 +407,7 @@ export default function AppPage() {
     type: 'chiamata',
     status: 'pendente',
     urgency: 2,
+    assignedToId: '',
     openedAt: nowIso(),
     description: '',
     parentInterventionId: '',
@@ -768,6 +769,7 @@ export default function AppPage() {
       type: selectedType,
       status: newIntervention.status,
       urgency: Number(newIntervention.urgency || 2),
+      assignedToId: newIntervention.assignedToId || null,
       openedAt: newIntervention.openedAt || nowIso(),
       description: newIntervention.description,
       parentInterventionId: newIntervention.parentInterventionId || null,
@@ -786,7 +788,7 @@ export default function AppPage() {
       const created = await createIntervention(payload);
       setInterventions((prev) => sanitizeInterventions([created, ...prev], initialInterventions));
       setNewIntervention({
-        clientId: '', type: forcedType || selectedType || 'chiamata', status: 'pendente', urgency: 2, openedAt: nowIso(), description: '', parentInterventionId: '',
+        clientId: '', type: forcedType || selectedType || 'chiamata', status: 'pendente', urgency: 2, assignedToId: '', openedAt: nowIso(), description: '', parentInterventionId: '',
         applianceBrand: '', applianceModel: '', serialNumber: '', defect: '',
         sparePartCode: '', sparePartQty: 1, supplier: '', quoteItems: '', quoteTotal: 0, quoteValidUntil: ''
       });
@@ -1770,6 +1772,15 @@ const buildBackup = () => ({
             value={toLocalDateTimeInput(newIntervention.openedAt)}
             onChange={(e) => setNewIntervention((p) => ({ ...p, openedAt: new Date(e.target.value).toISOString() }))}
           />
+          <select
+            className="w-full border rounded p-2"
+            value={newIntervention.assignedToId || ''}
+            onChange={(e) => setNewIntervention((p) => ({ ...p, assignedToId: e.target.value }))}
+            disabled={authState.user?.role !== 'ADMIN'}
+          >
+            <option value="">Nessun operatore assegnato</option>
+            {authState.user && <option value={authState.user.id}>Operatore corrente ({authState.user.username || authState.user.email})</option>}
+          </select>
           <textarea
             className="w-full border rounded p-2"
             placeholder="Descrizione"
@@ -2395,13 +2406,13 @@ const buildBackup = () => ({
         {showCalendarQuickAdd && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
             <div className="bg-white w-full max-w-xl rounded-xl shadow-2xl p-6">
-              <h3 className="text-xl font-bold mb-1">Nuova chiamata</h3>
+              <h3 className="text-xl font-bold mb-1">Nuovo intervento</h3>
               <p className="text-sm text-slate-500 mb-4">{new Date(newIntervention.openedAt || nowIso()).toLocaleString('it-IT')}</p>
               <div className="space-y-3">
                 <select
                   className="w-full border rounded p-2"
                   value={newIntervention.clientId}
-                  onChange={(e) => setNewIntervention((prev) => ({ ...prev, type: 'chiamata', clientId: e.target.value }))}
+                  onChange={(e) => setNewIntervention((prev) => ({ ...prev, clientId: e.target.value }))}
                 >
                   <option value="">Cliente...</option>
                   {customers.map((c) => <option key={c.id} value={c.id}>{c.name} {c.phone ? `• ${c.phone}` : ''}</option>)}
@@ -2410,8 +2421,52 @@ const buildBackup = () => ({
                   type="datetime-local"
                   className="w-full border rounded p-2"
                   value={toLocalDateTimeInput(newIntervention.openedAt)}
-                  onChange={(e) => setNewIntervention((prev) => ({ ...prev, type: 'chiamata', openedAt: new Date(e.target.value).toISOString() }))}
+                  onChange={(e) => setNewIntervention((prev) => ({ ...prev, openedAt: new Date(e.target.value).toISOString() }))}
                 />
+                <div className="grid md:grid-cols-2 gap-3">
+                  <select className="border rounded p-2" value={newIntervention.type} onChange={(e) => setNewIntervention((prev) => ({ ...prev, type: e.target.value }))}>
+                    {interventionTypes.map((type) => <option key={type} value={type}>{interventionTypeMeta[type]?.singularLabel || type}</option>)}
+                  </select>
+                  <select className="border rounded p-2" value={newIntervention.status} onChange={(e) => setNewIntervention((prev) => ({ ...prev, status: e.target.value }))}>
+                    {interventionStatuses.map((status) => <option key={status} value={status}>{status}</option>)}
+                  </select>
+                  <select className="border rounded p-2" value={newIntervention.urgency} onChange={(e) => setNewIntervention((prev) => ({ ...prev, urgency: Number(e.target.value) }))}>
+                    <option value={1}>Bassa</option>
+                    <option value={2}>Media</option>
+                    <option value={3}>Alta</option>
+                  </select>
+                  <select
+                    className="border rounded p-2"
+                    value={newIntervention.assignedToId || ''}
+                    onChange={(e) => setNewIntervention((prev) => ({ ...prev, assignedToId: e.target.value }))}
+                    disabled={authState.user?.role !== 'ADMIN'}
+                  >
+                    <option value="">Nessun operatore assegnato</option>
+                    {authState.user && <option value={authState.user.id}>Operatore corrente ({authState.user.username || authState.user.email})</option>}
+                  </select>
+                </div>
+                {newIntervention.type === 'riparazione' && (
+                  <div className="grid md:grid-cols-2 gap-3">
+                    <input className="border rounded p-2" placeholder="Marca" value={newIntervention.applianceBrand} onChange={(e) => setNewIntervention((prev) => ({ ...prev, applianceBrand: e.target.value }))} />
+                    <input className="border rounded p-2" placeholder="Modello" value={newIntervention.applianceModel} onChange={(e) => setNewIntervention((prev) => ({ ...prev, applianceModel: e.target.value }))} />
+                    <input className="border rounded p-2" placeholder="Seriale" value={newIntervention.serialNumber} onChange={(e) => setNewIntervention((prev) => ({ ...prev, serialNumber: e.target.value }))} />
+                    <input className="border rounded p-2" placeholder="Difetto" value={newIntervention.defect} onChange={(e) => setNewIntervention((prev) => ({ ...prev, defect: e.target.value }))} />
+                  </div>
+                )}
+                {newIntervention.type === 'ordine_ricambi' && (
+                  <div className="grid md:grid-cols-3 gap-3">
+                    <input className="border rounded p-2" placeholder="Codice ricambio" value={newIntervention.sparePartCode} onChange={(e) => setNewIntervention((prev) => ({ ...prev, sparePartCode: e.target.value }))} />
+                    <input type="number" className="border rounded p-2" placeholder="Quantità" value={newIntervention.sparePartQty} onChange={(e) => setNewIntervention((prev) => ({ ...prev, sparePartQty: Number(e.target.value) }))} />
+                    <input className="border rounded p-2" placeholder="Fornitore" value={newIntervention.supplier} onChange={(e) => setNewIntervention((prev) => ({ ...prev, supplier: e.target.value }))} />
+                  </div>
+                )}
+                {newIntervention.type === 'preventivo' && (
+                  <div className="grid md:grid-cols-3 gap-3">
+                    <input className="border rounded p-2" placeholder="Modelli/prodotti proposti" value={newIntervention.quoteItems} onChange={(e) => setNewIntervention((prev) => ({ ...prev, quoteItems: e.target.value }))} />
+                    <input type="number" className="border rounded p-2" placeholder="Importo" value={newIntervention.quoteTotal} onChange={(e) => setNewIntervention((prev) => ({ ...prev, quoteTotal: Number(e.target.value) }))} />
+                    <input type="date" className="border rounded p-2" value={newIntervention.quoteValidUntil} onChange={(e) => setNewIntervention((prev) => ({ ...prev, quoteValidUntil: e.target.value }))} />
+                  </div>
+                )}
                 <textarea
                   className="w-full border rounded p-2"
                   rows={4}
@@ -2421,7 +2476,7 @@ const buildBackup = () => ({
                     const value = e.target.value;
                     setInterventionAiSuggestion(null);
                     setInterventionAiError(null);
-                    setNewIntervention((prev) => ({ ...prev, type: 'chiamata', description: value }));
+                    setNewIntervention((prev) => ({ ...prev, description: value }));
                   }}
                 />
                 <div className="space-y-2">
@@ -2443,7 +2498,7 @@ const buildBackup = () => ({
               </div>
               <div className="flex justify-end gap-2 mt-4">
                 <button onClick={() => setShowCalendarQuickAdd(false)} className="px-4 py-2 text-slate-500">Chiudi</button>
-                <button onClick={() => handleAddIntervention('chiamata')} className="px-4 py-2 bg-indigo-600 text-white rounded">Aggiungi chiamata</button>
+                <button onClick={handleAddIntervention} className="px-4 py-2 bg-indigo-600 text-white rounded">Salva intervento</button>
               </div>
             </div>
           </div>
