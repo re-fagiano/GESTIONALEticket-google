@@ -1638,19 +1638,23 @@ const buildBackup = () => ({
   };
 
   const InterventionsView = () => {
-    const filtered = interventions.filter((item) => {
-      const customerName = customers.find((c) => c.id === item.clientId)?.name || '';
+    const filtered = useMemo(() => {
+      const customerNamesById = new Map(customers.map((customer) => [customer.id, customer.name || '']));
       const query = interventionSearch.trim().toLowerCase();
-      const matchesSearch = !query
-        || item.id.toLowerCase().includes(query)
-        || item.description.toLowerCase().includes(query)
-        || customerName.toLowerCase().includes(query);
-      const matchesClient = !interventionFilters.clientId || item.clientId === interventionFilters.clientId;
-      const matchesType = !interventionFilters.type || item.type === interventionFilters.type;
-      const matchesStatus = !interventionFilters.status || item.status === interventionFilters.status;
-      const matchesUrgency = !interventionFilters.urgency || Number(item.urgency) === Number(interventionFilters.urgency);
-      return matchesSearch && matchesClient && matchesType && matchesStatus && matchesUrgency;
-    });
+
+      return interventions.filter((item) => {
+        const customerName = customerNamesById.get(item.clientId) || '';
+        const matchesSearch = !query
+          || item.id.toLowerCase().includes(query)
+          || item.description.toLowerCase().includes(query)
+          || customerName.toLowerCase().includes(query);
+        const matchesClient = !interventionFilters.clientId || item.clientId === interventionFilters.clientId;
+        const matchesType = !interventionFilters.type || item.type === interventionFilters.type;
+        const matchesStatus = !interventionFilters.status || item.status === interventionFilters.status;
+        const matchesUrgency = !interventionFilters.urgency || Number(item.urgency) === Number(interventionFilters.urgency);
+        return matchesSearch && matchesClient && matchesType && matchesStatus && matchesUrgency;
+      });
+    }, [customers, interventionFilters, interventionSearch, interventions]);
 
     return (
       <div className="space-y-6">
