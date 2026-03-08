@@ -427,6 +427,9 @@ export default function AppPage() {
   const [returnToTicketAfterCustomer, setReturnToTicketAfterCustomer] = useState(false);
   const [returnToInterventionAfterCustomer, setReturnToInterventionAfterCustomer] = useState(false);
   const [newInterventionFiles, setNewInterventionFiles] = useState([]);
+  const [interventionAiSuggestion, setInterventionAiSuggestion] = useState(null);
+  const [interventionAiError, setInterventionAiError] = useState(null);
+  const [interventionAiLoading, setInterventionAiLoading] = useState(false);
   const [importError, setImportError] = useState('');
   const fileInputRef = useRef(null);
   const inventoryFileInputRef = useRef(null);
@@ -563,6 +566,8 @@ export default function AppPage() {
       openedAt: scheduledAt || prev.openedAt || nowIso()
     }));
     if (options.keepCalendarOpen) {
+      setInterventionAiSuggestion(null);
+      setInterventionAiError(null);
       setShowCalendarQuickAdd(true);
       return;
     }
@@ -787,6 +792,8 @@ export default function AppPage() {
       });
       setInterventionCustomerQuery('');
       setNewInterventionFiles([]);
+      setInterventionAiSuggestion(null);
+      setInterventionAiError(null);
       setSyncStatus('Intervento creato nel backend.');
       setShowCalendarQuickAdd(false);
       addToast('Intervento creato con successo.', 'success');
@@ -1546,6 +1553,40 @@ const buildBackup = () => ({
     } finally { setLoadingAi(false); }
   };
 
+  const buildInterventionDiagnosisSubject = () => {
+    const typeLabel = interventionTypeMeta[newIntervention.type]?.singularLabel || 'Intervento';
+    const customer = customers.find((entry) => entry.id === newIntervention.clientId);
+    return `${typeLabel}${customer?.name ? ` cliente ${customer.name}` : ''}`;
+  };
+
+  const handleGenerateInterventionDiagnosis = async () => {
+    const safeDescription = (newIntervention.description || '').trim();
+    if (!safeDescription) {
+      setInterventionAiError('Inserisci prima una descrizione del problema.');
+      return;
+    }
+
+    const safeSubject = buildInterventionDiagnosisSubject();
+    setInterventionAiLoading(true);
+    setInterventionAiSuggestion(null);
+    setInterventionAiError(null);
+
+    try {
+      const content = await callDeepSeekApi({ endpoint, requestHeaders, safeSubject, safeDescription });
+      setInterventionAiSuggestion(content);
+    } catch (error) {
+      const offline = buildOfflineSuggestion(safeSubject, safeDescription);
+      let message = error?.message || 'Errore connessione AI.';
+      if (message.toLowerCase().includes('failed to fetch')) {
+        message = 'Impossibile contattare il proxy DeepSeek (/api/deepseek). Verifica che il server sia avviato e che la variabile DEEPSEEK_API_KEY sia impostata lato backend.';
+      }
+      setInterventionAiSuggestion(offline);
+      setInterventionAiError(message);
+    } finally {
+      setInterventionAiLoading(false);
+    }
+  };
+
 
   if (!authState.checked) {
     return <div className="min-h-screen flex items-center justify-center text-slate-600">Verifica sessione in corso...</div>;
@@ -1725,7 +1766,33 @@ const buildBackup = () => ({
             value={toLocalDateTimeInput(newIntervention.openedAt)}
             onChange={(e) => setNewIntervention((p) => ({ ...p, openedAt: new Date(e.target.value).toISOString() }))}
           />
-          <textarea className="w-full border rounded p-2" placeholder="Descrizione" value={newIntervention.description} onChange={(e) => setNewIntervention((p) => ({ ...p, description: e.target.value }))} />
+          <textarea
+            className="w-full border rounded p-2"
+            placeholder="Descrizione"
+            value={newIntervention.description}
+            onChange={(e) => {
+              const value = e.target.value;
+              setInterventionAiSuggestion(null);
+              setInterventionAiError(null);
+              setNewIntervention((p) => ({ ...p, description: value }));
+            }}
+          />
+          <div className="space-y-2">
+            <button
+              type="button"
+              onClick={handleGenerateInterventionDiagnosis}
+              className="inline-flex items-center gap-2 bg-indigo-50 text-indigo-700 border border-indigo-200 px-3 py-2 rounded text-sm disabled:opacity-60"
+              disabled={interventionAiLoading || !aiEnabled}
+            >
+              <Bot size={16} /> {interventionAiLoading ? 'Analisi DeepSeek in corso...' : 'Diagnosi DeepSeek'}
+            </button>
+            {interventionAiError && (
+              <div className="text-xs text-red-700 bg-red-50 border border-red-200 p-2 rounded">{interventionAiError}</div>
+            )}
+            {interventionAiSuggestion && (
+              <div className="text-xs whitespace-pre-line text-slate-700 bg-indigo-50 border border-indigo-100 p-3 rounded">{interventionAiSuggestion}</div>
+            )}
+          </div>
           {newIntervention.type === 'riparazione' && (
             <div className="grid md:grid-cols-4 gap-3">
               <input className="border rounded p-2" placeholder="Marca" value={newIntervention.applianceBrand} onChange={(e) => setNewIntervention((p) => ({ ...p, applianceBrand: e.target.value }))} />
@@ -2320,8 +2387,29 @@ const buildBackup = () => ({
                   rows={4}
                   placeholder="Descrizione chiamata"
                   value={newIntervention.description}
-                  onChange={(e) => setNewIntervention((prev) => ({ ...prev, type: 'chiamata', description: e.target.value }))}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setInterventionAiSuggestion(null);
+                    setInterventionAiError(null);
+                    setNewIntervention((prev) => ({ ...prev, type: 'chiamata', description: value }));
+                  }}
                 />
+                <div className="space-y-2">
+                  <button
+                    type="button"
+                    onClick={handleGenerateInterventionDiagnosis}
+                    className="inline-flex items-center gap-2 bg-indigo-50 text-indigo-700 border border-indigo-200 px-3 py-2 rounded text-sm disabled:opacity-60"
+                    disabled={interventionAiLoading || !aiEnabled}
+                  >
+                    <Bot size={16} /> {interventionAiLoading ? 'Analisi DeepSeek in corso...' : 'Diagnosi DeepSeek'}
+                  </button>
+                  {interventionAiError && (
+                    <div className="text-xs text-red-700 bg-red-50 border border-red-200 p-2 rounded">{interventionAiError}</div>
+                  )}
+                  {interventionAiSuggestion && (
+                    <div className="text-xs whitespace-pre-line text-slate-700 bg-indigo-50 border border-indigo-100 p-3 rounded">{interventionAiSuggestion}</div>
+                  )}
+                </div>
               </div>
               <div className="flex justify-end gap-2 mt-4">
                 <button onClick={() => setShowCalendarQuickAdd(false)} className="px-4 py-2 text-slate-500">Chiudi</button>
