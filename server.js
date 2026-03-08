@@ -2893,7 +2893,9 @@ const handleApiRequest = async (req, res, url) => {
 }
 
 const handleDeepSeekProxy = async (req, res) => {
-  if (!DEEPSEEK_API_KEY) {
+  const deepSeekApiKey = (process.env.DEEPSEEK_API_KEY || DEEPSEEK_API_KEY || '').trim()
+
+  if (!deepSeekApiKey) {
     return respond(res, 500, { error: 'DEEPSEEK_API_KEY non configurata lato server.' })
   }
 
@@ -2910,7 +2912,7 @@ const handleDeepSeekProxy = async (req, res) => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${DEEPSEEK_API_KEY}`,
+        Authorization: `Bearer ${deepSeekApiKey}`,
       },
       body: JSON.stringify(payload),
     })
