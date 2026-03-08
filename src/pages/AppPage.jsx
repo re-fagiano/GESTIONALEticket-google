@@ -1948,16 +1948,33 @@ const buildBackup = () => ({
             value={toLocalDateTimeInput(newIntervention.openedAt)}
             onChange={(e) => setNewIntervention((p) => ({ ...p, type: typeKey, openedAt: new Date(e.target.value).toISOString() }))}
           />
-          <select
+          <textarea
             className="w-full border rounded p-2"
-            value={newIntervention.assignedToId || ''}
-            onChange={(e) => setNewIntervention((p) => ({ ...p, type: typeKey, assignedToId: e.target.value }))}
-            disabled={authState.user?.role !== 'ADMIN'}
-          >
-            <option value="">Nessun operatore assegnato</option>
-            {authState.user && <option value={authState.user.id}>Operatore corrente ({authState.user.username || authState.user.email})</option>}
-          </select>
-          <textarea className="w-full border rounded p-2" placeholder="Descrizione" value={newIntervention.description} onChange={(e) => setNewIntervention((p) => ({ ...p, type: typeKey, description: e.target.value }))} />
+            placeholder="Descrizione"
+            value={newIntervention.description}
+            onChange={(e) => {
+              const value = e.target.value;
+              setInterventionAiSuggestion(null);
+              setInterventionAiError(null);
+              setNewIntervention((p) => ({ ...p, type: typeKey, description: value }));
+            }}
+          />
+          <div className="space-y-2">
+            <button
+              type="button"
+              onClick={handleGenerateInterventionDiagnosis}
+              className="inline-flex items-center gap-2 bg-indigo-50 text-indigo-700 border border-indigo-200 px-3 py-2 rounded text-sm disabled:opacity-60"
+              disabled={interventionAiLoading || !aiEnabled}
+            >
+              <Bot size={16} /> {interventionAiLoading ? 'Analisi DeepSeek in corso...' : 'Diagnosi DeepSeek'}
+            </button>
+            {interventionAiError && (
+              <div className="text-xs text-red-700 bg-red-50 border border-red-200 p-2 rounded">{interventionAiError}</div>
+            )}
+            {interventionAiSuggestion && (
+              <div className="text-xs whitespace-pre-line text-slate-700 bg-indigo-50 border border-indigo-100 p-3 rounded">{interventionAiSuggestion}</div>
+            )}
+          </div>
           <button onClick={() => handleAddIntervention(typeKey)} className="bg-indigo-600 text-white px-4 py-2 rounded">Aggiungi {meta.singularLabel?.toLowerCase() || 'attività'}</button>
         </div>
 
