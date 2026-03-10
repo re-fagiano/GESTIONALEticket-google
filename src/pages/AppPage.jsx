@@ -1177,6 +1177,14 @@ const buildBackup = () => ({
   };
 
 
+  const downloadInventoryTemplateFallback = () => {
+    const csvContent = `${INVENTORY_HEADERS.join(',')}\n`;
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8' });
+    triggerBlobDownload(blob, 'template_magazzino.csv');
+    setBackupStatus('Template magazzino locale scaricato (fallback).');
+    addToast('Template locale scaricato.', 'warning');
+  };
+
   const handleDownloadInventoryTemplate = async () => {
     try {
       const response = await fetch('/api/import/template', { credentials: 'include' });
@@ -1187,7 +1195,7 @@ const buildBackup = () => ({
       triggerBlobDownload(blob, 'template_magazzino.csv');
       setBackupStatus('Template magazzino scaricato (compatibile Excel/Fogli).');
     } catch (error) {
-      handleApiError(error, 'Impossibile scaricare il template magazzino.');
+      downloadInventoryTemplateFallback();
     }
   };
 
@@ -2188,13 +2196,6 @@ const buildBackup = () => ({
           </tbody>
         </table>
       </div>
-      <input
-        ref={inventoryFileInputRef}
-        type="file"
-        accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        className="hidden"
-        onChange={handleInventoryFileChange}
-      />
     </div>
   );
 
@@ -2747,6 +2748,14 @@ const buildBackup = () => ({
         </div>
       )}
       
+      <input
+        ref={inventoryFileInputRef}
+        type="file"
+        accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        className="hidden"
+        onChange={handleInventoryFileChange}
+      />
+
       {showInventoryImportModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-white p-6 rounded-lg w-full max-w-4xl max-h-[80vh] overflow-hidden flex flex-col">
