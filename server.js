@@ -2894,13 +2894,14 @@ const handleApiRequest = async (req, res, url) => {
 
 const handleDeepSeekProxy = async (req, res) => {
   const deepSeekApiKey = (process.env.DEEPSEEK_API_KEY || DEEPSEEK_API_KEY || '').trim()
+  const fallbackContent = 'Diagnosi fallback: AI non disponibile. Verifica alimentazione, cablaggi, componenti principali e prova funzionale prima di ordinare ricambi.'
 
   if (!deepSeekApiKey) {
     return respond(res, 200, {
       choices: [
         {
           message: {
-            content: 'Diagnosi fallback: AI non configurata. Verifica alimentazione, cablaggi, componenti principali e prova funzionale prima di ordinare ricambi.',
+            content: fallbackContent,
           },
         },
       ],
@@ -2933,6 +2934,22 @@ const handleDeepSeekProxy = async (req, res) => {
       parsed = JSON.parse(text)
     } catch {
       parsed = text
+    }
+
+    if (!response.ok && [401, 403, 429].includes(response.status)) {
+      return respond(res, 200, {
+        choices: [
+          {
+            message: {
+              content: fallbackContent,
+            },
+          },
+        ],
+        fallback: true,
+        reason: `deepseek_upstream_${response.status}`,
+        upstreamStatus: response.status,
+        upstreamError: parsed?.error || parsed?.message || 'DeepSeek temporaneamente non disponibile.',
+      })
     }
 
     respond(res, response.status, parsed)
