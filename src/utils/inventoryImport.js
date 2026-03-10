@@ -51,7 +51,26 @@ const buildRowMap = (row) => {
 
 const isRowEmpty = (rowMap) => Object.values(rowMap).every((value) => normalizeValue(value) === '');
 
-const parseCsvText = (text) => {
+const stripBom = (text) => (text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
+
+const countDelimiter = (line, delimiter) => {
+  if (!line) return 0;
+  return line.split(delimiter).length - 1;
+};
+
+const detectCsvDelimiter = (text) => {
+  const [firstLine = ''] = stripBom(text).split(/\r?\n/, 1);
+  const candidates = [',', ';', '\t'];
+  return candidates.reduce((best, delimiter) => {
+    const hits = countDelimiter(firstLine, delimiter);
+    if (hits > best.hits) {
+      return { delimiter, hits };
+    }
+    return best;
+  }, { delimiter: ',', hits: -1 }).delimiter;
+};
+
+const parseCsvText = (text, delimiter = ',') => {
   const rows = [];
   let row = [];
   let value = '';
@@ -81,7 +100,7 @@ const parseCsvText = (text) => {
       continue;
     }
 
-    if (!inQuotes && char === ',') {
+    if (!inQuotes && char === delimiter) {
       pushValue();
       continue;
     }
@@ -167,8 +186,9 @@ export const parseInventoryFile = async (file, existingCodes = new Set()) => {
   }
 
   if (extension === 'csv') {
-    const text = await file.text();
-    const [headerRow = [], ...dataRows] = parseCsvText(text);
+    const text = stripBom(await file.text());
+    const delimiter = detectCsvDelimiter(text);
+    const [headerRow = [], ...dataRows] = parseCsvText(text, delimiter);
     const validation = validateInventoryHeaders(headerRow);
     if (!validation.valid) {
       return { headerError: validation.message, entries: [] };
