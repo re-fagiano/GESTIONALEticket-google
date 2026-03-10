@@ -253,9 +253,21 @@ export const callDeepSeekApi = async ({ endpoint, requestHeaders, safeSubject, s
     })
   });
 
-  if (!response.ok) throw new Error(`Errore API: ${response.status}`);
+  let data = null;
+  try {
+    data = await response.json();
+  } catch {
+    data = null;
+  }
 
-  const data = await response.json();
+  if (!response.ok) {
+    const message = data?.error || data?.message || `Errore API: ${response.status}`;
+    const error = new Error(message);
+    error.status = response.status;
+    error.payload = data;
+    throw error;
+  }
+
   const content = data?.choices?.[0]?.message?.content;
   if (!content) throw new Error('Risposta AI non valida.');
   return content;

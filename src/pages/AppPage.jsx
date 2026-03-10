@@ -1176,6 +1176,21 @@ const buildBackup = () => ({
     );
   };
 
+
+  const handleDownloadInventoryTemplate = async () => {
+    try {
+      const response = await fetch('/api/import/template', { credentials: 'include' });
+      if (!response.ok) {
+        throw new Error('Template magazzino non disponibile.');
+      }
+      const blob = await response.blob();
+      triggerBlobDownload(blob, 'template_magazzino.csv');
+      setBackupStatus('Template magazzino scaricato (compatibile Excel/Fogli).');
+    } catch (error) {
+      handleApiError(error, 'Impossibile scaricare il template magazzino.');
+    }
+  };
+
   const handleExportCustomers = () => {
     exportToCsv('clienti_export.csv',
       ['ID', 'Nome', 'Telefono', 'Email', 'Indirizzo'],
@@ -2176,7 +2191,7 @@ const buildBackup = () => ({
       <input
         ref={inventoryFileInputRef}
         type="file"
-        accept=".csv, text/csv"
+        accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         className="hidden"
         onChange={handleInventoryFileChange}
       />
@@ -2214,6 +2229,17 @@ const buildBackup = () => ({
         <h2 className="text-lg font-bold text-slate-800 mb-2">Sessione</h2>
         <p className="text-sm text-slate-500 mb-3">Utente autenticato: <strong>{authState.user?.username}</strong> • ruolo <strong>{authState.user?.role}</strong></p>
         <button onClick={handleLogout} className="px-3 py-1 text-xs bg-slate-100 border rounded">Logout</button>
+      </div>
+
+
+      <div className="bg-white rounded shadow p-4 border border-slate-200 space-y-3">
+        <h2 className="text-lg font-bold text-slate-800">Backup e import magazzino</h2>
+        <p className="text-sm text-slate-500">Gestione file magazzino in formato CSV compatibile con Excel / Google Fogli.</p>
+        <div className="flex flex-wrap gap-2">
+          <button onClick={handleExportInventory} className="px-3 py-2 text-sm bg-slate-100 border rounded inline-flex items-center gap-2"><Download size={16}/> Scarica magazzino (Excel/CSV)</button>
+          <button onClick={handleDownloadInventoryTemplate} className="px-3 py-2 text-sm bg-slate-100 border rounded inline-flex items-center gap-2"><FileSpreadsheet size={16}/> Scarica template</button>
+          <button onClick={handleSelectInventoryFile} disabled={isImportingInventory} className="px-3 py-2 text-sm bg-slate-100 border rounded inline-flex items-center gap-2 disabled:opacity-60"><Upload size={16}/> {isImportingInventory ? 'Caricamento...' : 'Importa file magazzino'}</button>
+        </div>
       </div>
 
       {authState.user?.role === 'ADMIN' && (
