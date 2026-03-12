@@ -239,34 +239,21 @@ export const syncData = async () => {
 
 export const callDeepSeekApi = async ({ endpoint, requestHeaders, safeSubject, safeDescription }) => {
   const systemPrompt = 'Sei un tecnico esperto di elettrodomestici. Analizza il problema e fornisci: 1) Possibile Causa 2) Diagnosi 3) Ricambi.';
-
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: requestHeaders,
-    body: JSON.stringify({
-      model: 'deepseek-chat',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: `Oggetto: ${safeSubject}. Descrizione: ${safeDescription}` }
-      ],
-      stream: false
-    })
+  const data = await apiFetch({
+    path: endpoint,
+    options: {
+      method: 'POST',
+      headers: requestHeaders,
+      body: JSON.stringify({
+        model: 'deepseek-chat',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: `Oggetto: ${safeSubject}. Descrizione: ${safeDescription}` }
+        ],
+        stream: false
+      })
+    }
   });
-
-  let data = null;
-  try {
-    data = await response.json();
-  } catch {
-    data = null;
-  }
-
-  if (!response.ok) {
-    const message = data?.error || data?.message || `Errore API: ${response.status}`;
-    const error = new Error(message);
-    error.status = response.status;
-    error.payload = data;
-    throw error;
-  }
 
   const content = data?.choices?.[0]?.message?.content;
   if (!content) throw new Error('Risposta AI non valida.');
