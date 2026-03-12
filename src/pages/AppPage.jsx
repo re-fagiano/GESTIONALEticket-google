@@ -98,6 +98,11 @@ import {
 } from '../app/appData';
 
 export default function AppPage() {
+  const createClientId = () => {
+    if (crypto?.randomUUID) return crypto.randomUUID();
+    return `${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+  };
+
   const [activeTab, setActiveTab] = useState('calendar'); 
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
 
@@ -535,7 +540,7 @@ export default function AppPage() {
 
   useEffect(() => {
     if (!authState.user) return;
-    const isInterventionsView = ['interventions', 'chiamate', 'riparazioni'].includes(activeTab);
+    const isInterventionsView = ['interventions', 'chiamate', 'riparazioni', 'calendar'].includes(activeTab);
     if (!isInterventionsView) return;
     const endpoint = activeTab === 'chiamate' ? '/api/chiamate' : (activeTab === 'riparazioni' ? '/api/riparazioni' : '/api/interventions');
     const params = new URLSearchParams();
@@ -903,7 +908,7 @@ export default function AppPage() {
     const part = sanitizeInventoryItem({
       ...newPart,
       description: newPart.description || newPart.name,
-      id: crypto?.randomUUID?.() || Date.now().toString()
+      id: createClientId()
     }, inventory.length);
     try {
       setIsSavingPart(true);
@@ -1443,7 +1448,7 @@ const buildBackup = () => ({
         updates.push(merged);
       } else {
         const newItem = sanitizeInventoryItem({
-          id: crypto?.randomUUID?.() || Date.now().toString(),
+          id: createClientId(),
           code: entry.code,
           name: entry.description,
           description: entry.description,
