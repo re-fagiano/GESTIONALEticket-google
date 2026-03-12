@@ -103,6 +103,64 @@ export default function AppPage() {
     return `${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
   };
 
+  const readFileAsDataUrl = (file) => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+    reader.onerror = () => reject(new Error(`Impossibile leggere il file ${file?.name || ''}`.trim()));
+    reader.readAsDataURL(file);
+  });
+
+  const buildInterventionAttachments = async (files = []) => {
+    if (!Array.isArray(files) || files.length === 0) return [];
+    const attachments = await Promise.all(files.map(async (file) => ({
+      id: createClientId(),
+      fileName: file?.name || 'allegato',
+      mimeType: file?.type || 'application/octet-stream',
+      size: Number(file?.size || 0),
+      uploadedAt: nowIso(),
+      dataUrl: await readFileAsDataUrl(file)
+    })));
+    return attachments.filter((entry) => Boolean(entry.dataUrl));
+  };
+
+  const getInterventionAttachments = (intervention) => {
+    const additionalData = intervention?.additionalData && typeof intervention.additionalData === 'object'
+      ? intervention.additionalData
+      : {};
+    const source = Array.isArray(additionalData.attachments)
+      ? additionalData.attachments
+      : (Array.isArray(additionalData.files) ? additionalData.files : []);
+    return source
+      .filter((item) => item && typeof item === 'object')
+      .map((item, index) => ({
+        id: item.id || `${intervention?.id || 'att'}-${index}`,
+        fileName: item.fileName || item.name || `allegato-${index + 1}`,
+        mimeType: item.mimeType || item.type || 'application/octet-stream',
+        size: Number(item.size || 0),
+        uploadedAt: item.uploadedAt || null,
+        dataUrl: typeof item.dataUrl === 'string' ? item.dataUrl : ''
+      }))
+      .filter((item) => Boolean(item.dataUrl));
+  };
+
+  const formatAttachmentSize = (bytes = 0) => {
+    const size = Number(bytes);
+    if (!Number.isFinite(size) || size <= 0) return '0 B';
+    if (size < 1024) return `${size} B`;
+    if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+    return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
+  const handleDownloadAttachment = (attachment) => {
+    if (!attachment?.dataUrl) return;
+    const link = document.createElement('a');
+    link.href = attachment.dataUrl;
+    link.download = attachment.fileName || 'allegato';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   const [activeTab, setActiveTab] = useState('calendar'); 
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
 
@@ -773,6 +831,14 @@ export default function AppPage() {
 
     additionalData.descriptionEntries = descriptionEntries;
 
+    let attachments = [];
+    try {
+      attachments = await buildInterventionAttachments(newInterventionFiles);
+    } catch (error) {
+      handleApiError(error, 'Impossibile elaborare gli allegati selezionati.');
+      return;
+    }
+
     const payload = sanitizeIntervention({
       id: crypto?.randomUUID?.() || Date.now().toString(),
       clientId: newIntervention.clientId,
@@ -785,6 +851,7 @@ export default function AppPage() {
       parentInterventionId: newIntervention.parentInterventionId || null,
       additionalData: {
         ...additionalData,
+        attachments,
         createdBy: {
           code: operatorProfile.code,
           name: operatorProfile.name || 'Operatore'
@@ -2856,6 +2923,29 @@ const buildBackup = () => ({
               </select>
             </div>
             <div className="mt-3 space-y-2">
+              <div>
+                <p className="text-sm font-semibold text-slate-700">Allegati</p>
+                <div className="max-h-40 overflow-y-auto border rounded p-2 bg-slate-50 space-y-2 mt-1">
+                  {getInterventionAttachments(selectedIntervention).length === 0 && (
+                    <p className="text-xs text-slate-500">Nessun allegato disponibile.</p>
+                  )}
+                  {getInterventionAttachments(selectedIntervention).map((attachment) => (
+                    <div key={attachment.id} className="flex items-center justify-between gap-2 text-xs border-b last:border-b-0 pb-1">
+                      <div className="min-w-0">
+                        <p className="truncate text-slate-700 font-medium">{attachment.fileName}</p>
+                        <p className="text-slate-500">{formatAttachmentSize(attachment.size)}{attachment.uploadedAt ? ` • ${formatAuditDate(attachment.uploadedAt)}` : ''}</p>
+                      </div>
+                      <button
+                        type="button"
+                        className="px-2 py-1 rounded border text-slate-600 hover:bg-white"
+                        onClick={() => handleDownloadAttachment(attachment)}
+                      >
+                        Scarica
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
               <p className="text-sm font-semibold text-slate-700">Storico scritte</p>
               <div className="max-h-52 overflow-y-auto border rounded p-2 bg-slate-50 space-y-2">
                 {(selectedIntervention.descriptionEntries || []).length === 0 && (
