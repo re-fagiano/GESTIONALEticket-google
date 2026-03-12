@@ -441,6 +441,7 @@ export default function AppPage() {
   const [interventionAiSuggestion, setInterventionAiSuggestion] = useState(null);
   const [interventionAiError, setInterventionAiError] = useState(null);
   const [interventionAiLoading, setInterventionAiLoading] = useState(false);
+  const [callToImportId, setCallToImportId] = useState('');
   const [importError, setImportError] = useState('');
   const fileInputRef = useRef(null);
   const inventoryFileInputRef = useRef(null);
@@ -484,6 +485,11 @@ export default function AppPage() {
     return searchable.includes(normalizedInterventionCustomerQuery);
   });
   const normalizedInventorySearch = inventorySearch.trim().toLowerCase();
+  const callableInterventions = useMemo(() => (
+    interventions
+      .filter((item) => item.type === 'chiamata')
+      .sort((a, b) => new Date(b.openedAt).getTime() - new Date(a.openedAt).getTime())
+  ), [interventions]);
   const filteredInventory = inventory.filter((item) => {
     if (!normalizedInventorySearch) return true;
 
@@ -987,6 +993,22 @@ export default function AppPage() {
       addToast('Trasformazione completata.', 'success');
     } catch (error) {
       handleApiError(error, 'Impossibile trasformare la chiamata in riparazione.');
+    }
+  };
+
+  const handleImportCallAsRepair = async () => {
+    if (!callToImportId) {
+      addToast('Seleziona prima una chiamata da importare.', 'error');
+      return;
+    }
+    try {
+      const createdRepair = await convertChiamataToRiparazione(callToImportId);
+      setInterventions((prev) => sanitizeInterventions([createdRepair, ...prev.filter((entry) => entry.id !== createdRepair.id)], initialInterventions));
+      setCallToImportId('');
+      setSyncStatus('Chiamata importata come riparazione.');
+      addToast('Import completato.', 'success');
+    } catch (error) {
+      handleApiError(error, 'Impossibile importare la chiamata come riparazione.');
     }
   };
 
@@ -1579,8 +1601,15 @@ const buildBackup = () => ({
       setAiSuggestion({ text: content, confidence: "DeepSeek AI" });
     } catch (error) {
       const offline = buildOfflineSuggestion(ticketSubject, ticketDescription);
+      const status = Number(error?.status || error?.payload?.status || 0);
       let message = error?.message || "Errore connessione AI.";
-      if (message.toLowerCase().includes("failed to fetch")) {
+      if (status === 401) {
+        message = 'Sessione scaduta o non valida. Effettua nuovamente il login e riprova.';
+      } else if (status === 403) {
+        message = 'DeepSeek non autorizzato (403). Verifica DEEPSEEK_API_KEY lato server e i permessi del provider.';
+      } else if (status === 502 || status === 503) {
+        message = "Proxy DeepSeek temporaneamente non disponibile. Procedi pure a salvare l'intervento e riprova la diagnosi più tardi.";
+      } else if (message.toLowerCase().includes("failed to fetch")) {
         message = "Impossibile contattare il proxy DeepSeek (/api/deepseek). Verifica che il server sia avviato e che la variabile DEEPSEEK_API_KEY sia impostata lato backend.";
       }
       setAiSuggestion({ text: offline, confidence: "Offline" });
@@ -1613,7 +1642,9 @@ const buildBackup = () => ({
       const offline = buildOfflineSuggestion(safeSubject, safeDescription);
       const status = Number(error?.status || error?.payload?.status || 0);
       let message = error?.message || 'Errore connessione AI.';
-      if (status === 403) {
+      if (status === 401) {
+        message = 'Sessione scaduta o non valida. Effettua nuovamente il login e riprova.';
+      } else if (status === 403) {
         message = 'DeepSeek non autorizzato (403). Verifica DEEPSEEK_API_KEY lato server e i permessi del provider.';
       } else if (status === 502 || status === 503) {
         message = 'Proxy DeepSeek temporaneamente non disponibile. Procedi pure a salvare l\'intervento e riprova la diagnosi più tardi.';
@@ -1881,6 +1912,21 @@ const buildBackup = () => ({
               <p className="text-xs text-slate-500">{newInterventionFiles.length} allegato/i selezionato/i.</p>
             )}
           </div>
+          {newIntervention.type === 'riparazione' && (
+            <div className="grid md:grid-cols-[1fr_auto] gap-2 items-center">
+              <select
+                className="border rounded p-2"
+                value={callToImportId}
+                onChange={(e) => setCallToImportId(e.target.value)}
+              >
+                <option value="">Importa da chiamata esistente...</option>
+                {callableInterventions.map((item) => (
+                  <option key={`import-call-${item.id}`} value={item.id}>{item.id} • {item.description}</option>
+                ))}
+              </select>
+              <button type="button" onClick={handleImportCallAsRepair} className="px-3 py-2 rounded border border-emerald-200 text-emerald-700 bg-emerald-50">Importa chiamata</button>
+            </div>
+          )}
           <button onClick={handleAddIntervention} className="bg-indigo-600 text-white px-4 py-2 rounded">Salva intervento</button>
         </div>
 
@@ -2022,6 +2068,21 @@ const buildBackup = () => ({
               <div className="text-xs whitespace-pre-line text-slate-700 bg-indigo-50 border border-indigo-100 p-3 rounded">{interventionAiSuggestion}</div>
             )}
           </div>
+          {typeKey === 'riparazione' && (
+            <div className="grid md:grid-cols-[1fr_auto] gap-2 items-center">
+              <select
+                className="border rounded p-2"
+                value={callToImportId}
+                onChange={(e) => setCallToImportId(e.target.value)}
+              >
+                <option value="">Importa da chiamata esistente...</option>
+                {callableInterventions.map((item) => (
+                  <option key={`import-dedicated-call-${item.id}`} value={item.id}>{item.id} • {item.description}</option>
+                ))}
+              </select>
+              <button type="button" onClick={handleImportCallAsRepair} className="px-3 py-2 rounded border border-emerald-200 text-emerald-700 bg-emerald-50">Importa chiamata</button>
+            </div>
+          )}
           <button onClick={() => handleAddIntervention(typeKey)} className="bg-indigo-600 text-white px-4 py-2 rounded">Aggiungi {meta.singularLabel?.toLowerCase() || 'attività'}</button>
         </div>
 
