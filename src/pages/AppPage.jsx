@@ -1082,20 +1082,25 @@ export default function AppPage() {
   };
 
   const handleResetData = async () => {
-    if(confirm("Reset completo dati?")) {
-      try {
-        await importData({
-          force: true,
-          customers: initialCustomers,
-          tickets: initialTickets,
-          inventory: initialInventory,
-          settings: []
-        });
-        await refreshFromBackend();
-        addToast('Dati iniziali ripristinati.', 'success');
-      } catch (error) {
-        handleApiError(error, 'Impossibile ripristinare i dati iniziali.');
-      }
+    const isConfirmed = confirm('Operazione distruttiva: verranno cancellati TUTTI i dati dal database. Vuoi continuare?');
+    if (!isConfirmed) return;
+    const typedConfirmation = prompt('Per confermare il reset totale, digita RESET DATI');
+    if (typedConfirmation !== 'RESET DATI') {
+      addToast('Reset annullato: conferma esplicita non valida.', 'warning');
+      return;
+    }
+    try {
+      await importData({
+        force: true,
+        customers: initialCustomers,
+        tickets: initialTickets,
+        inventory: initialInventory,
+        settings: []
+      });
+      await refreshFromBackend();
+      addToast('Dati iniziali ripristinati.', 'success');
+    } catch (error) {
+      handleApiError(error, 'Impossibile ripristinare i dati iniziali.');
     }
   };
 
@@ -1190,15 +1195,16 @@ const buildBackup = () => ({
     addToast('Template locale scaricato.', 'warning');
   };
 
-  const handleDownloadInventoryTemplate = async () => {
+  const handleDownloadInventoryTemplate = () => {
     try {
-      const response = await fetch('/api/import/template', { credentials: 'include' });
-      if (!response.ok) {
-        throw new Error('Template magazzino non disponibile.');
-      }
-      const blob = await response.blob();
-      triggerBlobDownload(blob, 'template_magazzino.csv');
-      setBackupStatus('Template magazzino scaricato (compatibile Excel/Fogli).');
+      const link = document.createElement('a');
+      link.href = '/api/import/template';
+      link.download = 'template_magazzino.csv';
+      link.rel = 'noopener';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      setBackupStatus('Download template magazzino avviato (compatibile Excel/Fogli).');
     } catch (error) {
       downloadInventoryTemplateFallback();
     }
