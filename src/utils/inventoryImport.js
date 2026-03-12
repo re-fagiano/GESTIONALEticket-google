@@ -10,16 +10,46 @@ const normalizedExpectedHeaders = INVENTORY_HEADERS.map((header) => header.trim(
 
 export const normalizeHeader = (value) => (value ?? '').toString().trim().toUpperCase();
 
+const HEADER_ALIASES = {
+  POSIZIONE: ['POSIZIONE', 'POS', 'LOCATION', 'LOCAZIONE'],
+  CODICE: ['CODICE', 'CODE', 'SKU', 'COD'],
+  DESCRIZIONE: ['DESCRIZIONE', 'DESCRIZIONE ARTICOLO', 'DESCRIZIONE PRODOTTO', 'NOME', 'NAME', 'ARTICOLO'],
+  'PREZZO AL PUBBLICO': ['PREZZO AL PUBBLICO', 'PREZZO', 'PREZZO PUBBLICO', 'PREZZO VENDITA', 'PRICE'],
+  QUANTITA: ['QUANTITA', 'QTA', 'QUANTITY', 'GIACENZA', 'QTY']
+};
+
+const HEADER_LOOKUP = Object.entries(HEADER_ALIASES).reduce((lookup, [canonical, aliases]) => {
+  aliases.forEach((alias) => {
+    lookup[normalizeHeader(alias)] = canonical;
+  });
+  return lookup;
+}, {});
+
+const toCanonicalHeader = (header) => HEADER_LOOKUP[normalizeHeader(header)] || null;
+
+const resolveHeaderMapping = (headers = []) => {
+  const mapping = {};
+  const usedCanonical = new Set();
+
+  headers.forEach((header) => {
+    const canonical = toCanonicalHeader(header);
+    if (!canonical || usedCanonical.has(canonical)) return;
+    mapping[header] = canonical;
+    usedCanonical.add(canonical);
+  });
+
+  const missingHeaders = normalizedExpectedHeaders.filter((header) => !usedCanonical.has(header));
+  return { mapping, missingHeaders };
+};
+
 export const validateInventoryHeaders = (headers = []) => {
-  const normalized = headers.map(normalizeHeader);
-  const hasAll = normalized.length === normalizedExpectedHeaders.length &&
-    normalized.every((header, index) => header === normalizedExpectedHeaders[index]);
-  if (hasAll) {
+  const { missingHeaders } = resolveHeaderMapping(headers);
+  if (missingHeaders.length === 0) {
     return { valid: true, message: null };
   }
   return {
     valid: false,
-    message: `Intestazioni non valide. Attese: ${INVENTORY_HEADERS.join(', ')}.`
+    message: `Intestazioni non valide. Colonne mancanti: ${missingHeaders.join(', ')}. Intestazioni richieste: ${INVENTORY_HEADERS.join(', ')}.`
   };
 };
 
@@ -193,10 +223,12 @@ export const parseInventoryFile = async (file, existingCodes = new Set()) => {
     if (!validation.valid) {
       return { headerError: validation.message, entries: [] };
     }
+    const { mapping } = resolveHeaderMapping(headerRow);
     const rows = dataRows.map((row) => {
       const rowObj = {};
       headerRow.forEach((header, index) => {
-        rowObj[header] = row[index] ?? '';
+        const canonicalHeader = mapping[header] || header;
+        rowObj[canonicalHeader] = row[index] ?? '';
       });
       return rowObj;
     });
