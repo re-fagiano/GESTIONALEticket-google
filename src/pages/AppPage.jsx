@@ -496,6 +496,7 @@ export default function AppPage() {
   const [returnToTicketAfterCustomer, setReturnToTicketAfterCustomer] = useState(false);
   const [returnToInterventionAfterCustomer, setReturnToInterventionAfterCustomer] = useState(false);
   const [newInterventionFiles, setNewInterventionFiles] = useState([]);
+  const [selectedInterventionFiles, setSelectedInterventionFiles] = useState([]);
   const [interventionAiSuggestion, setInterventionAiSuggestion] = useState(null);
   const [interventionAiError, setInterventionAiError] = useState(null);
   const [interventionAiLoading, setInterventionAiLoading] = useState(false);
@@ -921,6 +922,7 @@ export default function AppPage() {
   const openInterventionDetails = (intervention) => {
     const safe = sanitizeIntervention(intervention);
     if (!safe) return;
+    setSelectedInterventionFiles([]);
     setSelectedIntervention({
       ...safe,
       descriptionEntries: getDescriptionEntries(safe),
@@ -933,6 +935,16 @@ export default function AppPage() {
 
     const noteText = (selectedIntervention.newNote || '').trim();
     const nextEntries = [...(selectedIntervention.descriptionEntries || [])];
+    let newAttachments = [];
+
+    try {
+      newAttachments = await buildInterventionAttachments(selectedInterventionFiles);
+    } catch (error) {
+      handleApiError(error, 'Impossibile elaborare gli allegati selezionati.');
+      return;
+    }
+
+    const mergedAttachments = [...getInterventionAttachments(selectedIntervention), ...newAttachments];
 
     if (noteText) {
       nextEntries.push({
@@ -952,6 +964,7 @@ export default function AppPage() {
       note: noteText,
       additionalData: {
         ...(selectedIntervention.additionalData || {}),
+        attachments: mergedAttachments,
         descriptionEntries: nextEntries,
         lastEditor: {
           code: operatorProfile.code,
@@ -966,6 +979,7 @@ export default function AppPage() {
       const saved = await updateIntervention(selectedIntervention.id, payload);
       const sanitized = sanitizeIntervention(saved);
       setInterventions((prev) => prev.map((entry) => (entry.id === selectedIntervention.id ? sanitized : entry)));
+      setSelectedInterventionFiles([]);
       setSelectedIntervention(null);
       addToast('Dettagli intervento aggiornati.', 'success');
     } catch (error) {
@@ -2961,7 +2975,7 @@ const buildBackup = () => ({
 
 
       {selectedIntervention && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setSelectedIntervention(null)}>
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => { setSelectedInterventionFiles([]); setSelectedIntervention(null); }}>
           <div className="bg-white p-6 rounded-lg w-full max-w-2xl" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-xl font-bold mb-4">Dettaglio intervento</h3>
             <div className="grid md:grid-cols-2 gap-3">
@@ -2986,7 +3000,17 @@ const buildBackup = () => ({
             <div className="mt-3 space-y-2">
               <div>
                 <p className="text-sm font-semibold text-slate-700">Allegati</p>
-                <div className="max-h-40 overflow-y-auto border rounded p-2 bg-slate-50 space-y-2 mt-1">
+                <input
+                  type="file"
+                  multiple
+                  accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.txt"
+                  className="w-full border rounded p-2 text-sm mt-1"
+                  onChange={(e) => setSelectedInterventionFiles(Array.from(e.target.files || []))}
+                />
+                {selectedInterventionFiles.length > 0 && (
+                  <p className="text-xs text-slate-500 mt-1">{selectedInterventionFiles.length} allegato/i pronto/i da aggiungere.</p>
+                )}
+                <div className="max-h-40 overflow-y-auto border rounded p-2 bg-slate-50 space-y-2 mt-2">
                   {getInterventionAttachments(selectedIntervention).length === 0 && (
                     <p className="text-xs text-slate-500">Nessun allegato disponibile.</p>
                   )}
@@ -3045,7 +3069,7 @@ const buildBackup = () => ({
               </div>
             </div>
             <div className="flex justify-end gap-2 mt-4">
-              <button onClick={() => setSelectedIntervention(null)} className="px-4 py-2 text-slate-500">Chiudi</button>
+              <button onClick={() => { setSelectedInterventionFiles([]); setSelectedIntervention(null); }} className="px-4 py-2 text-slate-500">Chiudi</button>
               <button onClick={handleSaveInterventionDetails} className="px-4 py-2 bg-indigo-600 text-white rounded">Salva modifiche</button>
             </div>
           </div>
