@@ -1261,7 +1261,7 @@ const buildBackup = () => ({
       saveAutoBackup();
     }, 600000);
     return () => clearInterval(interval);
-  }, [customers, tickets, inventory, settings]);
+  }, [customers, tickets, interventions, inventory, settings]);
 
   useEffect(() => {
     if (!mbiEnabled) return;
