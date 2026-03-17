@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
   Menu,
   Trash2,
@@ -163,7 +163,8 @@ export default function AppPage() {
   };
 
   const [activeTab, setActiveTab] = useState('calendar'); 
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isMobileView, setIsMobileView] = useState(() => (typeof window !== 'undefined' ? window.innerWidth < 768 : false));
+  const [isSidebarOpen, setIsSidebarOpen] = useState(() => (typeof window !== 'undefined' ? window.innerWidth >= 768 : true));
 
   // --- STATO CALENDARIO ---
   const calendarRef = useRef(null);
@@ -629,8 +630,17 @@ export default function AppPage() {
       })
       .catch(() => {});
   }, [authState.user, activeTab, interventionSearch, interventionSort, interventionPagination, interventionFilters]);
+  const closeSidebar = useCallback(() => {
+    setIsSidebarOpen(false);
+  }, []);
+
+  const toggleSidebar = useCallback(() => {
+    setIsSidebarOpen((prev) => !prev);
+  }, []);
+
   const switchToTab = (tab) => {
     setActiveTab(tab);
+    if (isMobileView) closeSidebar();
     const mappedType = dedicatedTabToType[tab];
     if (mappedType) {
       setNewIntervention((prev) => ({ ...prev, type: mappedType }));
@@ -696,6 +706,61 @@ export default function AppPage() {
     setAuthState({ checked: true, user: null });
     addToast('Logout effettuato.', 'success');
   };
+
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia('(max-width: 767px)');
+
+    const applyViewportState = (matchesMobile) => {
+      setIsMobileView(matchesMobile);
+      setIsSidebarOpen(!matchesMobile);
+    };
+
+    applyViewportState(mediaQuery.matches);
+
+    const handleViewportChange = (event) => {
+      applyViewportState(event.matches);
+    };
+
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', handleViewportChange);
+    } else {
+      mediaQuery.addListener(handleViewportChange);
+    }
+
+    return () => {
+      if (typeof mediaQuery.removeEventListener === 'function') {
+        mediaQuery.removeEventListener('change', handleViewportChange);
+      } else {
+        mediaQuery.removeListener(handleViewportChange);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isMobileView || !isSidebarOpen) {
+      document.body.style.removeProperty('overflow');
+      return;
+    }
+
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.removeProperty('overflow');
+    };
+  }, [isMobileView, isSidebarOpen]);
+
+  useEffect(() => {
+    if (!isSidebarOpen) return;
+
+    const handleEscape = (event) => {
+      if (event.key === 'Escape') {
+        closeSidebar();
+      }
+    };
+
+    window.addEventListener('keydown', handleEscape);
+    return () => window.removeEventListener('keydown', handleEscape);
+  }, [isSidebarOpen, closeSidebar]);
 
   const closeCustomerModal = () => {
     setShowNewCustomer(false);
@@ -2754,7 +2819,7 @@ const buildBackup = () => ({
       <Sidebar
         isSidebarOpen={isSidebarOpen}
         activeTab={activeTab}
-        onClose={() => setIsSidebarOpen(false)}
+        onClose={closeSidebar}
         onSwitchTab={switchToTab}
         onResetData={handleResetData}
       />
@@ -2763,9 +2828,17 @@ const buildBackup = () => ({
            <span className="font-bold text-slate-700 flex items-center gap-2"><Zap className="text-yellow-500 w-5 h-5"/> FIXLAB</span>
            <div className="flex items-center gap-2">
              <button onClick={handleLogout} className="px-2 py-1 text-xs bg-slate-100 border rounded">Logout</button>
-             <button onClick={() => setIsSidebarOpen(!isSidebarOpen)}><Menu className="w-6 h-6 text-slate-600" /></button>
+             <button onClick={toggleSidebar} aria-controls="mobile-sidebar" aria-expanded={isSidebarOpen} aria-label="Apri menu laterale"><Menu className="w-6 h-6 text-slate-600" /></button>
            </div>
         </header>
+        {isMobileView && isSidebarOpen && (
+          <button
+            type="button"
+            className="fixed inset-0 z-30 bg-slate-900/50 md:hidden"
+            onClick={closeSidebar}
+            aria-label="Chiudi menu laterale"
+          />
+        )}
         <main className="flex-1 overflow-y-auto p-4 md:p-8">
           <div className="max-w-6xl mx-auto pb-20">
             <ActiveTabContent
