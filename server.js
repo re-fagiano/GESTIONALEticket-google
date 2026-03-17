@@ -621,6 +621,10 @@ const getInterventoLogsSqlite = (interventoId) => getAll(
 // Rollback: aggiungere alias legacy (tech/read/operator/operatore) se servono token storici.
 const USER_ROLES = new Set(['ADMIN', 'OPERATOR', 'READER'])
 
+// In questa fase tutti i nuovi account registrati devono avere privilegi amministrativi.
+// Quando sarà necessario differenziare i permessi, basta cambiare questa costante.
+const DEFAULT_REGISTRATION_ROLE = 'ADMIN'
+
 const LEGACY_ROLE_MAP = {
   admin: 'ADMIN',
   operatore: 'OPERATOR',
@@ -1881,7 +1885,7 @@ const handleApiRequest = async (req, res, url) => {
           data: {
             email,
             passwordHash: await hashPassword(password),
-            role: 'OPERATOR',
+            role: DEFAULT_REGISTRATION_ROLE,
             operatorCode: generateOperatorCode(),
           },
         })
@@ -1899,7 +1903,7 @@ const handleApiRequest = async (req, res, url) => {
         id: ensureId(),
         username: email,
         email,
-        role: 'OPERATOR',
+        role: DEFAULT_REGISTRATION_ROLE,
         status: 'pending',
         approved: 1,
         operatorCode: generateOperatorCode(),
