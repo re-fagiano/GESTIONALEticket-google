@@ -220,10 +220,33 @@ const toEntityState = (rows = []) => {
 };
 
 export const syncData = async () => {
+  const fetchAllPages = async (path) => {
+    const take = 100;
+    let skip = 0;
+    const rows = [];
+
+    while (true) {
+      const separator = path.includes('?') ? '&' : '?';
+      const page = await apiFetch({
+        path: `${path}${separator}skip=${skip}&take=${take}`,
+        options: { method: 'GET' },
+        allowRefresh: false,
+      });
+
+      const normalizedPage = Array.isArray(page) ? page : [];
+      rows.push(...normalizedPage);
+
+      if (normalizedPage.length < take) break;
+      skip += take;
+    }
+
+    return rows;
+  };
+
   const [customers, tickets, inventory] = await Promise.all([
-    apiFetch({ path: '/api/customers', options: { method: 'GET' }, allowRefresh: false }),
-    apiFetch({ path: '/api/tickets', options: { method: 'GET' }, allowRefresh: false }),
-    apiFetch({ path: '/api/inventory', options: { method: 'GET' }, allowRefresh: false }),
+    fetchAllPages('/api/customers'),
+    fetchAllPages('/api/tickets'),
+    fetchAllPages('/api/inventory'),
   ]);
 
   return {
