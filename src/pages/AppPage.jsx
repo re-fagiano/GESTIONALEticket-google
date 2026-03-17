@@ -1043,7 +1043,6 @@ export default function AppPage() {
         addToast('Stato ticket aggiornato.', 'success');
       } catch (error) {
         handleApiError(error, 'Impossibile aggiornare lo stato del ticket.');
-        setInterventions((prev) => prev.map((entry) => (entry.id === linkedIntervention.id ? sanitizeIntervention(interventionUpdate) : entry)));
       }
       return;
     }
@@ -1061,7 +1060,6 @@ export default function AppPage() {
       addToast('Stato ticket aggiornato.', 'success');
     } catch (error) {
       handleApiError(error, 'Impossibile aggiornare lo stato del ticket.');
-      setTickets((prev) => prev.map((entry) => (entry.id === ticket.id ? sanitizeTicket(updated) : entry)));
     }
   };
 

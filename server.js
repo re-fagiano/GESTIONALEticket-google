@@ -2603,17 +2603,22 @@ const handleApiRequest = async (req, res, url) => {
     const payload = await readJsonBody(req)
     const { error, value } = validateInventoryPayload({ ...payload, id })
     if (error) return respond(res, 400, { error })
-    const existing = getRow('SELECT * FROM inventory WHERE id = ?', [id])
+    const existingById = getRow('SELECT * FROM inventory WHERE id = ?', [id])
+    const existingByCode = !existingById && value.code
+      ? getRow('SELECT * FROM inventory WHERE code = ?', [value.code])
+      : null
+    const existing = existingById || existingByCode
     if (!existing) return respond(res, 404, { error: 'Ricambio non trovato.' })
+    const targetId = existing.id
     const conflictReason = resolveConflict(existing, value)
     if (conflictReason) {
       return sendConflict(res, 'Conflitto magazzino: aggiorna i dati.', mapInventoryRow(existing))
     }
     runQuery(
       'UPDATE inventory SET code = ?, name = ?, location = ?, qty = ?, price = ?, min_qty = ?, price_date = ?, updated_at = ?, version = ? WHERE id = ?',
-      [value.code, value.name, value.location, value.qty, value.price, value.minQty, value.priceDate, value.updatedAt, existing.version + 1, id],
+      [value.code, value.name, value.location, value.qty, value.price, value.minQty, value.priceDate, value.updatedAt, existing.version + 1, targetId],
     )
-    return respond(res, 200, mapInventoryRow(getRow('SELECT * FROM inventory WHERE id = ?', [id])))
+    return respond(res, 200, mapInventoryRow(getRow('SELECT * FROM inventory WHERE id = ?', [targetId])))
   }
   if (req.method === 'DELETE' && url.pathname.startsWith('/api/inventory/')) {
     if (!ensureRole(res, user, ['ADMIN', 'OPERATOR'])) return
