@@ -485,6 +485,22 @@ const mapInventoryRow = (row) => (row ? ({
   version: row.version,
 }) : null)
 
+
+const mapPrismaInventoryItem = (row) => (row ? ({
+  id: row.id,
+  code: row.id,
+  name: row.name,
+  description: row.name,
+  location: row.location || '',
+  qty: row.qty,
+  price: row.price,
+  minQty: row.minQty,
+  priceDate: row.priceDate || '',
+  createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : row.createdAt,
+  updatedAt: row.updatedAt instanceof Date ? row.updatedAt.toISOString() : row.updatedAt,
+  version: row.version,
+}) : null)
+
 const mapSettingRow = (row) => (row ? ({
   key: row.key,
   value: (() => {
@@ -2481,6 +2497,82 @@ const handleApiRequest = async (req, res, url) => {
       },
     })
     return respond(res, 200, updated)
+  }
+
+
+  if (shouldUsePrisma() && req.method === 'GET' && url.pathname === '/api/inventory') {
+    const { q, sortColumn, order, skip, take } = parseListQuery(url, {
+      defaultSort: 'createdAt',
+      allowedSort: ['createdAt', 'updatedAt', 'name', 'location', 'qty', 'price', 'minQty'],
+    })
+    const rows = await prisma.inventoryItem.findMany({
+      where: q ? {
+        OR: [
+          { id: { contains: q, mode: 'insensitive' } },
+          { name: { contains: q, mode: 'insensitive' } },
+          { location: { contains: q, mode: 'insensitive' } },
+        ],
+      } : undefined,
+      orderBy: { [sortColumn]: order.toLowerCase() },
+      skip,
+      take,
+    })
+    return respond(res, 200, rows.map(mapPrismaInventoryItem))
+  }
+
+  if (shouldUsePrisma() && req.method === 'POST' && url.pathname === '/api/inventory') {
+    if (!ensureRole(res, user, ['ADMIN', 'OPERATOR'])) return
+    const payload = await readJsonBody(req)
+    const { error, value } = validateInventoryPayload(payload)
+    if (error) return respond(res, 400, { error })
+    const created = await prisma.inventoryItem.create({
+      data: {
+        id: value.id,
+        name: value.name,
+        location: value.location || null,
+        qty: value.qty,
+        price: value.price,
+        minQty: value.minQty,
+        priceDate: value.priceDate || null,
+        version: 1,
+      },
+    })
+    return respond(res, 201, mapPrismaInventoryItem(created))
+  }
+
+  if (shouldUsePrisma() && req.method === 'PUT' && url.pathname.startsWith('/api/inventory/')) {
+    if (!ensureRole(res, user, ['ADMIN', 'OPERATOR'])) return
+    const id = match(/^\/api\/inventory\/(.+)$/)
+    if (!id) return respond(res, 404, { error: 'Ricambio non trovato.' })
+    const payload = await readJsonBody(req)
+    const { error, value } = validateInventoryPayload({ ...payload, id })
+    if (error) return respond(res, 400, { error })
+    const existing = await prisma.inventoryItem.findUnique({ where: { id } })
+    if (!existing) return respond(res, 404, { error: 'Ricambio non trovato.' })
+    if ((existing.version || 1) !== (value.version || 1)) {
+      return sendConflict(res, 'Conflitto magazzino: aggiorna i dati.', mapPrismaInventoryItem(existing))
+    }
+    const updated = await prisma.inventoryItem.update({
+      where: { id: existing.id },
+      data: {
+        name: value.name,
+        location: value.location || null,
+        qty: value.qty,
+        price: value.price,
+        minQty: value.minQty,
+        priceDate: value.priceDate || null,
+        version: { increment: 1 },
+      },
+    })
+    return respond(res, 200, mapPrismaInventoryItem(updated))
+  }
+
+  if (shouldUsePrisma() && req.method === 'DELETE' && url.pathname.startsWith('/api/inventory/')) {
+    if (!ensureRole(res, user, ['ADMIN', 'OPERATOR'])) return
+    const id = match(/^\/api\/inventory\/(.+)$/)
+    if (!id) return respond(res, 404, { error: 'Ricambio non trovato.' })
+    await prisma.inventoryItem.delete({ where: { id } }).catch(() => null)
+    return respond(res, 204, '')
   }
 
   if (req.method === 'GET' && (url.pathname === '/api/customers' || url.pathname === '/api/clienti')) {
