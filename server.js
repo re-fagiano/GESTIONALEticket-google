@@ -637,6 +637,10 @@ const getInterventoLogsSqlite = (interventoId) => getAll(
 // Rollback: aggiungere alias legacy (tech/read/operator/operatore) se servono token storici.
 const USER_ROLES = new Set(['ADMIN', 'OPERATOR', 'READER'])
 
+// In questa fase tutti i nuovi account registrati devono avere privilegi amministrativi.
+// Quando sarà necessario differenziare i permessi, basta cambiare questa costante.
+const DEFAULT_REGISTRATION_ROLE = 'ADMIN'
+
 const LEGACY_ROLE_MAP = {
   admin: 'ADMIN',
   operatore: 'OPERATOR',
@@ -1897,7 +1901,7 @@ const handleApiRequest = async (req, res, url) => {
           data: {
             email,
             passwordHash: await hashPassword(password),
-            role: 'OPERATOR',
+            role: DEFAULT_REGISTRATION_ROLE,
             operatorCode: generateOperatorCode(),
           },
         })
@@ -1915,7 +1919,7 @@ const handleApiRequest = async (req, res, url) => {
         id: ensureId(),
         username: email,
         email,
-        role: 'OPERATOR',
+        role: DEFAULT_REGISTRATION_ROLE,
         status: 'pending',
         approved: 1,
         operatorCode: generateOperatorCode(),
@@ -2695,18 +2699,11 @@ const handleApiRequest = async (req, res, url) => {
     const payload = await readJsonBody(req)
     const { error, value } = validateInventoryPayload({ ...payload, id })
     if (error) return respond(res, 400, { error })
-    const normalizedPathId = sanitizeString(id)
-    const existingById = getRow('SELECT * FROM inventory WHERE id = ?', [normalizedPathId])
-    const existingByPathCode = !existingById && normalizedPathId
-      ? getRow('SELECT * FROM inventory WHERE code = ?', [normalizedPathId])
-      : null
-    const existingByPayloadId = !existingById && !existingByPathCode && sanitizeString(payload?.id)
-      ? getRow('SELECT * FROM inventory WHERE id = ?', [sanitizeString(payload.id)])
-      : null
-    const existingByCode = !existingById && !existingByPathCode && !existingByPayloadId && value.code
+    const existingById = getRow('SELECT * FROM inventory WHERE id = ?', [id])
+    const existingByCode = !existingById && value.code
       ? getRow('SELECT * FROM inventory WHERE code = ?', [value.code])
       : null
-    const existing = existingById || existingByPathCode || existingByPayloadId || existingByCode
+    const existing = existingById || existingByCode
     if (!existing) return respond(res, 404, { error: 'Ricambio non trovato.' })
     const targetId = existing.id
     const conflictReason = resolveConflict(existing, value)

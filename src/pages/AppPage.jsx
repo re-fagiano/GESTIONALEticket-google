@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
   Menu,
   Trash2,
@@ -11,6 +11,7 @@ import {
   FileSpreadsheet,
   Bot,
   Plus,
+  Pencil,
   Zap
 } from 'lucide-react';
 import { INVENTORY_HEADERS, parseInventoryFile } from '../utils/inventoryImport';
@@ -162,7 +163,8 @@ export default function AppPage() {
   };
 
   const [activeTab, setActiveTab] = useState('calendar'); 
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isMobileView, setIsMobileView] = useState(() => (typeof window !== 'undefined' ? window.innerWidth < 768 : false));
+  const [isSidebarOpen, setIsSidebarOpen] = useState(() => (typeof window !== 'undefined' ? window.innerWidth >= 768 : true));
 
   // --- STATO CALENDARIO ---
   const calendarRef = useRef(null);
@@ -491,6 +493,7 @@ export default function AppPage() {
     quoteValidUntil: ''
   });
   const [newPart, setNewPart] = useState({ code: '', name: '', description: '', location: '', qty: 1, price: 0, minQty: 5, priceDate: new Date().toISOString().split('T')[0] });
+  const [editingPartId, setEditingPartId] = useState(null);
   const [ticketCustomerQuery, setTicketCustomerQuery] = useState('');
   const [interventionCustomerQuery, setInterventionCustomerQuery] = useState('');
   const [returnToTicketAfterCustomer, setReturnToTicketAfterCustomer] = useState(false);
@@ -627,8 +630,17 @@ export default function AppPage() {
       })
       .catch(() => {});
   }, [authState.user, activeTab, interventionSearch, interventionSort, interventionPagination, interventionFilters]);
+  const closeSidebar = useCallback(() => {
+    setIsSidebarOpen(false);
+  }, []);
+
+  const toggleSidebar = useCallback(() => {
+    setIsSidebarOpen((prev) => !prev);
+  }, []);
+
   const switchToTab = (tab) => {
     setActiveTab(tab);
+    if (isMobileView) closeSidebar();
     const mappedType = dedicatedTabToType[tab];
     if (mappedType) {
       setNewIntervention((prev) => ({ ...prev, type: mappedType }));
@@ -694,6 +706,61 @@ export default function AppPage() {
     setAuthState({ checked: true, user: null });
     addToast('Logout effettuato.', 'success');
   };
+
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia('(max-width: 767px)');
+
+    const applyViewportState = (matchesMobile) => {
+      setIsMobileView(matchesMobile);
+      setIsSidebarOpen(!matchesMobile);
+    };
+
+    applyViewportState(mediaQuery.matches);
+
+    const handleViewportChange = (event) => {
+      applyViewportState(event.matches);
+    };
+
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', handleViewportChange);
+    } else {
+      mediaQuery.addListener(handleViewportChange);
+    }
+
+    return () => {
+      if (typeof mediaQuery.removeEventListener === 'function') {
+        mediaQuery.removeEventListener('change', handleViewportChange);
+      } else {
+        mediaQuery.removeListener(handleViewportChange);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isMobileView || !isSidebarOpen) {
+      document.body.style.removeProperty('overflow');
+      return;
+    }
+
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.removeProperty('overflow');
+    };
+  }, [isMobileView, isSidebarOpen]);
+
+  useEffect(() => {
+    if (!isSidebarOpen) return;
+
+    const handleEscape = (event) => {
+      if (event.key === 'Escape') {
+        closeSidebar();
+      }
+    };
+
+    window.addEventListener('keydown', handleEscape);
+    return () => window.removeEventListener('keydown', handleEscape);
+  }, [isSidebarOpen, closeSidebar]);
 
   const closeCustomerModal = () => {
     setShowNewCustomer(false);
@@ -987,6 +1054,26 @@ export default function AppPage() {
     }
   };
 
+  const resetPartForm = () => {
+    setNewPart({ code: '', name: '', description: '', location: '', qty: 1, price: 0, minQty: 5, priceDate: new Date().toISOString().split('T')[0] });
+    setEditingPartId(null);
+  };
+
+  const openEditPartModal = (item) => {
+    setNewPart({
+      code: item.code || '',
+      name: item.name || '',
+      description: item.description || '',
+      location: item.location || '',
+      qty: Number(item.qty || 0),
+      price: Number(item.price || 0),
+      minQty: Number(item.minQty || 0),
+      priceDate: item.priceDate ? String(item.priceDate).split('T')[0] : '',
+    });
+    setEditingPartId(item.id);
+    setShowNewPart(true);
+  };
+
   const handleCreatePart = async () => {
     if (!newPart.name.trim()) {
       addToast('Inserisci almeno il nome del ricambio.', 'error');
@@ -995,18 +1082,25 @@ export default function AppPage() {
     const part = sanitizeInventoryItem({
       ...newPart,
       description: newPart.description || newPart.name,
-      id: createClientId()
+      id: editingPartId || createClientId(),
+      updatedAt: nowIso(),
     }, inventory.length);
     try {
       setIsSavingPart(true);
-      const created = await createInventoryItem(part);
-      setInventory((prev) => sanitizeInventoryList([...prev, created], initialInventory));
-      setNewPart({ code: '', name: '', description: '', location: '', qty: 1, price: 0, minQty: 5, priceDate: new Date().toISOString().split('T')[0] });
+      if (editingPartId) {
+        const saved = await replaceInventoryItem(editingPartId, part);
+        setInventory((prev) => sanitizeInventoryList(prev.map((entry) => (entry.id === editingPartId ? saved : entry)), initialInventory));
+        addToast('Articolo aggiornato.', 'success');
+      } else {
+        const created = await createInventoryItem(part);
+        setInventory((prev) => sanitizeInventoryList([...prev, created], initialInventory));
+        addToast('Ricambio salvato.', 'success');
+      }
+      resetPartForm();
       setShowNewPart(false);
-      setSyncStatus('Ricambio salvato nel backend.');
-      addToast('Ricambio salvato.', 'success');
+      setSyncStatus('Magazzino salvato nel backend.');
     } catch (error) {
-      handleApiError(error, 'Impossibile salvare il ricambio.');
+      handleApiError(error, editingPartId ? 'Impossibile aggiornare il ricambio.' : 'Impossibile salvare il ricambio.');
     } finally {
       setIsSavingPart(false);
     }
@@ -2257,7 +2351,7 @@ const buildBackup = () => ({
         <h2 className="text-2xl font-bold text-slate-800">Magazzino Ricambi</h2>
         <div className="flex flex-wrap gap-2">
           <button onClick={handleSelectInventoryFile} className="bg-slate-100 text-slate-700 px-4 py-2 rounded flex gap-2 items-center border disabled:opacity-60" disabled={isImportingInventory}><Upload size={18}/> {isImportingInventory ? 'Caricamento...' : 'Importa Magazzino'}</button>
-          <button onClick={() => setShowNewPart(true)} className="bg-purple-600 text-white px-4 py-2 rounded flex gap-2"><Plus/> Aggiungi Articolo</button>
+          <button onClick={() => { resetPartForm(); setShowNewPart(true); }} className="bg-purple-600 text-white px-4 py-2 rounded flex gap-2"><Plus/> Aggiungi Articolo</button>
         </div>
       </div>
       <div className="bg-white rounded shadow p-4 border border-slate-200">
@@ -2336,7 +2430,14 @@ const buildBackup = () => ({
                     <button onClick={() => updateStock(item.id, 1)} className="w-6 h-6 rounded bg-slate-200 hover:bg-slate-300 font-bold">+</button>
                   </div>
                 </td>
-                <td className="p-4 text-right"><button onClick={() => handleDelete('inventory', item.id)} className="text-red-400 hover:text-red-600 p-2"><Trash2 size={18}/></button></td>
+                <td className="p-4 text-right">
+                  <div className="inline-flex items-center gap-1">
+                    <button onClick={() => openEditPartModal(item)} className="text-slate-500 hover:text-blue-600 p-2" title="Modifica articolo">
+                      <Pencil size={18}/>
+                    </button>
+                    <button onClick={() => handleDelete('inventory', item.id)} className="text-red-400 hover:text-red-600 p-2" title="Elimina articolo"><Trash2 size={18}/></button>
+                  </div>
+                </td>
               </tr>
             ))}
             {filteredInventory.length === 0 && (
@@ -2718,7 +2819,7 @@ const buildBackup = () => ({
       <Sidebar
         isSidebarOpen={isSidebarOpen}
         activeTab={activeTab}
-        onClose={() => setIsSidebarOpen(false)}
+        onClose={closeSidebar}
         onSwitchTab={switchToTab}
         onResetData={handleResetData}
       />
@@ -2727,9 +2828,17 @@ const buildBackup = () => ({
            <span className="font-bold text-slate-700 flex items-center gap-2"><Zap className="text-yellow-500 w-5 h-5"/> FIXLAB</span>
            <div className="flex items-center gap-2">
              <button onClick={handleLogout} className="px-2 py-1 text-xs bg-slate-100 border rounded">Logout</button>
-             <button onClick={() => setIsSidebarOpen(!isSidebarOpen)}><Menu className="w-6 h-6 text-slate-600" /></button>
+             <button onClick={toggleSidebar} aria-controls="mobile-sidebar" aria-expanded={isSidebarOpen} aria-label="Apri menu laterale"><Menu className="w-6 h-6 text-slate-600" /></button>
            </div>
         </header>
+        {isMobileView && isSidebarOpen && (
+          <button
+            type="button"
+            className="fixed inset-0 z-30 bg-slate-900/50 md:hidden"
+            onClick={closeSidebar}
+            aria-label="Chiudi menu laterale"
+          />
+        )}
         <main className="flex-1 overflow-y-auto p-4 md:p-8">
           <div className="max-w-6xl mx-auto pb-20">
             <ActiveTabContent
@@ -3153,9 +3262,9 @@ const buildBackup = () => ({
       )}
 
       {showNewPart && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setShowNewPart(false)}>
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => { setShowNewPart(false); resetPartForm(); }}>
             <div className="bg-white p-6 rounded-lg w-full max-w-md" onClick={(e) => e.stopPropagation()}>
-                <h3 className="text-xl font-bold mb-4">Nuovo Articolo Magazzino</h3>
+                <h3 className="text-xl font-bold mb-4">{editingPartId ? 'Modifica Articolo Magazzino' : 'Nuovo Articolo Magazzino'}</h3>
                 <div className="space-y-3">
                     <input className="w-full border p-2 rounded" placeholder="Codice Articolo (es. RIC-001)" value={newPart.code} onChange={e => setNewPart({...newPart, code: e.target.value})} />
                     <input className="w-full border p-2 rounded" placeholder="Nome Prodotto (es. Cuscinetti)" value={newPart.name} onChange={e => setNewPart({...newPart, name: e.target.value})} />
@@ -3175,9 +3284,9 @@ const buildBackup = () => ({
                     <input type="number" className="w-full border p-2 rounded" placeholder="Quantità Minima (Allarme)" value={newPart.minQty} onChange={e => setNewPart({...newPart, minQty: parseInt(e.target.value)})} />
                 </div>
                 <div className="flex justify-end gap-2 mt-4">
-                  <button onClick={() => setShowNewPart(false)} className="px-4 py-2 text-slate-500">Annulla</button>
+                  <button onClick={() => { setShowNewPart(false); resetPartForm(); }} className="px-4 py-2 text-slate-500">Annulla</button>
                   <button onClick={handleCreatePart} className="px-4 py-2 bg-purple-600 text-white rounded flex items-center gap-2" disabled={isSavingPart}>
-                    {isSavingPart && <RefreshCw size={16} className="animate-spin"/>} Salva
+                    {isSavingPart && <RefreshCw size={16} className="animate-spin"/>} {editingPartId ? 'Aggiorna' : 'Salva'}
                   </button>
                 </div>
             </div>
