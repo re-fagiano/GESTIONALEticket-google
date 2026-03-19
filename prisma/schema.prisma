@@ -26,7 +26,7 @@ enum InterventionStatus {
 enum UserRole {
   ADMIN
   OPERATOR
-  READER
+  VIEWER
 }
 
 model Customer {
