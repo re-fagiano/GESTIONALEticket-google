@@ -635,19 +635,20 @@ const getInterventoLogsSqlite = (interventoId) => getAll(
 
 // Ruoli uniformati: singola fonte di verità per auth/autorizzazioni.
 // Rollback: aggiungere alias legacy (tech/read/operator/operatore) se servono token storici.
-const USER_ROLES = new Set(['ADMIN', 'OPERATOR', 'READER'])
+const USER_ROLES = new Set(['ADMIN', 'OPERATOR', 'VIEWER'])
 
-// In questa fase tutti i nuovi account registrati devono avere privilegi amministrativi.
-// Quando sarà necessario differenziare i permessi, basta cambiare questa costante.
-const DEFAULT_REGISTRATION_ROLE = 'ADMIN'
+// I nuovi account self-service partono come operator per evitare escalation di privilegi.
+// Gli admin vanno creati tramite seed o promozione esplicita.
+const DEFAULT_REGISTRATION_ROLE = 'OPERATOR'
 
 const LEGACY_ROLE_MAP = {
   admin: 'ADMIN',
   operatore: 'OPERATOR',
   operator: 'OPERATOR',
   tech: 'OPERATOR',
-  read: 'READER',
-  reader: 'READER',
+  read: 'VIEWER',
+  reader: 'VIEWER',
+  viewer: 'VIEWER',
 }
 
 const normalizeUserRole = (value, fallback = 'OPERATOR') => {
@@ -1744,6 +1745,14 @@ const ensureRole = (res, user, allowedRoles = []) => {
   return true
 }
 
+const ensureAdminRole = (res, user) => {
+  if (user.role !== 'ADMIN') {
+    respond(res, 403, { error: 'Access denied' })
+    return false
+  }
+  return true
+}
+
 const ensureRouteAuthorization = (req, res, user, pathname) => {
   if (user.role === 'ADMIN') return true
 
@@ -1755,7 +1764,7 @@ const ensureRouteAuthorization = (req, res, user, pathname) => {
     return true
   }
 
-  if (user.role === 'READER') {
+  if (user.role === 'VIEWER') {
     if (!CSRF_SAFE_METHODS.has(req.method || 'GET')) {
       respond(res, 403, { error: 'Permessi insufficienti per questa operazione.' })
       return false
@@ -1852,7 +1861,9 @@ const handleApiRequest = async (req, res, url) => {
         if (!dbUser) return respond(res, 404, { error: 'Utente non trovato.', code: 'user_not_found' })
         const passwordOk = await verifyPassword(password, dbUser.passwordHash)
         if (!passwordOk) return respond(res, 401, { error: 'Credenziali errate.', code: 'invalid_credentials' })
-        const user = { id: dbUser.id, email: dbUser.email, username: dbUser.email, role: normalizeUserRole(dbUser.role), operatorCode: dbUser.operatorCode }
+        const role = normalizeUserRole(dbUser.role, '')
+        if (!role) return respond(res, 403, { error: 'Ruolo utente non valido.', code: 'invalid_role' })
+        const user = { id: dbUser.id, email: dbUser.email, username: dbUser.email, role, operatorCode: dbUser.operatorCode }
         const { accessToken, refreshToken, refreshId, csrfToken } = createAuthTokens(user)
         await createRefreshTokenRecord({ id: refreshId, userId: user.id, token: refreshToken })
         setAuthCookies(res, accessToken, refreshToken, csrfToken)
@@ -1869,7 +1880,9 @@ const handleApiRequest = async (req, res, url) => {
       if (!['active', 'pending'].includes(sanitizeString(user.status, 'active'))) {
         return respond(res, 403, { error: 'Utente non attivo.', code: 'user_inactive' })
       }
-      const authUser = { id: user.id, username: user.username, email: user.email || user.username, role: normalizeUserRole(user.role), status: user.status, approved: Boolean(user.approved), operatorCode: user.operator_code }
+      const role = normalizeUserRole(user.role, '')
+      if (!role) return respond(res, 403, { error: 'Ruolo utente non valido.', code: 'invalid_role' })
+      const authUser = { id: user.id, username: user.username, email: user.email || user.username, role, status: user.status, approved: Boolean(user.approved), operatorCode: user.operator_code }
       const { accessToken, refreshToken, refreshId, csrfToken } = createAuthTokens(authUser)
       await createRefreshTokenRecord({ id: refreshId, userId: user.id, token: refreshToken })
       setAuthCookies(res, accessToken, refreshToken, csrfToken)
@@ -1954,10 +1967,13 @@ const handleApiRequest = async (req, res, url) => {
     let user = null
     if (shouldUsePrisma()) {
       const dbUser = await prisma.user.findUnique({ where: { id: record.user_id } })
-      if (dbUser) user = { id: dbUser.id, email: dbUser.email, username: dbUser.email, role: dbUser.role, operatorCode: dbUser.operatorCode, approved: 1, status: 'active' }
+      if (dbUser) user = { id: dbUser.id, email: dbUser.email, username: dbUser.email, role: normalizeUserRole(dbUser.role), operatorCode: dbUser.operatorCode, approved: 1, status: 'active' }
     } else {
       user = getRow('SELECT id, username, email, role, status, approved, operator_code FROM users WHERE id = ?', [record.user_id])
-      if (user) user.operatorCode = user.operator_code
+      if (user) {
+        user.operatorCode = user.operator_code
+        user.role = normalizeUserRole(user.role)
+      }
     }
     if (!user) return respond(res, 404, { error: 'Utente non trovato.', code: 'user_not_found' })
     if (!user.approved || !['active', 'pending'].includes(sanitizeString(user.status, 'active'))) {
@@ -2078,7 +2094,7 @@ const handleApiRequest = async (req, res, url) => {
   }
 
   if (req.method === 'POST' && url.pathname === '/api/import') {
-    if (!ensureRole(res, user, ['ADMIN'])) return
+    if (!ensureAdminRole(res, user)) return
     try {
       const payload = await readJsonBody(req)
       const customers = Array.isArray(payload?.customers) ? payload.customers : []
@@ -2618,7 +2634,7 @@ const handleApiRequest = async (req, res, url) => {
     return respond(res, 200, mapCustomerRow(getRow('SELECT * FROM customers WHERE id = ?', [id])))
   }
   if (req.method === 'DELETE' && url.pathname.startsWith('/api/customers/')) {
-    if (!ensureRole(res, user, ['ADMIN'])) return
+    if (!ensureAdminRole(res, user)) return
     const id = match(/^\/api\/customers\/(.+)$/)
     if (!id) return respond(res, 404, { error: 'Cliente non trovato.' })
     runQuery('DELETE FROM customers WHERE id = ?', [id])
@@ -2666,7 +2682,7 @@ const handleApiRequest = async (req, res, url) => {
     return respond(res, 200, mapTicketRow(getRow('SELECT * FROM tickets WHERE id = ?', [id])))
   }
   if (req.method === 'DELETE' && url.pathname.startsWith('/api/tickets/')) {
-    if (!ensureRole(res, user, ['ADMIN'])) return
+    if (!ensureAdminRole(res, user)) return
     const id = match(/^\/api\/tickets\/(.+)$/)
     if (!id) return respond(res, 404, { error: 'Ticket non trovato.' })
     runQuery('DELETE FROM tickets WHERE id = ?', [id])
@@ -2856,7 +2872,7 @@ const handleApiRequest = async (req, res, url) => {
   }
 
   if (req.method === 'DELETE' && url.pathname.startsWith('/api/interventions/')) {
-    if (!ensureRole(res, user, ['ADMIN'])) return
+    if (!ensureAdminRole(res, user)) return
     const id = match(/^\/api\/interventions\/(.+)$/)
     if (!id) return respond(res, 404, { error: 'Intervento non trovato.' })
     runQuery('DELETE FROM interventions WHERE id = ?', [id])
@@ -2894,7 +2910,7 @@ const handleApiRequest = async (req, res, url) => {
     return respond(res, 200, mapSparePartOrderRow(getRow('SELECT * FROM spare_parts_orders WHERE id = ?', [id])))
   }
   if (req.method === 'DELETE' && url.pathname.startsWith('/api/spare-parts-orders/')) {
-    if (!ensureRole(res, user, ['ADMIN'])) return
+    if (!ensureAdminRole(res, user)) return
     const id = match(/^\/api\/spare-parts-orders\/(.+)$/)
     if (!id) return respond(res, 404, { error: 'Ordine ricambi non trovato.' })
     runQuery('DELETE FROM spare_parts_orders WHERE id = ?', [id])
@@ -2935,7 +2951,7 @@ const handleApiRequest = async (req, res, url) => {
     return respond(res, 200, mapQuoteRow(getRow('SELECT * FROM quotes WHERE id = ?', [id])))
   }
   if (req.method === 'DELETE' && url.pathname.startsWith('/api/quotes/')) {
-    if (!ensureRole(res, user, ['ADMIN'])) return
+    if (!ensureAdminRole(res, user)) return
     const id = match(/^\/api\/quotes\/(.+)$/)
     if (!id) return respond(res, 404, { error: 'Preventivo non trovato.' })
     runQuery('DELETE FROM quotes WHERE id = ?', [id])
@@ -2943,7 +2959,7 @@ const handleApiRequest = async (req, res, url) => {
   }
 
   if (req.method === 'POST' && url.pathname === '/api/admin/backup') {
-    if (!ensureRole(res, user, ['ADMIN'])) return
+    if (!ensureAdminRole(res, user)) return
     if (!ensureCsrf(req, res)) return
     const result = await performBackup({ triggeredBy: 'manual-api' })
     if (!result.ok) {
@@ -2953,12 +2969,12 @@ const handleApiRequest = async (req, res, url) => {
   }
 
   if (req.method === 'GET' && url.pathname === '/api/admin/backup/latest') {
-    if (!ensureRole(res, user, ['ADMIN'])) return
+    if (!ensureAdminRole(res, user)) return
     return respond(res, 200, { lastRun: await getLastBackupRun() })
   }
 
   if (req.method === 'GET' && url.pathname === '/api/admin/export/json') {
-    if (!ensureRole(res, user, ['ADMIN'])) return
+    if (!ensureAdminRole(res, user)) return
     const payload = await buildBackupPayload()
     const filename = `backup-${formatBackupTimestampForName(new Date())}.json`
     res.writeHead(200, {
@@ -2971,7 +2987,7 @@ const handleApiRequest = async (req, res, url) => {
   }
 
   if (req.method === 'GET' && url.pathname === '/api/admin/export/csv') {
-    if (!ensureRole(res, user, ['ADMIN'])) return
+    if (!ensureAdminRole(res, user)) return
     const tickets = getAll('SELECT id, subject, description, customer_id, status, date, time, created_at, updated_at, version FROM tickets ORDER BY created_at ASC')
     const interventions = getAll('SELECT id, client_id, type, status, urgency, opened_at, closed_at, description, parent_intervention_id, additional_data, created_at, updated_at, version FROM interventions ORDER BY created_at ASC')
 

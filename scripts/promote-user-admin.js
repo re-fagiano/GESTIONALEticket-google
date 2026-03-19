@@ -39,12 +39,12 @@ if (!passwordOk) {
   process.exit(1)
 }
 
-if (user.role === 'admin') {
-  console.log(`L\'utente ${emailArg} è già admin.`)
+if (String(user.role).toUpperCase() === 'ADMIN') {
+  console.log(`L'utente ${emailArg} è già admin.`)
   process.exit(0)
 }
 
 const now = new Date().toISOString()
-db.prepare('UPDATE users SET role = ?, updated_at = ? WHERE id = ?').run('admin', now, user.id)
+db.prepare('UPDATE users SET role = ?, updated_at = ? WHERE id = ?').run('ADMIN', now, user.id)
 const updated = db.prepare('SELECT email, role, updated_at FROM users WHERE id = ?').get(user.id)
 console.log(`Ruolo aggiornato con successo: ${updated.email} -> ${updated.role} (${updated.updated_at})`)
