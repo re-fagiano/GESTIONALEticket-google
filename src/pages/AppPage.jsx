@@ -989,10 +989,19 @@ export default function AppPage() {
   const openInterventionDetails = (intervention) => {
     const safe = sanitizeIntervention(intervention);
     if (!safe) return;
+    const customer = customers.find((entry) => entry.id === safe.clientId);
     setSelectedInterventionFiles([]);
     setSelectedIntervention({
       ...safe,
       descriptionEntries: getDescriptionEntries(safe),
+      customerSnapshot: customer
+        ? {
+            name: customer.name || '',
+            phone: customer.phone || '',
+            email: customer.email || '',
+            address: customer.address || ''
+          }
+        : null,
       newNote: ''
     });
   };
@@ -3088,6 +3097,27 @@ const buildBackup = () => ({
             <div className="grid md:grid-cols-2 gap-3">
               <input className="w-full border p-2 rounded bg-slate-50" value={selectedIntervention.id} readOnly />
               <input type="datetime-local" className="w-full border p-2 rounded" value={toLocalDateTimeInput(selectedIntervention.openedAt)} onChange={(e) => setSelectedIntervention((prev) => ({ ...prev, openedAt: new Date(e.target.value).toISOString() }))} />
+              <div className="md:col-span-2 rounded border border-slate-200 bg-slate-50 p-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Cliente associato</p>
+                <div className="mt-2 grid gap-2 md:grid-cols-2 text-sm text-slate-700">
+                  <div>
+                    <p className="text-xs text-slate-500">Nome</p>
+                    <p className="font-medium">{selectedIntervention.customerSnapshot?.name || 'Cliente non disponibile'}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-slate-500">Telefono</p>
+                    <p>{selectedIntervention.customerSnapshot?.phone || 'Non disponibile'}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-slate-500">Email</p>
+                    <p>{selectedIntervention.customerSnapshot?.email || 'Non disponibile'}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-slate-500">Indirizzo</p>
+                    <p>{selectedIntervention.customerSnapshot?.address || 'Non disponibile'}</p>
+                  </div>
+                </div>
+              </div>
               <select className="w-full border p-2 rounded" value={selectedIntervention.status} onChange={(e) => setSelectedIntervention((prev) => ({ ...prev, status: e.target.value }))}>
                 {interventionStatuses.map((s) => <option key={s} value={s}>{s}</option>)}
               </select>
