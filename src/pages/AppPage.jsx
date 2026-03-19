@@ -1632,16 +1632,25 @@ const buildBackup = () => ({
     if (validEntries.length === 0) return;
 
     setIsImportingInventory(true);
+    const normalizeInventoryText = (value) => (value || '').toString().trim().toLowerCase();
+    const isUuidLike = (value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test((value || '').toString().trim());
     const inventoryByCode = new Map(inventory.map((item) => [item.code, item]));
+    const inventoryByLocationAndDescription = new Map(
+      inventory
+        .filter((item) => isUuidLike(item.code))
+        .map((item) => [`${normalizeInventoryText(item.location)}::${normalizeInventoryText(item.description || item.name)}`, item])
+    );
     const updatedInventory = [...inventory];
     const updates = [];
     const creations = [];
 
     validEntries.forEach((entry) => {
-      const existing = inventoryByCode.get(entry.code);
+      const locationDescriptionKey = `${normalizeInventoryText(entry.location)}::${normalizeInventoryText(entry.description || entry.name)}`;
+      const existing = inventoryByCode.get(entry.code) || inventoryByLocationAndDescription.get(locationDescriptionKey);
       if (existing) {
         const merged = sanitizeInventoryItem({
           ...existing,
+          code: entry.code || existing.code,
           description: entry.description || existing.description,
           name: entry.description || existing.name,
           location: entry.location || existing.location,

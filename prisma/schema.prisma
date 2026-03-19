@@ -64,6 +64,7 @@ model Ticket {
 
 model InventoryItem {
   id        String   @id @default(uuid())
+  code      String?
   name      String
   location  String?
   qty       Int      @default(0)
