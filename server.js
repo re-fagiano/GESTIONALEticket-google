@@ -488,7 +488,7 @@ const mapInventoryRow = (row) => (row ? ({
 
 const mapPrismaInventoryItem = (row) => (row ? ({
   id: row.id,
-  code: row.id,
+  code: row.code || row.id,
   name: row.name,
   description: row.name,
   location: row.location || '',
