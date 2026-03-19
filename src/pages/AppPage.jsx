@@ -492,7 +492,7 @@ export default function AppPage() {
     quoteTotal: 0,
     quoteValidUntil: ''
   });
-  const [newPart, setNewPart] = useState({ code: '', name: '', description: '', location: '', qty: 1, price: 0, minQty: 5, priceDate: new Date().toISOString().split('T')[0] });
+  const [newPart, setNewPart] = useState({ code: '', name: '', description: '', location: '', qty: 1, price: 0, minQty: 5, priceDate: new Date().toISOString().split('T')[0], version: 1 });
   const [editingPartId, setEditingPartId] = useState(null);
   const [ticketCustomerQuery, setTicketCustomerQuery] = useState('');
   const [interventionCustomerQuery, setInterventionCustomerQuery] = useState('');
@@ -1064,7 +1064,7 @@ export default function AppPage() {
   };
 
   const resetPartForm = () => {
-    setNewPart({ code: '', name: '', description: '', location: '', qty: 1, price: 0, minQty: 5, priceDate: new Date().toISOString().split('T')[0] });
+    setNewPart({ code: '', name: '', description: '', location: '', qty: 1, price: 0, minQty: 5, priceDate: new Date().toISOString().split('T')[0], version: 1 });
     setEditingPartId(null);
   };
 
@@ -1078,6 +1078,7 @@ export default function AppPage() {
       price: Number(item.price || 0),
       minQty: Number(item.minQty || 0),
       priceDate: item.priceDate ? String(item.priceDate).split('T')[0] : '',
+      version: Number(item.version || 1),
     });
     setEditingPartId(item.id);
     setShowNewPart(true);
