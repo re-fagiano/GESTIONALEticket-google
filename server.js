@@ -2528,6 +2528,7 @@ const handleApiRequest = async (req, res, url) => {
     const created = await prisma.inventoryItem.create({
       data: {
         id: value.id,
+        code: value.code,
         name: value.name,
         location: value.location || null,
         qty: value.qty,
@@ -2555,6 +2556,7 @@ const handleApiRequest = async (req, res, url) => {
     const updated = await prisma.inventoryItem.update({
       where: { id: existing.id },
       data: {
+        code: value.code,
         name: value.name,
         location: value.location || null,
         qty: value.qty,
