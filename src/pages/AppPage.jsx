@@ -3100,8 +3100,8 @@ const buildBackup = () => ({
 
 
       {selectedIntervention && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => { setSelectedInterventionFiles([]); setSelectedIntervention(null); }}>
-          <div className="bg-white p-6 rounded-lg w-full max-w-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="fixed inset-0 bg-black/50 flex items-start justify-center z-50 overflow-y-auto p-4 sm:items-center" onClick={() => { setSelectedInterventionFiles([]); setSelectedIntervention(null); }}>
+          <div className="bg-white p-6 rounded-lg w-full max-w-2xl max-h-[calc(100vh-2rem)] overflow-y-auto my-auto" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-xl font-bold mb-4">Dettaglio intervento</h3>
             <div className="grid md:grid-cols-2 gap-3">
               <input className="w-full border p-2 rounded bg-slate-50" value={selectedIntervention.id} readOnly />
