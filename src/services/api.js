@@ -335,6 +335,16 @@ export const getLatestAdminBackup = async () => apiFetch({
   options: { method: 'GET' },
 });
 
+export const getAdminUsers = async () => apiFetch({
+  path: '/api/admin/users',
+  options: { method: 'GET' },
+});
+
+export const updateAdminUser = async (userId, payload) => apiFetch({
+  path: `/api/admin/users/${userId}`,
+  options: { method: 'PATCH', body: JSON.stringify(payload) },
+});
+
 export const downloadAdminExportJson = async () => {
   const response = await fetch('/api/admin/export/json', { credentials: 'include' });
   if (!response.ok) {

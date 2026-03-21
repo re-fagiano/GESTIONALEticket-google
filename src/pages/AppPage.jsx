@@ -33,6 +33,7 @@ import {
   importData,
   downloadAdminExportCsv,
   downloadAdminExportJson,
+  getAdminUsers,
   getHealthStatus,
   getLatestAdminBackup,
   getMe,
@@ -42,6 +43,7 @@ import {
   setUnauthorizedHandler,
   syncData,
   triggerAdminBackup,
+  updateAdminUser,
   apiFetch
 } from '../services/api';
 import {
@@ -198,6 +200,10 @@ export default function AppPage() {
   const [backupStatus, setBackupStatus] = useState('');
   const [serverBackupRun, setServerBackupRun] = useState(null);
   const [isRunningServerBackup, setIsRunningServerBackup] = useState(false);
+  const [adminUsers, setAdminUsers] = useState([]);
+  const [adminUsersLoading, setAdminUsersLoading] = useState(false);
+  const [adminUsersError, setAdminUsersError] = useState('');
+  const [adminUserSavingId, setAdminUserSavingId] = useState('');
   const [mbiEnabled] = useState(false);
   const [, setMbiStatus] = useState('');
 
@@ -376,6 +382,7 @@ export default function AppPage() {
   useEffect(() => {
     if (!authState.user || authState.user.role !== 'ADMIN') {
       setServerBackupRun(null);
+      setAdminUsers([]);
       return;
     }
     getLatestAdminBackup()
@@ -386,6 +393,25 @@ export default function AppPage() {
         setServerBackupRun(null);
       });
   }, [authState.user]);
+
+  const loadAdminUsers = useCallback(async () => {
+    if (!authState.user || authState.user.role !== 'ADMIN') return;
+    try {
+      setAdminUsersLoading(true);
+      setAdminUsersError('');
+      const payload = await getAdminUsers();
+      setAdminUsers(Array.isArray(payload?.users) ? payload.users : []);
+    } catch (error) {
+      setAdminUsersError(error?.message || 'Impossibile caricare gli utenti.');
+    } finally {
+      setAdminUsersLoading(false);
+    }
+  }, [authState.user]);
+
+  useEffect(() => {
+    if (authState.user?.role !== 'ADMIN') return;
+    loadAdminUsers();
+  }, [authState.user, loadAdminUsers]);
 
   // Modal & AI State
   const [showNewTicket, setShowNewTicket] = useState(false);
@@ -689,6 +715,13 @@ export default function AppPage() {
       setSyncStatus(authMode === 'register' ? 'Registrazione in corso...' : 'Login in corso...');
       const action = authMode === 'register' ? register : login;
       const data = await action({ email: loginForm.email.trim(), password: loginForm.password });
+      if (authMode === 'register' && data?.pendingApproval) {
+        setLoginForm({ email: loginForm.email.trim(), password: '' });
+        setStorageWarning('Registrazione inviata. Un amministratore deve approvare l’account prima dell’accesso.');
+        setSyncStatus('Registrazione completata: account in attesa di approvazione.');
+        addToast('Registrazione inviata. In attesa di approvazione admin.', 'success');
+        return;
+      }
       const me = await getMe();
       setAuthState({ checked: true, user: me?.user || data?.user || null });
       setLoginForm({ email: '', password: '' });
@@ -2471,6 +2504,30 @@ const buildBackup = () => ({
   );
 
   const SettingsPanel = () => (
+    (() => {
+      const sortedAdminUsers = [...adminUsers].sort((a, b) => {
+        const pendingDelta = Number(Boolean(b && !b.approved)) - Number(Boolean(a && !a.approved));
+        if (pendingDelta !== 0) return pendingDelta;
+        return new Date(b?.createdAt || 0).getTime() - new Date(a?.createdAt || 0).getTime();
+      });
+      const pendingUsers = sortedAdminUsers.filter((user) => !user.approved);
+      const roleOptions = ['VIEWER', 'OPERATOR', 'ADMIN'];
+
+      const handleAdminUserAction = async (userId, payload, successMessage) => {
+        try {
+          setAdminUserSavingId(userId);
+          const response = await updateAdminUser(userId, payload);
+          const updatedUser = response?.user;
+          setAdminUsers((prev) => prev.map((entry) => (entry.id === userId ? { ...entry, ...updatedUser } : entry)));
+          addToast(successMessage, 'success');
+        } catch (error) {
+          handleApiError(error, 'Impossibile aggiornare l’utente.');
+        } finally {
+          setAdminUserSavingId('');
+        }
+      };
+
+      return (
     <div className="space-y-6">
       <div className="bg-white rounded shadow p-4 border border-slate-200">
         <h2 className="text-lg font-bold text-slate-800 mb-2">Accreditamento operatore</h2>
@@ -2503,6 +2560,111 @@ const buildBackup = () => ({
         <button onClick={handleLogout} className="px-3 py-1 text-xs bg-slate-100 border rounded">Logout</button>
       </div>
 
+      {authState.user?.role === 'ADMIN' && (
+        <div className="bg-white rounded shadow p-4 border border-slate-200 space-y-4">
+          <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h2 className="text-lg font-bold text-slate-800">Gestione utenti</h2>
+              <p className="text-sm text-slate-500">
+                Approva i nuovi account e assegna il ruolo corretto agli utenti operativi.
+              </p>
+            </div>
+            <button onClick={loadAdminUsers} disabled={adminUsersLoading} className="px-3 py-2 text-sm bg-slate-100 border rounded disabled:opacity-60">
+              {adminUsersLoading ? 'Aggiornamento...' : 'Aggiorna elenco'}
+            </button>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-3">
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">Da approvare</p>
+              <p className="mt-1 text-2xl font-bold text-amber-900">{pendingUsers.length}</p>
+            </div>
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">Utenti totali</p>
+              <p className="mt-1 text-2xl font-bold text-slate-900">{sortedAdminUsers.length}</p>
+            </div>
+            <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Admin</p>
+              <p className="mt-1 text-2xl font-bold text-emerald-900">{sortedAdminUsers.filter((user) => user.role === 'ADMIN').length}</p>
+            </div>
+          </div>
+
+          {adminUsersError && <p className="text-sm text-red-600">{adminUsersError}</p>}
+
+          <div className="space-y-3">
+            {sortedAdminUsers.length === 0 && !adminUsersLoading && (
+              <p className="rounded border border-dashed border-slate-200 p-4 text-sm text-slate-500">
+                Nessun utente disponibile.
+              </p>
+            )}
+
+            {sortedAdminUsers.map((user) => {
+              const isCurrentUser = user.id === authState.user?.id;
+              const isSaving = adminUserSavingId === user.id;
+              return (
+                <div key={user.id} className="rounded-xl border border-slate-200 p-4">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="space-y-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="text-base font-semibold text-slate-900">{user.email}</h3>
+                        <span className={`rounded-full px-2 py-1 text-xs font-semibold ${user.approved ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+                          {user.approved ? 'Attivo' : 'In attesa'}
+                        </span>
+                        <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-medium text-slate-600">
+                          {user.role}
+                        </span>
+                        {isCurrentUser && (
+                          <span className="rounded-full bg-blue-100 px-2 py-1 text-xs font-medium text-blue-700">Tu</span>
+                        )}
+                      </div>
+                      <p className="text-sm text-slate-500">Codice operatore: <strong>{user.operatorCode || '—'}</strong></p>
+                      <p className="text-xs text-slate-400">
+                        Creato il {user.createdAt ? new Date(user.createdAt).toLocaleString('it-IT') : 'data non disponibile'}
+                        {user.updatedAt ? ` • aggiornato ${new Date(user.updatedAt).toLocaleString('it-IT')}` : ''}
+                      </p>
+                    </div>
+
+                    <div className="flex flex-col gap-2 md:flex-row md:items-center">
+                      <select
+                        value={user.role}
+                        disabled={isSaving || isCurrentUser}
+                        onChange={(e) => handleAdminUserAction(user.id, {
+                          role: e.target.value,
+                          approved: user.approved,
+                          status: user.approved ? 'active' : 'pending',
+                        }, `Ruolo aggiornato per ${user.email}.`)}
+                        className="rounded border border-slate-300 px-3 py-2 text-sm disabled:opacity-60"
+                      >
+                        {roleOptions.map((option) => (
+                          <option key={option} value={option}>{option}</option>
+                        ))}
+                      </select>
+
+                      {!user.approved ? (
+                        <button
+                          onClick={() => handleAdminUserAction(user.id, { role: user.role, approved: true, status: 'active' }, `Utente ${user.email} approvato.`)}
+                          disabled={isSaving}
+                          className="rounded bg-emerald-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-60"
+                        >
+                          {isSaving ? 'Salvataggio...' : 'Approva utente'}
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => handleAdminUserAction(user.id, { role: user.role, approved: false, status: 'disabled' }, `Accesso disabilitato per ${user.email}.`)}
+                          disabled={isSaving || isCurrentUser}
+                          className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700 disabled:opacity-60"
+                        >
+                          {isSaving ? 'Salvataggio...' : 'Disabilita'}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       <div className="bg-white rounded shadow p-4 border border-slate-200 space-y-3">
         <h2 className="text-lg font-bold text-slate-800">Backup e import magazzino</h2>
@@ -2542,6 +2704,8 @@ const buildBackup = () => ({
         </p>
       </div>
     </div>
+      );
+    })()
   );
 
 
