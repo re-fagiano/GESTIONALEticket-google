@@ -12,7 +12,7 @@ import {
   X
 } from 'lucide-react';
 
-export default function Sidebar({ isSidebarOpen, activeTab, onClose, onSwitchTab, onResetData }) {
+export default function Sidebar({ isSidebarOpen, activeTab, onClose, onSwitchTab, onResetData, canEdit }) {
   return (
     <aside
       id="mobile-sidebar"
@@ -34,7 +34,7 @@ export default function Sidebar({ isSidebarOpen, activeTab, onClose, onSwitchTab
         <button onClick={() => onSwitchTab('inventory')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'inventory' ? 'bg-slate-800 text-yellow-400' : ''}`}><Package size={20}/> Magazzino</button>
         <button onClick={() => onSwitchTab('settings')} className={`flex items-center gap-3 w-full p-3 rounded hover:bg-slate-800 ${activeTab === 'settings' ? 'bg-slate-800 text-yellow-400' : ''}`}><Bot size={20}/> Impostazioni</button>
       </nav>
-      <div className="p-4 border-t border-slate-700"><button onClick={onResetData} className="w-full text-xs bg-red-900/50 text-red-200 p-2 rounded">Reset Dati</button></div>
+      <div className="p-4 border-t border-slate-700"><button onClick={onResetData} disabled={!canEdit} className="w-full text-xs bg-red-900/50 text-red-200 p-2 rounded disabled:opacity-50 disabled:cursor-not-allowed">Reset Dati</button></div>
     </aside>
   );
 }
