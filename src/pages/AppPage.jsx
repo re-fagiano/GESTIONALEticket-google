@@ -223,6 +223,9 @@ export default function AppPage() {
     };
   });
 
+  const isAdmin = authState.user?.role === 'ADMIN';
+  const isReadOnlyUser = Boolean(authState.user) && !isAdmin;
+
   const interventionTickets = useMemo(() => (
     sanitizeInterventions(interventions, initialInterventions).map((entry, idx) => interventionToTicket(entry, idx))
   ), [interventions]);
@@ -244,6 +247,12 @@ export default function AppPage() {
     setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id));
     }, 3000); // Rimuove il toast dopo 3 secondi
+  };
+
+  const assertAdminAccess = (message = 'Solo gli amministratori possono modificare i dati.') => {
+    if (isAdmin) return true;
+    addToast(message, 'error');
+    return false;
   };
 
   // --- CACHE LOCALE ---
@@ -809,12 +818,14 @@ export default function AppPage() {
   };
 
   const openNewCustomerModal = () => {
+    if (!assertAdminAccess()) return;
     setEditingCustomerId(null);
     setNewCustomer({ name: '', email: '', phone: '', address: '' });
     setShowNewCustomer(true);
   };
 
   const openCustomerEditor = (customer) => {
+    if (!assertAdminAccess()) return;
     if (!customer) return;
     setEditingCustomerId(customer.id);
     setNewCustomer({
@@ -827,6 +838,7 @@ export default function AppPage() {
   };
 
   const handleSaveCustomer = async () => {
+    if (!assertAdminAccess()) return;
     if (!newCustomer.name.trim()) {
       addToast('Inserisci almeno il nome cliente.', 'error');
       return;
@@ -873,6 +885,7 @@ export default function AppPage() {
   };
 
   const handleCreateTicket = async () => {
+    if (!assertAdminAccess()) return;
     if (!newTicket.customerId) {
       addToast('Seleziona un cliente prima di salvare il ticket.', 'error');
       return;
@@ -898,6 +911,7 @@ export default function AppPage() {
   };
 
   const handleAddIntervention = async (forcedType = null) => {
+    if (!assertAdminAccess()) return;
     const selectedType = forcedType || newIntervention.type;
     if (!newIntervention.clientId) {
       addToast('Seleziona un cliente prima di salvare l\'intervento.', 'error');
@@ -989,6 +1003,7 @@ export default function AppPage() {
   };
 
   const handleInterventionStatusChange = async (intervention, status) => {
+    if (!assertAdminAccess()) return;
     if (!intervention || intervention.status === status) return;
     try {
       const saved = await patchInterventoStatus(intervention.id, status);
@@ -1000,6 +1015,7 @@ export default function AppPage() {
   };
 
   const handleInterventionScheduleChange = async (intervention, openedAt) => {
+    if (!assertAdminAccess()) return false;
     if (!intervention || !openedAt) return false;
     const updated = sanitizeIntervention({
       ...intervention,
@@ -1040,6 +1056,7 @@ export default function AppPage() {
   };
 
   const handleSaveInterventionDetails = async () => {
+    if (!assertAdminAccess()) return;
     if (!selectedIntervention) return;
 
     const noteText = (selectedIntervention.newNote || '').trim();
@@ -1102,6 +1119,7 @@ export default function AppPage() {
   };
 
   const openEditPartModal = (item) => {
+    if (!assertAdminAccess()) return;
     setNewPart({
       code: item.code || '',
       name: item.name || '',
@@ -1118,6 +1136,7 @@ export default function AppPage() {
   };
 
   const handleCreatePart = async () => {
+    if (!assertAdminAccess()) return;
     if (!newPart.name.trim()) {
       addToast('Inserisci almeno il nome del ricambio.', 'error');
       return;
@@ -1163,6 +1182,7 @@ export default function AppPage() {
   };
 
   const handleTicketStatusChange = async (ticket, status) => {
+    if (!assertAdminAccess()) return;
     if (!ticket || ticket.status === status) return;
     const linkedIntervention = interventions.find((entry) => entry.id === ticket.id);
 
@@ -1201,6 +1221,7 @@ export default function AppPage() {
   };
 
   const handleConvertCallToRepair = async (ticket) => {
+    if (!assertAdminAccess()) return;
     if (!ticket?.id) return;
     try {
       const createdRepair = await convertChiamataToRiparazione(ticket.id);
@@ -1213,6 +1234,7 @@ export default function AppPage() {
   };
 
   const handleImportCallAsRepair = async () => {
+    if (!assertAdminAccess()) return;
     if (!callToImportId) {
       addToast('Seleziona prima una chiamata da importare.', 'error');
       return;
@@ -1236,6 +1258,7 @@ export default function AppPage() {
   };
 
   const updateStock = async (id, delta) => {
+    if (!assertAdminAccess()) return;
     const item = inventory.find((entry) => entry.id === id);
     if (!item) return;
     const updatedItem = {
@@ -1263,6 +1286,7 @@ export default function AppPage() {
   };
 
   const resolveConflictAction = async (action) => {
+    if (!assertAdminAccess()) return;
     if (!conflictState) return;
     const { local, remote, type } = conflictState;
     if (type !== 'inventory') {
@@ -1288,6 +1312,7 @@ export default function AppPage() {
   };
 
   const handleDeleteTicketEntry = async (ticket) => {
+    if (!assertAdminAccess()) return;
     if (!ticket) return;
     const linkedIntervention = interventions.find((entry) => entry.id === ticket.id);
     if (linkedIntervention) {
@@ -1306,6 +1331,7 @@ export default function AppPage() {
   };
 
   const handleDelete = async (type, id) => {
+    if (!assertAdminAccess()) return;
     if (!confirm("Sei sicuro?")) return;
     try {
       await deleteEntity(type, id);
@@ -1320,6 +1346,7 @@ export default function AppPage() {
   };
 
   const handleResetData = async () => {
+    if (!assertAdminAccess()) return;
     const isConfirmed = confirm('Operazione distruttiva: verranno cancellati TUTTI i dati dal database. Vuoi continuare?');
     if (!isConfirmed) return;
     const typedConfirmation = prompt('Per confermare il reset totale, digita RESET DATI');
@@ -1501,6 +1528,7 @@ const buildBackup = () => ({
   };
 
   const handleServerBackupNow = async () => {
+    if (!assertAdminAccess()) return;
     setIsRunningServerBackup(true);
     try {
       const payload = await triggerAdminBackup();
@@ -1515,6 +1543,7 @@ const buildBackup = () => ({
   };
 
   const handleServerExportJson = async () => {
+    if (!assertAdminAccess()) return;
     try {
       const blob = await downloadAdminExportJson();
       triggerBlobDownload(blob, `export-${new Date().toISOString().slice(0, 10)}.json`);
@@ -1525,6 +1554,7 @@ const buildBackup = () => ({
   };
 
   const handleServerExportCsv = async () => {
+    if (!assertAdminAccess()) return;
     try {
       const blob = await downloadAdminExportCsv();
       triggerBlobDownload(blob, `export-${new Date().toISOString().slice(0, 10)}.csv`);
@@ -1637,11 +1667,13 @@ const buildBackup = () => ({
   };
 
   const handleSelectInventoryFile = () => {
+    if (!assertAdminAccess()) return;
     setInventoryImportHeaderError('');
     inventoryFileInputRef.current?.click();
   };
 
   const handleInventoryFileChange = async (event) => {
+    if (!assertAdminAccess()) return;
     const file = event.target.files?.[0];
     if (!file) return;
     setIsImportingInventory(true);
@@ -1662,6 +1694,7 @@ const buildBackup = () => ({
   };
 
   const applyInventoryImport = async () => {
+    if (!assertAdminAccess()) return;
     const validEntries = inventoryImportPreview.filter((entry) => entry.errors.length === 0);
     if (validEntries.length === 0) return;
 
@@ -2158,7 +2191,7 @@ const buildBackup = () => ({
               <button type="button" onClick={handleImportCallAsRepair} className="px-3 py-2 rounded border border-emerald-200 text-emerald-700 bg-emerald-50">Importa chiamata</button>
             </div>
           )}
-          <button onClick={handleAddIntervention} className="bg-indigo-600 text-white px-4 py-2 rounded">Salva intervento</button>
+          <button onClick={handleAddIntervention} disabled={!isAdmin} className="bg-indigo-600 text-white px-4 py-2 rounded disabled:opacity-60">Salva intervento</button>
         </div>
 
         <div className="bg-white rounded-xl shadow border border-slate-200 overflow-hidden">
@@ -2348,7 +2381,7 @@ const buildBackup = () => ({
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-bold text-slate-800">Rubrica Clienti</h2>
-        <button onClick={openNewCustomerModal} className="bg-green-600 text-white px-4 py-2 rounded flex gap-2"><Plus/> Nuovo Cliente</button>
+        <button onClick={openNewCustomerModal} disabled={!isAdmin} className="bg-green-600 text-white px-4 py-2 rounded flex gap-2 disabled:opacity-60"><Plus/> Nuovo Cliente</button>
       </div>
       <div className="bg-white rounded shadow overflow-hidden">
         <table className="w-full text-left">
@@ -2364,7 +2397,7 @@ const buildBackup = () => ({
                   <div className="text-xs text-slate-400">{c.email}</div>
                 </td>
                 <td className="p-4 text-sm text-slate-600"><MapPin size={14} className="inline mr-1"/>{c.address}</td>
-                <td className="p-4 text-right"><button onClick={() => handleDelete('customers', c.id)} className="text-red-400 hover:text-red-600 p-2"><Trash2 size={18}/></button></td>
+                <td className="p-4 text-right"><button onClick={() => handleDelete('customers', c.id)} disabled={!isAdmin} className="text-red-400 hover:text-red-600 p-2 disabled:opacity-60"><Trash2 size={18}/></button></td>
               </tr>
             ))}
           </tbody>
@@ -2382,6 +2415,7 @@ const buildBackup = () => ({
                   <button
                     className="text-xs px-2 py-1 rounded border border-slate-300 text-slate-700 hover:bg-slate-100"
                     onClick={() => openCustomerEditor(c)}
+                    disabled={!isAdmin}
                   >
                     Modifica cliente
                   </button>
@@ -2402,8 +2436,8 @@ const buildBackup = () => ({
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-bold text-slate-800">Magazzino Ricambi</h2>
         <div className="flex flex-wrap gap-2">
-          <button onClick={handleSelectInventoryFile} className="bg-slate-100 text-slate-700 px-4 py-2 rounded flex gap-2 items-center border disabled:opacity-60" disabled={isImportingInventory}><Upload size={18}/> {isImportingInventory ? 'Caricamento...' : 'Importa Magazzino'}</button>
-          <button onClick={() => { resetPartForm(); setShowNewPart(true); }} className="bg-purple-600 text-white px-4 py-2 rounded flex gap-2"><Plus/> Aggiungi Articolo</button>
+          <button onClick={handleSelectInventoryFile} className="bg-slate-100 text-slate-700 px-4 py-2 rounded flex gap-2 items-center border disabled:opacity-60" disabled={isImportingInventory || !isAdmin}><Upload size={18}/> {isImportingInventory ? 'Caricamento...' : 'Importa Magazzino'}</button>
+          <button onClick={() => { if (!assertAdminAccess()) return; resetPartForm(); setShowNewPart(true); }} disabled={!isAdmin} className="bg-purple-600 text-white px-4 py-2 rounded flex gap-2 disabled:opacity-60"><Plus/> Aggiungi Articolo</button>
         </div>
       </div>
       <div className="bg-white rounded shadow p-4 border border-slate-200">
@@ -2477,17 +2511,17 @@ const buildBackup = () => ({
                 <td className="p-4 text-sm text-slate-500">{item.priceDate ? new Date(item.priceDate).toLocaleDateString('it-IT') : 'N/D'}</td>
                 <td className="p-4 text-center">
                   <div className="flex items-center justify-center gap-3">
-                    <button onClick={() => updateStock(item.id, -1)} className="w-6 h-6 rounded bg-slate-200 hover:bg-slate-300 font-bold">-</button>
+                    <button onClick={() => updateStock(item.id, -1)} disabled={!isAdmin} className="w-6 h-6 rounded bg-slate-200 hover:bg-slate-300 font-bold disabled:opacity-60">-</button>
                     <span className={`font-bold w-8 ${item.qty === 0 ? 'text-red-600' : 'text-slate-800'}`}>{item.qty}</span>
-                    <button onClick={() => updateStock(item.id, 1)} className="w-6 h-6 rounded bg-slate-200 hover:bg-slate-300 font-bold">+</button>
+                    <button onClick={() => updateStock(item.id, 1)} disabled={!isAdmin} className="w-6 h-6 rounded bg-slate-200 hover:bg-slate-300 font-bold disabled:opacity-60">+</button>
                   </div>
                 </td>
                 <td className="p-4 text-right">
                   <div className="inline-flex items-center gap-1">
-                    <button onClick={() => openEditPartModal(item)} className="text-slate-500 hover:text-blue-600 p-2" title="Modifica articolo">
+                    <button onClick={() => openEditPartModal(item)} disabled={!isAdmin} className="text-slate-500 hover:text-blue-600 p-2 disabled:opacity-60" title="Modifica articolo">
                       <Pencil size={18}/>
                     </button>
-                    <button onClick={() => handleDelete('inventory', item.id)} className="text-red-400 hover:text-red-600 p-2" title="Elimina articolo"><Trash2 size={18}/></button>
+                    <button onClick={() => handleDelete('inventory', item.id)} disabled={!isAdmin} className="text-red-400 hover:text-red-600 p-2 disabled:opacity-60" title="Elimina articolo"><Trash2 size={18}/></button>
                   </div>
                 </td>
               </tr>
@@ -2543,12 +2577,14 @@ const buildBackup = () => ({
               className="w-full border rounded p-2 text-sm"
               value={operatorProfile.name}
               onChange={(e) => setOperatorProfile((prev) => ({ ...prev, name: e.target.value }))}
+              readOnly={!isAdmin}
             />
           </div>
         </div>
         <button
           onClick={() => setOperatorProfile((prev) => ({ ...prev, code: generateUserCode() }))}
-          className="mt-3 px-3 py-2 text-sm bg-slate-100 border rounded"
+          disabled={!isAdmin}
+          className="mt-3 px-3 py-2 text-sm bg-slate-100 border rounded disabled:opacity-60"
         >
           Genera nuovo codice
         </button>
@@ -2672,7 +2708,7 @@ const buildBackup = () => ({
         <div className="flex flex-wrap gap-2">
           <button onClick={handleExportInventory} className="px-3 py-2 text-sm bg-slate-100 border rounded inline-flex items-center gap-2"><Download size={16}/> Scarica magazzino (Excel/CSV)</button>
           <button onClick={handleDownloadInventoryTemplate} className="px-3 py-2 text-sm bg-slate-100 border rounded inline-flex items-center gap-2"><FileSpreadsheet size={16}/> Scarica template</button>
-          <button onClick={handleSelectInventoryFile} disabled={isImportingInventory} className="px-3 py-2 text-sm bg-slate-100 border rounded inline-flex items-center gap-2 disabled:opacity-60"><Upload size={16}/> {isImportingInventory ? 'Caricamento...' : 'Importa file magazzino'}</button>
+          <button onClick={handleSelectInventoryFile} disabled={isImportingInventory || !isAdmin} className="px-3 py-2 text-sm bg-slate-100 border rounded inline-flex items-center gap-2 disabled:opacity-60"><Upload size={16}/> {isImportingInventory ? 'Caricamento...' : 'Importa file magazzino'}</button>
         </div>
       </div>
 
@@ -2985,7 +3021,7 @@ const buildBackup = () => ({
               </div>
               <div className="flex justify-end gap-2 mt-4 pt-3 border-t border-slate-100">
                 <button onClick={() => setShowCalendarQuickAdd(false)} className="px-4 py-2 text-slate-500">Chiudi</button>
-                <button onClick={handleAddIntervention} className="px-4 py-2 bg-indigo-600 text-white rounded">Salva intervento</button>
+                <button onClick={handleAddIntervention} disabled={!isAdmin} className="px-4 py-2 bg-indigo-600 text-white rounded disabled:opacity-60">Salva intervento</button>
               </div>
             </div>
           </div>
@@ -3005,6 +3041,7 @@ const buildBackup = () => ({
         onClose={closeSidebar}
         onSwitchTab={switchToTab}
         onResetData={handleResetData}
+        canEdit={isAdmin}
       />
       <div className="flex-1 flex flex-col overflow-hidden">
         <header className="bg-white shadow-sm z-30 p-4 flex justify-between items-center md:hidden">
@@ -3024,6 +3061,11 @@ const buildBackup = () => ({
         )}
         <main className="flex-1 overflow-y-auto p-4 md:p-8">
           <div className="max-w-6xl mx-auto pb-20">
+            {isReadOnlyUser && (
+              <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                Accesso in sola lettura: solo gli admin possono creare, modificare o eliminare dati.
+              </div>
+            )}
             <ActiveTabContent
               activeTab={activeTab}
               DashboardView={DashboardView}
@@ -3040,7 +3082,7 @@ const buildBackup = () => ({
                     <h2 className="text-3xl font-bold text-slate-800">Gestione Ticket</h2>
                     <p className="text-sm text-slate-500">Visualizza i problemi segnalati, aggiorna lo stato e avvia la diagnosi AI.</p>
                   </div>
-                  <button onClick={() => { setTicketCustomerQuery(''); setShowNewTicket(true); }} className="bg-blue-600 text-white px-4 py-2 rounded flex gap-2 items-center shadow">
+                  <button onClick={() => { setTicketCustomerQuery(''); setShowNewTicket(true); }} disabled={!isAdmin} className="bg-blue-600 text-white px-4 py-2 rounded flex gap-2 items-center shadow disabled:cursor-not-allowed disabled:opacity-60">
                     <Plus/> Nuovo Ticket
                   </button>
                 </div>
@@ -3075,11 +3117,12 @@ const buildBackup = () => ({
                             <div>
                               <select
                                 value={ticket.status}
+                                disabled={!isAdmin}
                                 onChange={(event) => {
                                   event.stopPropagation();
                                   handleTicketStatusChange(ticket, event.target.value);
                                 }}
-                                className={`text-sm rounded border px-3 py-1 ${getStatusStyles(ticket.status)}`}
+                                className={`text-sm rounded border px-3 py-1 ${getStatusStyles(ticket.status)} ${!isAdmin ? 'opacity-60 cursor-not-allowed' : ''}`}
                               >
                                 <option value="aperto">Aperto</option>
                                 <option value="in lavorazione">In lavorazione</option>
@@ -3098,21 +3141,23 @@ const buildBackup = () => ({
                               </button>
                               {ticket.type === 'chiamata' && (
                                 <button
+                                  disabled={!isAdmin}
                                   onClick={(event) => {
                                     event.stopPropagation();
                                     handleConvertCallToRepair(ticket);
                                   }}
-                                  className="text-xs px-2 py-1 rounded border border-emerald-200 text-emerald-700 bg-emerald-50"
+                                  className="text-xs px-2 py-1 rounded border border-emerald-200 text-emerald-700 bg-emerald-50 disabled:opacity-60"
                                 >
                                   Trasforma in riparazione
                                 </button>
                               )}
                               <button
+                                disabled={!isAdmin}
                                 onClick={(event) => {
                                   event.stopPropagation();
                                   handleDeleteTicketEntry(ticket);
                                 }}
-                                className="text-red-400 hover:text-red-600"
+                                className="text-red-400 hover:text-red-600 disabled:opacity-60"
                               >
                                 <Trash2 size={18}/>
                               </button>
@@ -3254,7 +3299,7 @@ const buildBackup = () => ({
               <button
                 onClick={applyInventoryImport}
                 className="px-4 py-2 bg-purple-600 text-white rounded disabled:opacity-60"
-                disabled={isImportingInventory || Boolean(inventoryImportHeaderError) || validInventoryImportCount === 0 || hasInventoryImportErrors}
+                disabled={!isAdmin || isImportingInventory || Boolean(inventoryImportHeaderError) || validInventoryImportCount === 0 || hasInventoryImportErrors}
               >
                 {isImportingInventory ? 'Importazione...' : 'Conferma Importazione'}
               </button>
@@ -3381,7 +3426,7 @@ const buildBackup = () => ({
             </div>
             <div className="flex justify-end gap-2 mt-4">
               <button onClick={() => { setSelectedInterventionFiles([]); setSelectedIntervention(null); }} className="px-4 py-2 text-slate-500">Chiudi</button>
-              <button onClick={handleSaveInterventionDetails} className="px-4 py-2 bg-indigo-600 text-white rounded">Salva modifiche</button>
+              <button onClick={handleSaveInterventionDetails} disabled={!isAdmin} className="px-4 py-2 bg-indigo-600 text-white rounded disabled:opacity-60">Salva modifiche</button>
             </div>
           </div>
         </div>
@@ -3437,7 +3482,7 @@ const buildBackup = () => ({
                 </div>
                 <div className="flex justify-end gap-2 mt-4">
                   <button onClick={() => { setShowNewTicket(false); setReturnToTicketAfterCustomer(false); setTicketCustomerQuery(''); }} className="px-4 py-2 text-slate-500">Annulla</button>
-                  <button onClick={handleCreateTicket} className="px-4 py-2 bg-blue-600 text-white rounded flex items-center gap-2" disabled={isSavingTicket}>
+                  <button onClick={handleCreateTicket} className="px-4 py-2 bg-blue-600 text-white rounded flex items-center gap-2 disabled:opacity-60" disabled={isSavingTicket || !isAdmin}>
                     {isSavingTicket && <RefreshCw size={16} className="animate-spin"/>} Salva
                   </button>
                 </div>
@@ -3457,7 +3502,7 @@ const buildBackup = () => ({
                 </div>
                 <div className="flex justify-end gap-2 mt-4">
                   <button onClick={closeCustomerModal} className="px-4 py-2 text-slate-500">Annulla</button>
-                  <button onClick={handleSaveCustomer} className="px-4 py-2 bg-green-600 text-white rounded flex items-center gap-2" disabled={isSavingCustomer}>
+                  <button onClick={handleSaveCustomer} className="px-4 py-2 bg-green-600 text-white rounded flex items-center gap-2 disabled:opacity-60" disabled={isSavingCustomer || !isAdmin}>
                     {isSavingCustomer && <RefreshCw size={16} className="animate-spin"/>} {editingCustomerId ? 'Aggiorna' : 'Salva'}
                   </button>
                 </div>
@@ -3489,7 +3534,7 @@ const buildBackup = () => ({
                 </div>
                 <div className="flex justify-end gap-2 mt-4">
                   <button onClick={() => { setShowNewPart(false); resetPartForm(); }} className="px-4 py-2 text-slate-500">Annulla</button>
-                  <button onClick={handleCreatePart} className="px-4 py-2 bg-purple-600 text-white rounded flex items-center gap-2" disabled={isSavingPart}>
+                  <button onClick={handleCreatePart} className="px-4 py-2 bg-purple-600 text-white rounded flex items-center gap-2 disabled:opacity-60" disabled={isSavingPart || !isAdmin}>
                     {isSavingPart && <RefreshCw size={16} className="animate-spin"/>} {editingPartId ? 'Aggiorna' : 'Salva'}
                   </button>
                 </div>
