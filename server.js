@@ -1192,6 +1192,79 @@ const getLastBackupRun = async () => {
   return getRow('SELECT id, status, file_name, drive_file_id, error_message, created_at FROM backup_runs ORDER BY created_at DESC LIMIT 1')
 }
 
+const mapAdminUser = (row) => {
+  if (!row) return null
+  return {
+    id: row.id,
+    email: row.email || row.username || '',
+    username: row.username || row.email || '',
+    role: normalizeUserRole(row.role),
+    status: sanitizeString(row.status, Number(row.approved) ? 'active' : 'pending'),
+    approved: Boolean(row.approved),
+    operatorCode: row.operator_code || row.operatorCode || '',
+    createdAt: row.created_at || row.createdAt || null,
+    updatedAt: row.updated_at || row.updatedAt || null,
+  }
+}
+
+const listAdminUsers = async () => {
+  if (shouldUsePrisma()) {
+    const rows = await prisma.user.findMany({ orderBy: { createdAt: 'desc' } })
+    return rows.map((row) => ({
+      id: row.id,
+      email: row.email,
+      username: row.email,
+      role: normalizeUserRole(row.role),
+      status: sanitizeString(row.status, row.approved ? 'active' : 'pending'),
+      approved: Boolean(row.approved),
+      operatorCode: row.operatorCode,
+      createdAt: row.createdAt?.toISOString?.() || row.createdAt,
+      updatedAt: row.updatedAt?.toISOString?.() || row.updatedAt,
+    }))
+  }
+
+  return getAll('SELECT id, username, email, role, status, approved, operator_code, created_at, updated_at FROM users ORDER BY created_at DESC')
+    .map(mapAdminUser)
+}
+
+const updateAdminUserAccess = async ({ targetUserId, role, approved, status }) => {
+  const safeRole = normalizeUserRole(role, '')
+  if (!safeRole) throw createHttpError(400, 'Ruolo utente non valido.', 'invalid_role')
+  const nextApproved = Boolean(approved)
+  const safeStatus = sanitizeString(status, nextApproved ? 'active' : 'pending')
+  if (!['active', 'pending', 'disabled'].includes(safeStatus)) {
+    throw createHttpError(400, 'Stato utente non valido.', 'invalid_status')
+  }
+
+  if (shouldUsePrisma()) {
+    const existing = await prisma.user.findUnique({ where: { id: targetUserId } })
+    if (!existing) throw createHttpError(404, 'Utente non trovato.', 'user_not_found')
+    const updated = await prisma.user.update({
+      where: { id: targetUserId },
+      data: { role: safeRole, approved: nextApproved, status: safeStatus },
+    })
+    return {
+      id: updated.id,
+      email: updated.email,
+      username: updated.email,
+      role: normalizeUserRole(updated.role),
+      status: sanitizeString(updated.status, updated.approved ? 'active' : 'pending'),
+      approved: Boolean(updated.approved),
+      operatorCode: updated.operatorCode,
+      createdAt: updated.createdAt?.toISOString?.() || updated.createdAt,
+      updatedAt: updated.updatedAt?.toISOString?.() || updated.updatedAt,
+    }
+  }
+
+  const existing = getRow('SELECT id, username, email, role, status, approved, operator_code, created_at, updated_at FROM users WHERE id = ?', [targetUserId])
+  if (!existing) throw createHttpError(404, 'Utente non trovato.', 'user_not_found')
+  runQuery(
+    'UPDATE users SET role = ?, approved = ?, status = ?, updated_at = ? WHERE id = ?',
+    [safeRole, nextApproved ? 1 : 0, safeStatus, nowIso(), targetUserId],
+  )
+  return mapAdminUser(getRow('SELECT id, username, email, role, status, approved, operator_code, created_at, updated_at FROM users WHERE id = ?', [targetUserId]))
+}
+
 const performBackup = async ({ triggeredBy = 'manual' } = {}) => {
   const payload = await buildBackupPayload()
   const backupFileName = `backup-${formatBackupTimestampForName(new Date())}.json`
@@ -1861,9 +1934,21 @@ const handleApiRequest = async (req, res, url) => {
         if (!dbUser) return respond(res, 404, { error: 'Utente non trovato.', code: 'user_not_found' })
         const passwordOk = await verifyPassword(password, dbUser.passwordHash)
         if (!passwordOk) return respond(res, 401, { error: 'Credenziali errate.', code: 'invalid_credentials' })
+        if (!dbUser.approved) return respond(res, 403, { error: 'Utente non approvato.', code: 'user_not_approved' })
+        if (!['active', 'pending'].includes(sanitizeString(dbUser.status, dbUser.approved ? 'active' : 'pending'))) {
+          return respond(res, 403, { error: 'Utente non attivo.', code: 'user_inactive' })
+        }
         const role = normalizeUserRole(dbUser.role, '')
         if (!role) return respond(res, 403, { error: 'Ruolo utente non valido.', code: 'invalid_role' })
-        const user = { id: dbUser.id, email: dbUser.email, username: dbUser.email, role, operatorCode: dbUser.operatorCode }
+        const user = {
+          id: dbUser.id,
+          email: dbUser.email,
+          username: dbUser.email,
+          role,
+          operatorCode: dbUser.operatorCode,
+          approved: Boolean(dbUser.approved),
+          status: dbUser.status,
+        }
         const { accessToken, refreshToken, refreshId, csrfToken } = createAuthTokens(user)
         await createRefreshTokenRecord({ id: refreshId, userId: user.id, token: refreshToken })
         setAuthCookies(res, accessToken, refreshToken, csrfToken)
@@ -1916,13 +2001,22 @@ const handleApiRequest = async (req, res, url) => {
             passwordHash: await hashPassword(password),
             role: DEFAULT_REGISTRATION_ROLE,
             operatorCode: generateOperatorCode(),
+            status: 'pending',
+            approved: false,
           },
         })
-        const user = { id: created.id, email: created.email, username: created.email, role: created.role, operatorCode: created.operatorCode }
-        const { accessToken, refreshToken, refreshId, csrfToken } = createAuthTokens(user)
-        await createRefreshTokenRecord({ id: refreshId, userId: user.id, token: refreshToken })
-        setAuthCookies(res, accessToken, refreshToken, csrfToken)
-        return respond(res, 201, { accessToken, user })
+        return respond(res, 201, {
+          pendingApproval: true,
+          user: {
+            id: created.id,
+            email: created.email,
+            username: created.email,
+            role: created.role,
+            operatorCode: created.operatorCode,
+            status: created.status,
+            approved: Boolean(created.approved),
+          },
+        })
       }
 
       if (getRow("SELECT id FROM users WHERE LOWER(username) = LOWER(?) OR LOWER(COALESCE(email, '')) = LOWER(?)", [email, email])) {
@@ -1934,17 +2028,14 @@ const handleApiRequest = async (req, res, url) => {
         email,
         role: DEFAULT_REGISTRATION_ROLE,
         status: 'pending',
-        approved: 1,
+        approved: 0,
         operatorCode: generateOperatorCode(),
       }
       runQuery(
         'INSERT INTO users (id, username, email, password_hash, role, status, approved, operator_code, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         [user.id, user.username, user.email, await hashPassword(password), user.role, user.status, user.approved, user.operatorCode, nowIso(), nowIso()],
       )
-      const { accessToken, refreshToken, refreshId, csrfToken } = createAuthTokens(user)
-      await createRefreshTokenRecord({ id: refreshId, userId: user.id, token: refreshToken })
-      setAuthCookies(res, accessToken, refreshToken, csrfToken)
-      return respond(res, 201, { accessToken, user: { id: user.id, username: user.username, email: user.email, role: user.role, status: user.status, approved: true, operatorCode: user.operatorCode } })
+      return respond(res, 201, { pendingApproval: true, user: { id: user.id, username: user.username, email: user.email, role: user.role, status: user.status, approved: false, operatorCode: user.operatorCode } })
     } catch (error) {
       return handleErrorResponse(res, error, { path: url.pathname, method: req.method })
     }
@@ -1967,7 +2058,7 @@ const handleApiRequest = async (req, res, url) => {
     let user = null
     if (shouldUsePrisma()) {
       const dbUser = await prisma.user.findUnique({ where: { id: record.user_id } })
-      if (dbUser) user = { id: dbUser.id, email: dbUser.email, username: dbUser.email, role: normalizeUserRole(dbUser.role), operatorCode: dbUser.operatorCode, approved: 1, status: 'active' }
+      if (dbUser) user = { id: dbUser.id, email: dbUser.email, username: dbUser.email, role: normalizeUserRole(dbUser.role), operatorCode: dbUser.operatorCode, approved: Boolean(dbUser.approved), status: dbUser.status }
     } else {
       user = getRow('SELECT id, username, email, role, status, approved, operator_code FROM users WHERE id = ?', [record.user_id])
       if (user) {
@@ -3006,6 +3097,29 @@ const handleApiRequest = async (req, res, url) => {
 
     res.end(merged)
     return
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/admin/users') {
+    if (!ensureAdminRole(res, user)) return
+    return respond(res, 200, { users: await listAdminUsers() })
+  }
+
+  if (req.method === 'PATCH' && url.pathname.startsWith('/api/admin/users/')) {
+    if (!ensureAdminRole(res, user)) return
+    const targetUserId = sanitizeString(url.pathname.split('/').pop())
+    if (!targetUserId) return respond(res, 400, { error: 'Identificativo utente non valido.', code: 'invalid_user_id' })
+    const payload = await readJsonBody(req)
+    if (targetUserId === user.id && payload?.role && normalizeUserRole(payload.role) !== 'ADMIN') {
+      return respond(res, 400, { error: 'Non puoi rimuovere il ruolo ADMIN dal tuo account.', code: 'self_demotion_not_allowed' })
+    }
+    return respond(res, 200, {
+      user: await updateAdminUserAccess({
+        targetUserId,
+        role: payload?.role,
+        approved: payload?.approved,
+        status: payload?.status,
+      }),
+    })
   }
 
   return respond(res, 404, { error: 'Endpoint non trovato.' })

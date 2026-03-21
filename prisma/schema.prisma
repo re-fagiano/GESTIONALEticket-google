@@ -194,6 +194,8 @@ model User {
   passwordHash String
   role         UserRole @default(OPERATOR)
   operatorCode String   @unique
+  status       String   @default("pending")
+  approved     Boolean  @default(false)
   createdAt               DateTime       @default(now())
   updatedAt               DateTime       @updatedAt
   assignedInterventions   Intervention[] @relation("InterventionAssignee")
