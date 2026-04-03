@@ -2357,13 +2357,24 @@ const buildBackup = () => ({
           <div className="divide-y divide-slate-100">
             {typeItems.length === 0 && <div className="px-4 py-3 text-sm text-slate-500">Nessun ticket presente.</div>}
             {typeItems.slice(0, 20).map((item) => (
-              <div key={item.id} className="grid grid-cols-4 gap-3 px-4 py-3 items-center cursor-pointer hover:bg-slate-50" onClick={() => openInterventionDetails(item)}>
+              <div key={item.id} className="grid grid-cols-5 gap-3 px-4 py-3 items-center cursor-pointer hover:bg-slate-50" onClick={() => openInterventionDetails(item)}>
                 <div className="font-mono text-xs">{item.id}</div>
                 <div>{customers.find((c) => c.id === item.clientId)?.name || 'N/D'}</div>
                 <div>{item.status}</div>
                 <div>{new Date(item.openedAt).toLocaleString('it-IT')}</div>
-                <div>
+                <div className="flex items-center gap-2">
                   <button className="text-xs px-2 py-1 rounded border border-indigo-200 text-indigo-700 bg-indigo-50" onClick={(e) => { e.stopPropagation(); openInterventionDetails(item); }}>Apri</button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDeleteTicketEntry(item);
+                    }}
+                    disabled={!isAdmin}
+                    className="text-red-400 hover:text-red-600 p-1 disabled:opacity-60"
+                    title="Elimina ticket"
+                  >
+                    <Trash2 size={16}/>
+                  </button>
                 </div>
               </div>
             ))}
