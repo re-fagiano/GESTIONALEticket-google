@@ -214,6 +214,14 @@ export default function AppPage() {
 
   // Stato per le notifiche toast
   const [toasts, setToasts] = useState([]);
+  const confirmResolverRef = useRef(null);
+  const [confirmDialog, setConfirmDialog] = useState({
+    isOpen: false,
+    title: '',
+    message: '',
+    confirmLabel: 'Sì',
+    cancelLabel: 'No'
+  });
 
   const [operatorProfile, setOperatorProfile] = useState(() => {
     const savedProfile = getOperatorProfileSync();
@@ -247,6 +255,29 @@ export default function AppPage() {
     setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id));
     }, 3000); // Rimuove il toast dopo 3 secondi
+  };
+
+  const askConfirmation = ({
+    title = 'Conferma operazione',
+    message = 'Vuoi continuare?',
+    confirmLabel = 'Sì',
+    cancelLabel = 'No'
+  } = {}) => new Promise((resolve) => {
+    confirmResolverRef.current = resolve;
+    setConfirmDialog({
+      isOpen: true,
+      title,
+      message,
+      confirmLabel,
+      cancelLabel
+    });
+  });
+
+  const closeConfirmationDialog = (isConfirmed) => {
+    const resolver = confirmResolverRef.current;
+    confirmResolverRef.current = null;
+    setConfirmDialog((prev) => ({ ...prev, isOpen: false }));
+    if (typeof resolver === 'function') resolver(isConfirmed);
   };
 
   const assertAdminAccess = (message = 'Solo gli amministratori possono modificare i dati.') => {
@@ -1316,7 +1347,11 @@ export default function AppPage() {
     if (!ticket) return;
     const linkedIntervention = interventions.find((entry) => entry.id === ticket.id);
     if (linkedIntervention) {
-      if (!confirm("Sei sicuro?")) return;
+      const isConfirmed = await askConfirmation({
+        title: 'Conferma eliminazione ticket',
+        message: 'Stai per eliminare il ticket selezionato. Vuoi continuare?'
+      });
+      if (!isConfirmed) return;
       try {
         await deleteIntervention(ticket.id);
         setInterventions((prev) => prev.filter((entry) => entry.id !== ticket.id));
@@ -1332,7 +1367,11 @@ export default function AppPage() {
 
   const handleDelete = async (type, id) => {
     if (!assertAdminAccess()) return;
-    if (!confirm("Sei sicuro?")) return;
+    const isConfirmed = await askConfirmation({
+      title: 'Conferma eliminazione',
+      message: 'Stai per eliminare questo elemento. Vuoi continuare?'
+    });
+    if (!isConfirmed) return;
     try {
       await deleteEntity(type, id);
       if (type === 'customers') setCustomers(customers.filter(c => c.id !== id));
@@ -1347,7 +1386,12 @@ export default function AppPage() {
 
   const handleResetData = async () => {
     if (!assertAdminAccess()) return;
-    const isConfirmed = confirm('Operazione distruttiva: verranno cancellati TUTTI i dati dal database. Vuoi continuare?');
+    const isConfirmed = await askConfirmation({
+      title: 'Reset totale dati',
+      message: 'Operazione distruttiva: verranno cancellati TUTTI i dati dal database. Vuoi continuare?',
+      confirmLabel: 'Sì, continua',
+      cancelLabel: 'No, annulla'
+    });
     if (!isConfirmed) return;
     const typedConfirmation = prompt('Per confermare il reset totale, digita RESET DATI');
     if (typedConfirmation !== 'RESET DATI') {
@@ -3233,6 +3277,31 @@ const buildBackup = () => ({
       </div>
 
       <ToastList toasts={toasts} />
+
+      {confirmDialog.isOpen && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white p-6 rounded-lg w-full max-w-md shadow-xl">
+            <h3 className="text-lg font-bold text-slate-800">{confirmDialog.title}</h3>
+            <p className="mt-2 text-sm text-slate-600">{confirmDialog.message}</p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                className="px-4 py-2 rounded border border-slate-300 text-slate-700 hover:bg-slate-50"
+                onClick={() => closeConfirmationDialog(false)}
+              >
+                {confirmDialog.cancelLabel}
+              </button>
+              <button
+                type="button"
+                className="px-4 py-2 rounded bg-red-600 text-white hover:bg-red-700"
+                onClick={() => closeConfirmationDialog(true)}
+              >
+                {confirmDialog.confirmLabel}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {conflictState && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
