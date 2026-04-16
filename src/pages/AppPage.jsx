@@ -558,7 +558,7 @@ export default function AppPage() {
     quoteTotal: 0,
     quoteValidUntil: ''
   });
-  const [newPart, setNewPart] = useState({ code: '', name: '', description: '', location: '', qty: 1, price: 0, minQty: 5, priceDate: new Date().toISOString().split('T')[0], version: 1 });
+  const [newPart, setNewPart] = useState({ code: '', name: '', alternateCodes: '', location: '', qty: 1, price: 0, minQty: 5, priceDate: new Date().toISOString().split('T')[0], version: 1 });
   const [editingPartId, setEditingPartId] = useState(null);
   const [ticketCustomerQuery, setTicketCustomerQuery] = useState('');
   const [interventionCustomerQuery, setInterventionCustomerQuery] = useState('');
@@ -624,7 +624,7 @@ export default function AppPage() {
     const fields = {
       name: item.name,
       code: item.code,
-      description: item.description,
+      alternateCodes: item.alternateCodes,
       location: item.location,
       price: Number(item.price).toFixed(2),
       priceDate: item.priceDate ? new Date(item.priceDate).toLocaleDateString('it-IT') : '',
@@ -1145,7 +1145,7 @@ export default function AppPage() {
   };
 
   const resetPartForm = () => {
-    setNewPart({ code: '', name: '', description: '', location: '', qty: 1, price: 0, minQty: 5, priceDate: new Date().toISOString().split('T')[0], version: 1 });
+    setNewPart({ code: '', name: '', alternateCodes: '', location: '', qty: 1, price: 0, minQty: 5, priceDate: new Date().toISOString().split('T')[0], version: 1 });
     setEditingPartId(null);
   };
 
@@ -1154,7 +1154,7 @@ export default function AppPage() {
     setNewPart({
       code: item.code || '',
       name: item.name || '',
-      description: item.description || '',
+      alternateCodes: item.alternateCodes || item.description || '',
       location: item.location || '',
       qty: Number(item.qty || 0),
       price: Number(item.price || 0),
@@ -1174,7 +1174,6 @@ export default function AppPage() {
     }
     const part = sanitizeInventoryItem({
       ...newPart,
-      description: newPart.description || newPart.name,
       id: editingPartId || createClientId(),
       updatedAt: nowIso(),
     }, inventory.length);
@@ -1488,7 +1487,7 @@ const buildBackup = () => ({
       inventory.map(i => [
         i.location,
         i.code,
-        i.description || i.name,
+        i.name,
         i.price,
         i.qty
       ])
@@ -1749,20 +1748,19 @@ const buildBackup = () => ({
     const inventoryByLocationAndDescription = new Map(
       inventory
         .filter((item) => isUuidLike(item.code))
-        .map((item) => [`${normalizeInventoryText(item.location)}::${normalizeInventoryText(item.description || item.name)}`, item])
+        .map((item) => [`${normalizeInventoryText(item.location)}::${normalizeInventoryText(item.name)}`, item])
     );
     const updatedInventory = [...inventory];
     const updates = [];
     const creations = [];
 
     validEntries.forEach((entry) => {
-      const locationDescriptionKey = `${normalizeInventoryText(entry.location)}::${normalizeInventoryText(entry.description || entry.name)}`;
+      const locationDescriptionKey = `${normalizeInventoryText(entry.location)}::${normalizeInventoryText(entry.name)}`;
       const existing = inventoryByCode.get(entry.code) || inventoryByLocationAndDescription.get(locationDescriptionKey);
       if (existing) {
         const merged = sanitizeInventoryItem({
           ...existing,
           code: entry.code || existing.code,
-          description: entry.description || existing.description,
           name: entry.description || existing.name,
           location: entry.location || existing.location,
           qty: Number(existing.qty) + Number(entry.quantity),
@@ -2518,7 +2516,7 @@ const buildBackup = () => ({
               <option value="all">Tutti i campi</option>
               <option value="name">Prodotto</option>
               <option value="code">Codice</option>
-              <option value="description">Descrizione</option>
+              <option value="alternateCodes">Codici alternativi</option>
               <option value="location">Posizione</option>
               <option value="price">Prezzo</option>
               <option value="priceDate">Valido dal</option>
@@ -2558,12 +2556,7 @@ const buildBackup = () => ({
             {filteredInventory.map(item => (
               <tr key={item.id} className="hover:bg-slate-50">
                 <td className="p-4 font-medium text-slate-800">
-                  <div className="flex flex-col">
-                    <span>{item.name}</span>
-                    {item.description && item.description !== item.name && (
-                      <span className="text-xs text-slate-500">{item.description}</span>
-                    )}
-                  </div>
+                  <span>{item.name}</span>
                   {item.qty <= item.minQty && <span className="ml-2 text-xs bg-red-100 text-red-600 px-2 py-0.5 rounded">Scorta Bassa</span>}
                   {item.pendingSync && <span className="ml-2 text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded">Da sincronizzare</span>}
                 </td>
@@ -3608,7 +3601,7 @@ const buildBackup = () => ({
                 <div className="space-y-3">
                     <input className="w-full border p-2 rounded" placeholder="Codice Articolo (es. RIC-001)" value={newPart.code} onChange={e => setNewPart({...newPart, code: e.target.value})} />
                     <input className="w-full border p-2 rounded" placeholder="Nome Prodotto (es. Cuscinetti)" value={newPart.name} onChange={e => setNewPart({...newPart, name: e.target.value})} />
-                    <input className="w-full border p-2 rounded" placeholder="Descrizione (opzionale)" value={newPart.description} onChange={e => setNewPart({...newPart, description: e.target.value})} />
+                    <input className="w-full border p-2 rounded" placeholder="Codici alternativi (separati da virgola)" value={newPart.alternateCodes} onChange={e => setNewPart({...newPart, alternateCodes: e.target.value})} />
                     <input className="w-full border p-2 rounded" placeholder="Codice Posizione (es. af00021)" value={newPart.location} onChange={e => setNewPart({...newPart, location: e.target.value})} />
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                         <label className="text-xs text-slate-500">Quantità

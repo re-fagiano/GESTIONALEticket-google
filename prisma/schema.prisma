@@ -66,6 +66,7 @@ model InventoryItem {
   id        String   @id @default(uuid())
   code      String?
   name      String
+  altCodes  String?  @map("alt_codes")
   location  String?
   qty       Int      @default(0)
   price     Float    @default(0)
