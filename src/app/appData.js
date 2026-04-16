@@ -111,16 +111,16 @@ const sanitizeInventoryItem = (item, idx = 0) => {
     typeof item.code === 'string' && item.code.trim()
       ? item.code.trim()
       : (typeof item.id === 'string' && item.id.trim() ? item.id.trim() : `RIC-${idx + 1}`);
-  const safeDescription =
-    typeof item.description === 'string' && item.description.trim()
-      ? item.description.trim()
-      : (typeof item.name === 'string' ? item.name.trim() : '');
+  const safeAlternateCodes =
+    typeof item.alternateCodes === 'string' && item.alternateCodes.trim()
+      ? item.alternateCodes.trim()
+      : (typeof item.description === 'string' ? item.description.trim() : '');
 
   return {
     id: item.id || `${Date.now()}-${idx}`,
     code: safeCode,
     name: typeof item.name === 'string' ? item.name.trim() : `Ricambio #${idx + 1}`,
-    description: safeDescription,
+    alternateCodes: safeAlternateCodes,
     location: typeof item.location === 'string' ? item.location.trim() : '',
     qty: parsedQty,
     price: parsedPrice,
