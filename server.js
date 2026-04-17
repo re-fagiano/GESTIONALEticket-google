@@ -24,6 +24,7 @@ const {
   API_RATE_LIMIT_MAX,
   LOGIN_RATE_LIMIT_WINDOW_MS,
   LOGIN_RATE_LIMIT_MAX,
+  REDIS_URL,
   ENFORCE_HTTPS,
   ADMIN_EMAIL,
   ADMIN_PASSWORD,
@@ -45,6 +46,7 @@ const DIST_INDEX = path.join(DIST_DIR, 'index.html')
 const isProduction = NODE_ENV === 'production'
 
 let prismaEnabled = isDatabaseConfigured
+let sharedRateLimitStoreReady = false
 
 const isPrismaSchemaMissingError = (error) => {
   if (!error) return false
