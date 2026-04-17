@@ -958,7 +958,7 @@ setInterval(() => {
 
 const ensureCsrf = (req, res) => {
   if (CSRF_SAFE_METHODS.has(req.method || 'GET')) return true
-  const cookies = parseCookies(req.headers.cookie)
+  const cookies = parseCookies(req.headers.cookie || '')
   const cookieToken = sanitizeString(cookies.csrf_token)
   const headerToken = sanitizeString(req.headers['x-csrf-token'])
   if (!cookieToken || !headerToken || cookieToken !== headerToken) {
@@ -1964,7 +1964,12 @@ const readCsvFile = (file) => {
 
 const authenticateRequest = (req) => {
   const token = getTokenFromRequest(req)
-  const payload = verifyJwt(token, JWT_SECRET || JWT_ACCESS_SECRET)
+  let payload = null
+  try {
+    payload = verifyJwt(token, JWT_SECRET || JWT_ACCESS_SECRET)
+  } catch {
+    payload = null
+  }
   if (!payload || payload.type !== 'access') return null
   const role = normalizeUserRole(payload.role, '')
   if (!payload.sub || !USER_ROLES.has(role)) return null
@@ -2226,9 +2231,15 @@ const handleApiRequest = async (req, res, url) => {
 
   if (url.pathname === '/api/auth/refresh' && req.method === 'POST') {
     if (!ensureCsrf(req, res)) return
-    const cookies = parseCookies(req.headers.cookie)
+    const cookies = parseCookies(req.headers.cookie || '')
     const refreshToken = cookies.refresh_token || ''
-    const payload = verifyJwt(refreshToken, JWT_REFRESH_SECRET)
+    let payload = null
+    try {
+      payload = verifyJwt(refreshToken, JWT_REFRESH_SECRET)
+    } catch {
+      clearAuthCookies(res)
+      return respond(res, 200, { user: null })
+    }
     if (!payload || payload.type !== 'refresh' || !payload.jti) {
       clearAuthCookies(res)
       return respond(res, 401, { error: 'Sessione scaduta.', code: 'session_expired' })
@@ -2263,9 +2274,14 @@ const handleApiRequest = async (req, res, url) => {
 
   if (url.pathname === '/api/auth/logout' && req.method === 'POST') {
     if (!ensureCsrf(req, res)) return
-    const cookies = parseCookies(req.headers.cookie)
+    const cookies = parseCookies(req.headers.cookie || '')
     const refreshToken = cookies.refresh_token || ''
-    const payload = verifyJwt(refreshToken, JWT_REFRESH_SECRET)
+    let payload = null
+    try {
+      payload = verifyJwt(refreshToken, JWT_REFRESH_SECRET)
+    } catch {
+      payload = null
+    }
     if (payload?.jti) {
       await revokeRefreshTokenRecord(payload.jti)
     }
@@ -2276,11 +2292,11 @@ const handleApiRequest = async (req, res, url) => {
   if (url.pathname === '/api/auth/me' && req.method === 'GET') {
     try {
       const user = authenticateRequest(req)
-      if (!user) return respond(res, 401, { error: 'Sessione scaduta.', code: 'session_expired' })
+      if (!user) return respond(res, 200, { user: null })
       return respond(res, 200, { user })
     } catch (error) {
       console.warn('[auth] /api/auth/me non disponibile temporaneamente', error)
-      return respond(res, 503, { error: 'Servizio autenticazione temporaneamente non disponibile.', code: 'auth_temporarily_unavailable' })
+      return respond(res, 200, { user: null })
     }
   }
 
@@ -2304,7 +2320,7 @@ const handleApiRequest = async (req, res, url) => {
   if (!user) return
   if (!ensureRouteAuthorization(req, res, user, url.pathname)) return
   if (!ensureCsrf(req, res)) return
-  if (!checkApiRateLimit(req, res, user.id)) return
+  if (!(await checkApiRateLimit(req, res, user.id))) return
 
   if (req.method === 'GET' && url.pathname === '/api/bootstrap') {
     if (shouldUsePrisma()) {
@@ -3509,8 +3525,9 @@ const server = createServer(async (req, res) => {
     }
 
     return respond(res, 405, { error: 'Metodo non supportato.' })
-  } catch (error) {
-    handleErrorResponse(res, error, { path: req.url, method: req.method })
+  } catch (err) {
+    console.error('UNHANDLED ERROR', err)
+    return respond(res, 500, { error: 'Internal server error' })
   }
 })
 
