@@ -260,7 +260,13 @@ const parseCookies = (cookieHeader = '') => {
   return cookieHeader.split(';').reduce((acc, part) => {
     const [key, ...rest] = part.trim().split('=')
     if (!key) return acc
-    acc[key] = decodeURIComponent(rest.join('='))
+    const rawValue = rest.join('=')
+    try {
+      acc[key] = decodeURIComponent(rawValue)
+    } catch {
+      acc[key] = rawValue
+      logEvent('warn', 'cookie_decode_failed', { cookie: key })
+    }
     return acc
   }, {})
 }
