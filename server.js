@@ -24,6 +24,7 @@ const {
   API_RATE_LIMIT_MAX,
   LOGIN_RATE_LIMIT_WINDOW_MS,
   LOGIN_RATE_LIMIT_MAX,
+  REDIS_URL,
   ENFORCE_HTTPS,
   ADMIN_EMAIL,
   ADMIN_PASSWORD,
@@ -45,6 +46,7 @@ const DIST_INDEX = path.join(DIST_DIR, 'index.html')
 const isProduction = NODE_ENV === 'production'
 
 let prismaEnabled = isDatabaseConfigured
+let sharedRateLimitStoreReady = false
 
 const isPrismaSchemaMissingError = (error) => {
   if (!error) return false
@@ -260,7 +262,13 @@ const parseCookies = (cookieHeader = '') => {
   return cookieHeader.split(';').reduce((acc, part) => {
     const [key, ...rest] = part.trim().split('=')
     if (!key) return acc
-    acc[key] = decodeURIComponent(rest.join('='))
+    const rawValue = rest.join('=')
+    try {
+      acc[key] = decodeURIComponent(rawValue)
+    } catch {
+      acc[key] = rawValue
+      logEvent('warn', 'cookie_decode_failed', { cookie: key })
+    }
     return acc
   }, {})
 }

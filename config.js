@@ -48,6 +48,7 @@ export const config = {
   API_RATE_LIMIT_MAX: Number(process.env.API_RATE_LIMIT_MAX || 100),
   LOGIN_RATE_LIMIT_WINDOW_MS: Number(process.env.LOGIN_RATE_LIMIT_WINDOW_MS || 15 * 60 * 1000),
   LOGIN_RATE_LIMIT_MAX: Number(process.env.LOGIN_RATE_LIMIT_MAX || 5),
+  REDIS_URL: (process.env.REDIS_URL || '').trim(),
   ENFORCE_HTTPS: String(process.env.ENFORCE_HTTPS || '').trim() ? ['1', 'true', 'yes', 'on'].includes(String(process.env.ENFORCE_HTTPS).toLowerCase()) : true,
   // Admin seed allineato a email/password esplicite via env.
   // Rollback: reintrodurre ADMIN_USER/ADMIN_PASS e relativa logica in server.js.
