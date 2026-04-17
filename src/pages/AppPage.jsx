@@ -47,6 +47,7 @@ import {
   apiFetch
 } from '../services/api';
 import {
+  clearAllClientData,
   getStorageState,
   loadBackupAtFromIdb,
   loadBackupAtSync,
@@ -776,6 +777,7 @@ export default function AppPage() {
 
   const handleLogout = async () => {
     await logout().catch(() => null);
+    await clearAllClientData().catch(() => null);
     setAuthState({ checked: true, user: null });
     addToast('Logout effettuato.', 'success');
   };

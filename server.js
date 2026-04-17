@@ -703,6 +703,56 @@ const normalizeEmail = (value) => sanitizeString(value).toLowerCase()
 
 const isValidEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
 
+const validatePayload = (schema, payload = {}) => {
+  const output = {}
+  for (const [field, rules] of Object.entries(schema || {})) {
+    const rawValue = payload?.[field]
+    const normalize = rules?.normalize || ((value) => value)
+    const value = normalize(rawValue)
+    if (rules?.required && (value === '' || value === null || value === undefined)) {
+      return { error: rules.requiredMessage || `Campo obbligatorio: ${field}` }
+    }
+    if (rules?.validate && !rules.validate(value)) {
+      return { error: rules.invalidMessage || `Campo non valido: ${field}` }
+    }
+    output[field] = value
+  }
+  return { value: output }
+}
+
+const AUTH_VALIDATION_SCHEMAS = {
+  login: {
+    email: {
+      required: true,
+      normalize: normalizeEmail,
+      validate: isValidEmail,
+      requiredMessage: 'Email e password sono obbligatorie.',
+      invalidMessage: 'Email non valida.',
+    },
+    password: {
+      required: true,
+      normalize: (value) => sanitizeString(value),
+      requiredMessage: 'Email e password sono obbligatorie.',
+    },
+  },
+  register: {
+    email: {
+      required: true,
+      normalize: normalizeEmail,
+      validate: isValidEmail,
+      requiredMessage: 'Email e password sono obbligatorie.',
+      invalidMessage: 'Email non valida.',
+    },
+    password: {
+      required: true,
+      normalize: (value) => sanitizeString(value),
+      validate: (value) => String(value || '').length >= 8,
+      requiredMessage: 'Email e password sono obbligatorie.',
+      invalidMessage: 'La password deve avere almeno 8 caratteri.',
+    },
+  },
+}
+
 const generateOperatorCode = () => `OP-${crypto.randomBytes(4).toString('hex').toUpperCase()}`
 
 const signJwt = (payload, secret, expiresInSeconds) => {
@@ -788,18 +838,104 @@ const checkRateLimitMap = ({ map, key, windowMs, max }) => {
   return entry.count <= max
 }
 
-const checkApiRateLimit = (req, res, userId = '') => {
+const upsertLocalRateLimit = ({ scope, key, windowMs, max }) => {
+  const compoundKey = `${scope}:${key}`
+  return checkRateLimitMap({ map: scope === 'login' ? loginRateLimits : apiRateLimits, key: compoundKey, windowMs, max })
+}
+
+const ensureSharedRateLimitStore = async () => {
+  if (sharedRateLimitStoreReady) return
+  if (shouldUsePrisma()) {
+    try {
+      await prisma.$executeRaw`
+        CREATE TABLE IF NOT EXISTS "rate_limits" (
+          "scope" TEXT NOT NULL,
+          "key" TEXT NOT NULL,
+          "count" INTEGER NOT NULL,
+          "reset_at" TIMESTAMP NOT NULL,
+          "updated_at" TIMESTAMP NOT NULL,
+          PRIMARY KEY ("scope", "key")
+        )
+      `
+      sharedRateLimitStoreReady = true
+      if (REDIS_URL) {
+        logEvent('warn', 'rate_limit_redis_not_configured', { message: 'REDIS_URL rilevata ma Redis client non disponibile; viene usato il datastore SQL condiviso.' })
+      }
+    } catch (error) {
+      disablePrismaIfUnavailable(error, 'ensure_rate_limits_table')
+      logEvent('warn', 'shared_rate_limit_store_unavailable', { error: error?.message || 'unknown_error' })
+    }
+  } else {
+    sharedRateLimitStoreReady = true
+  }
+}
+
+const checkSharedRateLimit = async ({ scope, key, windowMs, max }) => {
+  const now = Date.now()
+  const resetAtIso = new Date(now + windowMs).toISOString()
+  const updatedAtIso = new Date(now).toISOString()
+
+  if (!shouldUsePrisma()) {
+    const existing = getRow('SELECT count, reset_at FROM rate_limits WHERE scope = ? AND key = ?', [scope, key])
+    if (!existing || new Date(existing.reset_at).getTime() <= now) {
+      runQuery(
+        'INSERT INTO rate_limits (scope, key, count, reset_at, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(scope, key) DO UPDATE SET count = excluded.count, reset_at = excluded.reset_at, updated_at = excluded.updated_at',
+        [scope, key, 1, resetAtIso, updatedAtIso],
+      )
+      return true
+    }
+    const nextCount = Number(existing.count || 0) + 1
+    runQuery('UPDATE rate_limits SET count = ?, updated_at = ? WHERE scope = ? AND key = ?', [nextCount, updatedAtIso, scope, key])
+    return nextCount <= max
+  }
+
+  await ensureSharedRateLimitStore()
+  if (!sharedRateLimitStoreReady) return upsertLocalRateLimit({ scope, key, windowMs, max })
+
+  try {
+    const rows = await prisma.$queryRaw`
+      SELECT "count", "reset_at" FROM "rate_limits"
+      WHERE "scope" = ${scope} AND "key" = ${key}
+      LIMIT 1
+    `
+    const existing = Array.isArray(rows) ? rows[0] : null
+    const existingReset = existing?.reset_at ? new Date(existing.reset_at).getTime() : 0
+    if (!existing || existingReset <= now) {
+      await prisma.$executeRaw`
+        INSERT INTO "rate_limits" ("scope", "key", "count", "reset_at", "updated_at")
+        VALUES (${scope}, ${key}, ${1}, ${new Date(now + windowMs)}, ${new Date(now)})
+        ON CONFLICT ("scope", "key")
+        DO UPDATE SET "count" = ${1}, "reset_at" = ${new Date(now + windowMs)}, "updated_at" = ${new Date(now)}
+      `
+      return true
+    }
+    const nextCount = Number(existing.count || 0) + 1
+    await prisma.$executeRaw`
+      UPDATE "rate_limits"
+      SET "count" = ${nextCount}, "updated_at" = ${new Date(now)}
+      WHERE "scope" = ${scope} AND "key" = ${key}
+    `
+    return nextCount <= max
+  } catch (error) {
+    logEvent('warn', 'shared_rate_limit_query_failed', { error: error?.message || 'unknown_error' })
+    return upsertLocalRateLimit({ scope, key, windowMs, max })
+  }
+}
+
+const checkApiRateLimit = async (req, res, userId = '') => {
   const key = userId || req.socket?.remoteAddress || 'unknown'
-  if (!checkRateLimitMap({ map: apiRateLimits, key, windowMs: API_RATE_LIMIT_WINDOW_MS, max: API_RATE_LIMIT_MAX })) {
+  const allowed = await checkSharedRateLimit({ scope: 'api', key, windowMs: API_RATE_LIMIT_WINDOW_MS, max: API_RATE_LIMIT_MAX })
+  if (!allowed) {
     respond(res, 429, { error: 'Troppe richieste, riprova più tardi.' })
     return false
   }
   return true
 }
 
-const checkLoginRateLimit = (req, res, username = '') => {
+const checkLoginRateLimit = async (req, res, username = '') => {
   const key = `${req.socket?.remoteAddress || 'unknown'}:${username || 'anonymous'}`
-  if (!checkRateLimitMap({ map: loginRateLimits, key, windowMs: LOGIN_RATE_LIMIT_WINDOW_MS, max: LOGIN_RATE_LIMIT_MAX })) {
+  const allowed = await checkSharedRateLimit({ scope: 'login', key, windowMs: LOGIN_RATE_LIMIT_WINDOW_MS, max: LOGIN_RATE_LIMIT_MAX })
+  if (!allowed) {
     respond(res, 429, { error: 'Troppi tentativi di login. Riprova tra qualche minuto.' })
     return false
   }
@@ -995,6 +1131,14 @@ db.exec(`
     drive_file_id TEXT,
     error_message TEXT,
     created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS rate_limits (
+    scope TEXT NOT NULL,
+    key TEXT NOT NULL,
+    count INTEGER NOT NULL,
+    reset_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (scope, key)
   );
 `)
 
@@ -1944,7 +2088,7 @@ const handleApiRequest = async (req, res, url) => {
     return respond(res, 200, { status: 'ok', time: nowIso() })
   }
 
-  if (!checkApiRateLimit(req, res)) return
+  if (!(await checkApiRateLimit(req, res))) return
 
   if (url.pathname === '/api/deepseek' && req.method === 'POST') {
     const user = ensureAuth(req, res)
@@ -1963,10 +2107,13 @@ const handleApiRequest = async (req, res, url) => {
   if (url.pathname === '/api/auth/login' && req.method === 'POST') {
     try {
       const payload = await readJsonBody(req)
-      const email = normalizeEmail(payload?.email)
-      const password = sanitizeString(payload?.password)
-      if (!email || !password) return respond(res, 400, { error: 'Email e password sono obbligatorie.', code: 'missing_credentials' })
-      if (!checkLoginRateLimit(req, res, email)) return
+      const validated = validatePayload(AUTH_VALIDATION_SCHEMAS.login, payload)
+      if (validated.error) {
+        const code = validated.error === 'Email non valida.' ? 'invalid_email' : 'missing_credentials'
+        return respond(res, 400, { error: validated.error, code })
+      }
+      const { email, password } = validated.value
+      if (!(await checkLoginRateLimit(req, res, email))) return
 
       if (shouldUsePrisma()) {
         const dbUser = await prisma.user.findUnique({ where: { email } })
@@ -2019,17 +2166,14 @@ const handleApiRequest = async (req, res, url) => {
   if (url.pathname === '/api/auth/register' && req.method === 'POST') {
     try {
       const payload = await readJsonBody(req)
-      const email = normalizeEmail(payload?.email)
-      const password = sanitizeString(payload?.password)
-      if (!email || !password) {
-        return respond(res, 400, { error: 'Email e password sono obbligatorie.', code: 'missing_credentials' })
+      const validated = validatePayload(AUTH_VALIDATION_SCHEMAS.register, payload)
+      if (validated.error) {
+        const code = validated.error === 'Email non valida.'
+          ? 'invalid_email'
+          : (validated.error === 'La password deve avere almeno 8 caratteri.' ? 'weak_password' : 'missing_credentials')
+        return respond(res, 400, { error: validated.error, code })
       }
-      if (!isValidEmail(email)) {
-        return respond(res, 400, { error: 'Email non valida.', code: 'invalid_email' })
-      }
-      if (password.length < 8) {
-        return respond(res, 400, { error: 'La password deve avere almeno 8 caratteri.', code: 'weak_password' })
-      }
+      const { email, password } = validated.value
 
       if (shouldUsePrisma()) {
         const existing = await prisma.user.findUnique({ where: { email } })
