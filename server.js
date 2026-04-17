@@ -25,7 +25,6 @@ const {
   LOGIN_RATE_LIMIT_WINDOW_MS,
   LOGIN_RATE_LIMIT_MAX,
   ENFORCE_HTTPS,
-  REDIS_URL,
   ADMIN_EMAIL,
   ADMIN_PASSWORD,
   NODE_ENV,
@@ -826,7 +825,6 @@ const setAuthCookies = (res, accessToken, refreshToken, csrfToken) => {
 
 const loginRateLimits = new Map()
 const apiRateLimits = new Map()
-let sharedRateLimitStoreReady = false
 
 const checkRateLimitMap = ({ map, key, windowMs, max }) => {
   const now = Date.now()
