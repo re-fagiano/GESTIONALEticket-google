@@ -20,6 +20,11 @@ const {
   JWT_REFRESH_SECRET,
   ACCESS_TOKEN_TTL_SECONDS,
   REFRESH_TOKEN_TTL_SECONDS,
+  API_RATE_LIMIT_WINDOW_MS,
+  API_RATE_LIMIT_MAX,
+  LOGIN_RATE_LIMIT_WINDOW_MS,
+  LOGIN_RATE_LIMIT_MAX,
+  ENFORCE_HTTPS,
   ADMIN_EMAIL,
   ADMIN_PASSWORD,
   NODE_ENV,
@@ -90,11 +95,19 @@ const MIME_TYPES = {
 const SECURITY_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
   'X-Frame-Options': 'DENY',
+  'X-DNS-Prefetch-Control': 'off',
+  'X-Download-Options': 'noopen',
+  'X-Permitted-Cross-Domain-Policies': 'none',
+  'X-XSS-Protection': '0',
   'Referrer-Policy': 'no-referrer',
   'Permissions-Policy': 'geolocation=(), camera=(), microphone=()',
   'Cross-Origin-Opener-Policy': 'same-origin',
   'Cross-Origin-Resource-Policy': 'same-origin',
   'Content-Security-Policy': "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+}
+
+if (isProduction) {
+  SECURITY_HEADERS['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains; preload'
 }
 
 const logEvent = (level, message, context = {}) => {
@@ -729,8 +742,6 @@ const createAuthTokens = (user) => {
 }
 
 const getTokenFromRequest = (req) => {
-  const header = req.headers.authorization || ''
-  if (header.startsWith('Bearer ')) return header.slice(7).trim()
   const cookies = parseCookies(req.headers.cookie)
   return cookies.access_token || ''
 }
@@ -763,11 +774,7 @@ const setAuthCookies = (res, accessToken, refreshToken, csrfToken) => {
 }
 
 const loginRateLimits = new Map()
-const LOGIN_RATE_LIMIT_WINDOW_MS = 60_000
-const LOGIN_RATE_LIMIT_MAX = 10
 const apiRateLimits = new Map()
-const API_RATE_LIMIT_WINDOW_MS = 60_000
-const API_RATE_LIMIT_MAX = 120
 
 const checkRateLimitMap = ({ map, key, windowMs, max }) => {
   const now = Date.now()
@@ -798,6 +805,20 @@ const checkLoginRateLimit = (req, res, username = '') => {
   }
   return true
 }
+
+const cleanupRateLimitMap = (map) => {
+  const now = Date.now()
+  map.forEach((entry, key) => {
+    if (!entry?.resetAt || entry.resetAt <= now) {
+      map.delete(key)
+    }
+  })
+}
+
+setInterval(() => {
+  cleanupRateLimitMap(loginRateLimits)
+  cleanupRateLimitMap(apiRateLimits)
+}, 60_000).unref()
 
 const ensureCsrf = (req, res) => {
   if (CSRF_SAFE_METHODS.has(req.method || 'GET')) return true
@@ -1904,6 +1925,19 @@ const buildBackupPayload = async () => ({
 })
 
 const handleApiRequest = async (req, res, url) => {
+  if (ENFORCE_HTTPS && isProduction) {
+    const forwardedProto = sanitizeString(req.headers['x-forwarded-proto']).toLowerCase()
+    if (forwardedProto && forwardedProto !== 'https') {
+      const host = sanitizeString(req.headers.host)
+      const redirectUrl = host ? `https://${host}${url.pathname}${url.search}` : ''
+      if (redirectUrl) {
+        res.writeHead(301, { Location: redirectUrl, ...SECURITY_HEADERS })
+        res.end()
+        return
+      }
+    }
+  }
+
   if (url.pathname === '/api/health' && req.method === 'GET') {
     const user = ensureAuth(req, res)
     if (!user) return
@@ -1957,7 +1991,7 @@ const handleApiRequest = async (req, res, url) => {
         const { accessToken, refreshToken, refreshId, csrfToken } = createAuthTokens(user)
         await createRefreshTokenRecord({ id: refreshId, userId: user.id, token: refreshToken })
         setAuthCookies(res, accessToken, refreshToken, csrfToken)
-        return respond(res, 200, { accessToken, user })
+        return respond(res, 200, { user })
       }
 
       const user = getRow("SELECT * FROM users WHERE LOWER(COALESCE(email, username)) = LOWER(?)", [email])
@@ -1976,7 +2010,7 @@ const handleApiRequest = async (req, res, url) => {
       const { accessToken, refreshToken, refreshId, csrfToken } = createAuthTokens(authUser)
       await createRefreshTokenRecord({ id: refreshId, userId: user.id, token: refreshToken })
       setAuthCookies(res, accessToken, refreshToken, csrfToken)
-      return respond(res, 200, { accessToken, user: authUser })
+      return respond(res, 200, { user: authUser })
     } catch (error) {
       return handleErrorResponse(res, error, { path: url.pathname, method: req.method })
     }
@@ -2080,7 +2114,7 @@ const handleApiRequest = async (req, res, url) => {
     const next = createAuthTokens(user)
     await createRefreshTokenRecord({ id: next.refreshId, userId: user.id, token: next.refreshToken })
     setAuthCookies(res, next.accessToken, next.refreshToken, next.csrfToken)
-    return respond(res, 200, { accessToken: next.accessToken, user: { ...user, approved: Boolean(user.approved) } })
+    return respond(res, 200, { user: { ...user, approved: Boolean(user.approved) } })
   }
 
   if (url.pathname === '/api/auth/logout' && req.method === 'POST') {
@@ -3278,7 +3312,7 @@ const handleStaticRequest = async (pathname, res) => {
 const initializePrismaAvailability = async () => {
   if (!shouldUsePrisma()) return
   try {
-    await prisma.$queryRawUnsafe('SELECT 1 FROM "users" LIMIT 1')
+    await prisma.user.findFirst({ select: { id: true } })
   } catch (error) {
     disablePrismaIfUnavailable(error, 'startup_probe_users_table')
     if (shouldUsePrisma()) {
@@ -3290,10 +3324,10 @@ const initializePrismaAvailability = async () => {
 const ensurePostgresSearchIndexes = async () => {
   if (!shouldUsePrisma()) return
   try {
-    await prisma.$executeRawUnsafe('CREATE EXTENSION IF NOT EXISTS pg_trgm')
-    await prisma.$executeRawUnsafe('CREATE INDEX IF NOT EXISTS customers_name_trgm_idx ON "customers" USING gin ("name" gin_trgm_ops)')
-    await prisma.$executeRawUnsafe('CREATE INDEX IF NOT EXISTS interventions_description_trgm_idx ON "interventions" USING gin ("description" gin_trgm_ops)')
-    await prisma.$executeRawUnsafe('CREATE INDEX IF NOT EXISTS tickets_subject_trgm_idx ON "tickets" USING gin ("subject" gin_trgm_ops)')
+    await prisma.$executeRaw`CREATE EXTENSION IF NOT EXISTS pg_trgm`
+    await prisma.$executeRaw`CREATE INDEX IF NOT EXISTS customers_name_trgm_idx ON "customers" USING gin ("name" gin_trgm_ops)`
+    await prisma.$executeRaw`CREATE INDEX IF NOT EXISTS interventions_description_trgm_idx ON "interventions" USING gin ("description" gin_trgm_ops)`
+    await prisma.$executeRaw`CREATE INDEX IF NOT EXISTS tickets_subject_trgm_idx ON "tickets" USING gin ("subject" gin_trgm_ops)`
   } catch (error) {
     disablePrismaIfUnavailable(error, 'postgres_search_indexes')
     logEvent('warn', 'postgres_search_index_setup_failed', { error: error?.message || 'unknown_error' })

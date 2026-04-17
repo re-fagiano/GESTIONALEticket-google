@@ -6,7 +6,6 @@ const getCsrfToken = () => {
 
 const RAG_API_URL = (import.meta.env.VITE_RAG_API_URL || '').trim().replace(/\/$/, '');
 const RAG_ENDPOINT = RAG_API_URL || '/api/rag';
-const AUTH_TOKEN_KEY = 'gestionale_jwt';
 
 let unauthorizedHandler = null;
 
@@ -16,15 +15,7 @@ const assertFunction = (fn) => {
   }
 };
 
-const getStorage = () => {
-  if (typeof window === 'undefined') return null;
-  return window.localStorage || window.sessionStorage || null;
-};
-
-let authToken = (() => {
-  const storage = getStorage();
-  return storage?.getItem(AUTH_TOKEN_KEY) || '';
-})();
+let authToken = '';
 
 export const setUnauthorizedHandler = (handler) => {
   if (handler == null) {
@@ -37,13 +28,7 @@ export const setUnauthorizedHandler = (handler) => {
 
 export const setAuthToken = (token, persist = true) => {
   authToken = String(token || '');
-  const storage = getStorage();
-  if (!storage) return;
-  if (!authToken) {
-    storage.removeItem(AUTH_TOKEN_KEY);
-    return;
-  }
-  if (persist) storage.setItem(AUTH_TOKEN_KEY, authToken);
+  if (!persist) return;
 };
 
 export const clearAuthToken = () => {
@@ -62,9 +47,8 @@ const refreshAccessToken = async () => {
           err.status = response.status;
           throw err;
         }
-        const nextToken = payload?.accessToken || '';
-        if (nextToken) setAuthToken(nextToken);
-        return nextToken;
+        setAuthToken('');
+        return 'cookie_session';
       })
       .finally(() => {
         refreshPromise = null;
@@ -121,7 +105,7 @@ export const apiFetch = async (input, maybeOptions = {}, maybeToken = '', allowR
     ...(options.headers || {})
   };
   const token = apiToken || authToken;
-  if (token) {
+  if (token && token !== 'cookie_session') {
     headers.Authorization = `Bearer ${token}`;
   }
 
@@ -292,7 +276,7 @@ export const login = async ({ email, password }) => {
     },
     allowRefresh: false,
   });
-  if (response?.accessToken) setAuthToken(response.accessToken);
+  setAuthToken('');
   return response;
 };
 
@@ -305,7 +289,6 @@ export const register = async ({ email, password }) => {
     },
     allowRefresh: false,
   });
-  if (response?.accessToken) setAuthToken(response.accessToken);
   return response;
 };
 
