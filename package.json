@@ -19,7 +19,8 @@
     "clean": "rm -rf dist .vite",
     "preview": "vite preview",
     "prisma:migrate": "prisma migrate dev",
-    "check:icons": "node scripts/check-icon-usage.js"
+    "check:icons": "node scripts/check-icon-usage.js",
+    "security:audit": "pnpm audit --prod"
   },
   "dependencies": {
     "@prisma/client": "5",
