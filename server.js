@@ -249,9 +249,9 @@ const readJsonBody = async (req) => {
   }
   if (!body) return {}
   try {
-    return JSON.parse(body)
+    return JSON.parse(body || '{}')
   } catch {
-    throw createHttpError(400, 'Payload JSON non valido.', 'invalid_json')
+    throw createHttpError(400, 'Invalid JSON', 'invalid_json')
   }
 }
 
@@ -2164,7 +2164,11 @@ const handleApiRequest = async (req, res, url) => {
       setAuthCookies(res, accessToken, refreshToken, csrfToken)
       return respond(res, 200, { user: authUser })
     } catch (error) {
-      return handleErrorResponse(res, error, { path: url.pathname, method: req.method })
+      console.error('LOGIN ERROR:', error)
+      return respond(res, 500, {
+        error: 'Login failed',
+        message: error?.message || 'unknown_error',
+      })
     }
   }
 
