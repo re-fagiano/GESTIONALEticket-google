@@ -25,7 +25,6 @@ const {
   LOGIN_RATE_LIMIT_WINDOW_MS,
   LOGIN_RATE_LIMIT_MAX,
   ENFORCE_HTTPS,
-  REDIS_URL,
   ADMIN_EMAIL,
   ADMIN_PASSWORD,
   NODE_ENV,
@@ -793,10 +792,8 @@ const createAuthTokens = (user) => {
 }
 
 const getTokenFromRequest = (req) => {
-  const cookies = parseCookies(req.headers.cookie || '')
-  const token = cookies.access_token || ''
-  console.log('AUTH DEBUG', { cookies, token })
-  return token
+  const cookies = parseCookies(req.headers.cookie)
+  return cookies.access_token || ''
 }
 
 const sendUnauthorized = (res) => respond(res, 401, { error: 'Access token mancante o non valido.' })
@@ -828,7 +825,6 @@ const setAuthCookies = (res, accessToken, refreshToken, csrfToken) => {
 
 const loginRateLimits = new Map()
 const apiRateLimits = new Map()
-let sharedRateLimitStoreReady = false
 
 const checkRateLimitMap = ({ map, key, windowMs, max }) => {
   const now = Date.now()
@@ -880,16 +876,16 @@ const checkSharedRateLimit = async ({ scope, key, windowMs, max }) => {
   const updatedAtIso = new Date(now).toISOString()
 
   if (!shouldUsePrisma()) {
-    const existing = getRow('SELECT "count", "reset_at" FROM rate_limits WHERE "scope" = ? AND "key" = ?', [scope, key])
+    const existing = getRow('SELECT count, reset_at FROM rate_limits WHERE scope = ? AND key = ?', [scope, key])
     if (!existing || new Date(existing.reset_at).getTime() <= now) {
       runQuery(
-        'INSERT INTO rate_limits ("scope", "key", "count", "reset_at", "updated_at") VALUES (?, ?, ?, ?, ?) ON CONFLICT("scope", "key") DO UPDATE SET "count" = excluded."count", "reset_at" = excluded."reset_at", "updated_at" = excluded."updated_at"',
+        'INSERT INTO rate_limits (scope, key, count, reset_at, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(scope, key) DO UPDATE SET count = excluded.count, reset_at = excluded.reset_at, updated_at = excluded.updated_at',
         [scope, key, 1, resetAtIso, updatedAtIso],
       )
       return true
     }
     const nextCount = Number(existing.count || 0) + 1
-    runQuery('UPDATE rate_limits SET "count" = ?, "updated_at" = ? WHERE "scope" = ? AND "key" = ?', [nextCount, updatedAtIso, scope, key])
+    runQuery('UPDATE rate_limits SET count = ?, updated_at = ? WHERE scope = ? AND key = ?', [nextCount, updatedAtIso, scope, key])
     return nextCount <= max
   }
 
@@ -1137,12 +1133,12 @@ db.exec(`
     created_at TEXT NOT NULL
   );
   CREATE TABLE IF NOT EXISTS rate_limits (
-    "scope" TEXT NOT NULL,
-    "key" TEXT NOT NULL,
-    "count" INTEGER NOT NULL,
-    "reset_at" TEXT NOT NULL,
-    "updated_at" TEXT NOT NULL,
-    PRIMARY KEY ("scope", "key")
+    scope TEXT NOT NULL,
+    key TEXT NOT NULL,
+    count INTEGER NOT NULL,
+    reset_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (scope, key)
   );
 `)
 
