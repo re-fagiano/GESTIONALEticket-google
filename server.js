@@ -20,6 +20,12 @@ const {
   JWT_REFRESH_SECRET,
   ACCESS_TOKEN_TTL_SECONDS,
   REFRESH_TOKEN_TTL_SECONDS,
+  API_RATE_LIMIT_WINDOW_MS,
+  API_RATE_LIMIT_MAX,
+  LOGIN_RATE_LIMIT_WINDOW_MS,
+  LOGIN_RATE_LIMIT_MAX,
+  ENFORCE_HTTPS,
+  REDIS_URL,
   ADMIN_EMAIL,
   ADMIN_PASSWORD,
   NODE_ENV,
@@ -90,11 +96,19 @@ const MIME_TYPES = {
 const SECURITY_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
   'X-Frame-Options': 'DENY',
+  'X-DNS-Prefetch-Control': 'off',
+  'X-Download-Options': 'noopen',
+  'X-Permitted-Cross-Domain-Policies': 'none',
+  'X-XSS-Protection': '0',
   'Referrer-Policy': 'no-referrer',
   'Permissions-Policy': 'geolocation=(), camera=(), microphone=()',
   'Cross-Origin-Opener-Policy': 'same-origin',
   'Cross-Origin-Resource-Policy': 'same-origin',
   'Content-Security-Policy': "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+}
+
+if (isProduction) {
+  SECURITY_HEADERS['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains; preload'
 }
 
 const logEvent = (level, message, context = {}) => {
@@ -690,6 +704,56 @@ const normalizeEmail = (value) => sanitizeString(value).toLowerCase()
 
 const isValidEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
 
+const validatePayload = (schema, payload = {}) => {
+  const output = {}
+  for (const [field, rules] of Object.entries(schema || {})) {
+    const rawValue = payload?.[field]
+    const normalize = rules?.normalize || ((value) => value)
+    const value = normalize(rawValue)
+    if (rules?.required && (value === '' || value === null || value === undefined)) {
+      return { error: rules.requiredMessage || `Campo obbligatorio: ${field}` }
+    }
+    if (rules?.validate && !rules.validate(value)) {
+      return { error: rules.invalidMessage || `Campo non valido: ${field}` }
+    }
+    output[field] = value
+  }
+  return { value: output }
+}
+
+const AUTH_VALIDATION_SCHEMAS = {
+  login: {
+    email: {
+      required: true,
+      normalize: normalizeEmail,
+      validate: isValidEmail,
+      requiredMessage: 'Email e password sono obbligatorie.',
+      invalidMessage: 'Email non valida.',
+    },
+    password: {
+      required: true,
+      normalize: (value) => sanitizeString(value),
+      requiredMessage: 'Email e password sono obbligatorie.',
+    },
+  },
+  register: {
+    email: {
+      required: true,
+      normalize: normalizeEmail,
+      validate: isValidEmail,
+      requiredMessage: 'Email e password sono obbligatorie.',
+      invalidMessage: 'Email non valida.',
+    },
+    password: {
+      required: true,
+      normalize: (value) => sanitizeString(value),
+      validate: (value) => String(value || '').length >= 8,
+      requiredMessage: 'Email e password sono obbligatorie.',
+      invalidMessage: 'La password deve avere almeno 8 caratteri.',
+    },
+  },
+}
+
 const generateOperatorCode = () => `OP-${crypto.randomBytes(4).toString('hex').toUpperCase()}`
 
 const signJwt = (payload, secret, expiresInSeconds) => {
@@ -729,10 +793,10 @@ const createAuthTokens = (user) => {
 }
 
 const getTokenFromRequest = (req) => {
-  const header = req.headers.authorization || ''
-  if (header.startsWith('Bearer ')) return header.slice(7).trim()
-  const cookies = parseCookies(req.headers.cookie)
-  return cookies.access_token || ''
+  const cookies = parseCookies(req.headers.cookie || '')
+  const token = cookies.access_token || ''
+  console.log('AUTH DEBUG', { cookies, token })
+  return token
 }
 
 const sendUnauthorized = (res) => respond(res, 401, { error: 'Access token mancante o non valido.' })
@@ -763,11 +827,8 @@ const setAuthCookies = (res, accessToken, refreshToken, csrfToken) => {
 }
 
 const loginRateLimits = new Map()
-const LOGIN_RATE_LIMIT_WINDOW_MS = 60_000
-const LOGIN_RATE_LIMIT_MAX = 10
 const apiRateLimits = new Map()
-const API_RATE_LIMIT_WINDOW_MS = 60_000
-const API_RATE_LIMIT_MAX = 120
+const rateLimitState = { sharedStoreReady: false }
 
 const checkRateLimitMap = ({ map, key, windowMs, max }) => {
   const now = Date.now()
@@ -781,27 +842,127 @@ const checkRateLimitMap = ({ map, key, windowMs, max }) => {
   return entry.count <= max
 }
 
-const checkApiRateLimit = (req, res, userId = '') => {
+const upsertLocalRateLimit = ({ scope, key, windowMs, max }) => {
+  const compoundKey = `${scope}:${key}`
+  return checkRateLimitMap({ map: scope === 'login' ? loginRateLimits : apiRateLimits, key: compoundKey, windowMs, max })
+}
+
+const ensureSharedRateLimitStore = async () => {
+  if (rateLimitState.sharedStoreReady) return
+  if (shouldUsePrisma()) {
+    try {
+      await prisma.$executeRaw`
+        CREATE TABLE IF NOT EXISTS "rate_limits" (
+          "scope" TEXT NOT NULL,
+          "key" TEXT NOT NULL,
+          "count" INTEGER NOT NULL,
+          "reset_at" TIMESTAMP NOT NULL,
+          "updated_at" TIMESTAMP NOT NULL,
+          PRIMARY KEY ("scope", "key")
+        )
+      `
+      rateLimitState.sharedStoreReady = true
+      if (REDIS_URL) {
+        logEvent('warn', 'rate_limit_redis_not_configured', { message: 'REDIS_URL rilevata ma Redis client non disponibile; viene usato il datastore SQL condiviso.' })
+      }
+    } catch (error) {
+      disablePrismaIfUnavailable(error, 'ensure_rate_limits_table')
+      logEvent('warn', 'shared_rate_limit_store_unavailable', { error: error?.message || 'unknown_error' })
+    }
+  } else {
+    rateLimitState.sharedStoreReady = true
+  }
+}
+
+const checkSharedRateLimit = async ({ scope, key, windowMs, max }) => {
+  const now = Date.now()
+  const resetAtIso = new Date(now + windowMs).toISOString()
+  const updatedAtIso = new Date(now).toISOString()
+
+  if (!shouldUsePrisma()) {
+    const existing = getRow('SELECT "count", "reset_at" FROM rate_limits WHERE "scope" = ? AND "key" = ?', [scope, key])
+    if (!existing || new Date(existing.reset_at).getTime() <= now) {
+      runQuery(
+        'INSERT INTO rate_limits ("scope", "key", "count", "reset_at", "updated_at") VALUES (?, ?, ?, ?, ?) ON CONFLICT("scope", "key") DO UPDATE SET "count" = excluded."count", "reset_at" = excluded."reset_at", "updated_at" = excluded."updated_at"',
+        [scope, key, 1, resetAtIso, updatedAtIso],
+      )
+      return true
+    }
+    const nextCount = Number(existing.count || 0) + 1
+    runQuery('UPDATE rate_limits SET "count" = ?, "updated_at" = ? WHERE "scope" = ? AND "key" = ?', [nextCount, updatedAtIso, scope, key])
+    return nextCount <= max
+  }
+
+  await ensureSharedRateLimitStore()
+  if (!rateLimitState.sharedStoreReady) return upsertLocalRateLimit({ scope, key, windowMs, max })
+
+  try {
+    const rows = await prisma.$queryRaw`
+      SELECT "count", "reset_at" FROM "rate_limits"
+      WHERE "scope" = ${scope} AND "key" = ${key}
+      LIMIT 1
+    `
+    const existing = Array.isArray(rows) ? rows[0] : null
+    const existingReset = existing?.reset_at ? new Date(existing.reset_at).getTime() : 0
+    if (!existing || existingReset <= now) {
+      await prisma.$executeRaw`
+        INSERT INTO "rate_limits" ("scope", "key", "count", "reset_at", "updated_at")
+        VALUES (${scope}, ${key}, ${1}, ${new Date(now + windowMs)}, ${new Date(now)})
+        ON CONFLICT ("scope", "key")
+        DO UPDATE SET "count" = ${1}, "reset_at" = ${new Date(now + windowMs)}, "updated_at" = ${new Date(now)}
+      `
+      return true
+    }
+    const nextCount = Number(existing.count || 0) + 1
+    await prisma.$executeRaw`
+      UPDATE "rate_limits"
+      SET "count" = ${nextCount}, "updated_at" = ${new Date(now)}
+      WHERE "scope" = ${scope} AND "key" = ${key}
+    `
+    return nextCount <= max
+  } catch (error) {
+    logEvent('warn', 'shared_rate_limit_query_failed', { error: error?.message || 'unknown_error' })
+    return upsertLocalRateLimit({ scope, key, windowMs, max })
+  }
+}
+
+const checkApiRateLimit = async (req, res, userId = '') => {
   const key = userId || req.socket?.remoteAddress || 'unknown'
-  if (!checkRateLimitMap({ map: apiRateLimits, key, windowMs: API_RATE_LIMIT_WINDOW_MS, max: API_RATE_LIMIT_MAX })) {
+  const allowed = await checkSharedRateLimit({ scope: 'api', key, windowMs: API_RATE_LIMIT_WINDOW_MS, max: API_RATE_LIMIT_MAX })
+  if (!allowed) {
     respond(res, 429, { error: 'Troppe richieste, riprova più tardi.' })
     return false
   }
   return true
 }
 
-const checkLoginRateLimit = (req, res, username = '') => {
+const checkLoginRateLimit = async (req, res, username = '') => {
   const key = `${req.socket?.remoteAddress || 'unknown'}:${username || 'anonymous'}`
-  if (!checkRateLimitMap({ map: loginRateLimits, key, windowMs: LOGIN_RATE_LIMIT_WINDOW_MS, max: LOGIN_RATE_LIMIT_MAX })) {
+  const allowed = await checkSharedRateLimit({ scope: 'login', key, windowMs: LOGIN_RATE_LIMIT_WINDOW_MS, max: LOGIN_RATE_LIMIT_MAX })
+  if (!allowed) {
     respond(res, 429, { error: 'Troppi tentativi di login. Riprova tra qualche minuto.' })
     return false
   }
   return true
 }
 
+const cleanupRateLimitMap = (map) => {
+  const now = Date.now()
+  map.forEach((entry, key) => {
+    if (!entry?.resetAt || entry.resetAt <= now) {
+      map.delete(key)
+    }
+  })
+}
+
+setInterval(() => {
+  cleanupRateLimitMap(loginRateLimits)
+  cleanupRateLimitMap(apiRateLimits)
+}, 60_000).unref()
+
 const ensureCsrf = (req, res) => {
   if (CSRF_SAFE_METHODS.has(req.method || 'GET')) return true
-  const cookies = parseCookies(req.headers.cookie)
+  const cookies = parseCookies(req.headers.cookie || '')
   const cookieToken = sanitizeString(cookies.csrf_token)
   const headerToken = sanitizeString(req.headers['x-csrf-token'])
   if (!cookieToken || !headerToken || cookieToken !== headerToken) {
@@ -974,6 +1135,14 @@ db.exec(`
     drive_file_id TEXT,
     error_message TEXT,
     created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS rate_limits (
+    "scope" TEXT NOT NULL,
+    "key" TEXT NOT NULL,
+    "count" INTEGER NOT NULL,
+    "reset_at" TEXT NOT NULL,
+    "updated_at" TEXT NOT NULL,
+    PRIMARY KEY ("scope", "key")
   );
 `)
 
@@ -1799,7 +1968,12 @@ const readCsvFile = (file) => {
 
 const authenticateRequest = (req) => {
   const token = getTokenFromRequest(req)
-  const payload = verifyJwt(token, JWT_SECRET || JWT_ACCESS_SECRET)
+  let payload = null
+  try {
+    payload = verifyJwt(token, JWT_SECRET || JWT_ACCESS_SECRET)
+  } catch {
+    payload = null
+  }
   if (!payload || payload.type !== 'access') return null
   const role = normalizeUserRole(payload.role, '')
   if (!payload.sub || !USER_ROLES.has(role)) return null
@@ -1904,13 +2078,26 @@ const buildBackupPayload = async () => ({
 })
 
 const handleApiRequest = async (req, res, url) => {
+  if (ENFORCE_HTTPS && isProduction) {
+    const forwardedProto = sanitizeString(req.headers['x-forwarded-proto']).toLowerCase()
+    if (forwardedProto && forwardedProto !== 'https') {
+      const host = sanitizeString(req.headers.host)
+      const redirectUrl = host ? `https://${host}${url.pathname}${url.search}` : ''
+      if (redirectUrl) {
+        res.writeHead(301, { Location: redirectUrl, ...SECURITY_HEADERS })
+        res.end()
+        return
+      }
+    }
+  }
+
   if (url.pathname === '/api/health' && req.method === 'GET') {
     const user = ensureAuth(req, res)
     if (!user) return
     return respond(res, 200, { status: 'ok', time: nowIso() })
   }
 
-  if (!checkApiRateLimit(req, res)) return
+  if (!(await checkApiRateLimit(req, res))) return
 
   if (url.pathname === '/api/deepseek' && req.method === 'POST') {
     const user = ensureAuth(req, res)
@@ -1929,10 +2116,13 @@ const handleApiRequest = async (req, res, url) => {
   if (url.pathname === '/api/auth/login' && req.method === 'POST') {
     try {
       const payload = await readJsonBody(req)
-      const email = normalizeEmail(payload?.email)
-      const password = sanitizeString(payload?.password)
-      if (!email || !password) return respond(res, 400, { error: 'Email e password sono obbligatorie.', code: 'missing_credentials' })
-      if (!checkLoginRateLimit(req, res, email)) return
+      const validated = validatePayload(AUTH_VALIDATION_SCHEMAS.login, payload)
+      if (validated.error) {
+        const code = validated.error === 'Email non valida.' ? 'invalid_email' : 'missing_credentials'
+        return respond(res, 400, { error: validated.error, code })
+      }
+      const { email, password } = validated.value
+      if (!(await checkLoginRateLimit(req, res, email))) return
 
       if (shouldUsePrisma()) {
         const dbUser = await prisma.user.findUnique({ where: { email } })
@@ -1957,7 +2147,7 @@ const handleApiRequest = async (req, res, url) => {
         const { accessToken, refreshToken, refreshId, csrfToken } = createAuthTokens(user)
         await createRefreshTokenRecord({ id: refreshId, userId: user.id, token: refreshToken })
         setAuthCookies(res, accessToken, refreshToken, csrfToken)
-        return respond(res, 200, { accessToken, user })
+        return respond(res, 200, { user })
       }
 
       const user = getRow("SELECT * FROM users WHERE LOWER(COALESCE(email, username)) = LOWER(?)", [email])
@@ -1976,7 +2166,7 @@ const handleApiRequest = async (req, res, url) => {
       const { accessToken, refreshToken, refreshId, csrfToken } = createAuthTokens(authUser)
       await createRefreshTokenRecord({ id: refreshId, userId: user.id, token: refreshToken })
       setAuthCookies(res, accessToken, refreshToken, csrfToken)
-      return respond(res, 200, { accessToken, user: authUser })
+      return respond(res, 200, { user: authUser })
     } catch (error) {
       return handleErrorResponse(res, error, { path: url.pathname, method: req.method })
     }
@@ -1985,17 +2175,14 @@ const handleApiRequest = async (req, res, url) => {
   if (url.pathname === '/api/auth/register' && req.method === 'POST') {
     try {
       const payload = await readJsonBody(req)
-      const email = normalizeEmail(payload?.email)
-      const password = sanitizeString(payload?.password)
-      if (!email || !password) {
-        return respond(res, 400, { error: 'Email e password sono obbligatorie.', code: 'missing_credentials' })
+      const validated = validatePayload(AUTH_VALIDATION_SCHEMAS.register, payload)
+      if (validated.error) {
+        const code = validated.error === 'Email non valida.'
+          ? 'invalid_email'
+          : (validated.error === 'La password deve avere almeno 8 caratteri.' ? 'weak_password' : 'missing_credentials')
+        return respond(res, 400, { error: validated.error, code })
       }
-      if (!isValidEmail(email)) {
-        return respond(res, 400, { error: 'Email non valida.', code: 'invalid_email' })
-      }
-      if (password.length < 8) {
-        return respond(res, 400, { error: 'La password deve avere almeno 8 caratteri.', code: 'weak_password' })
-      }
+      const { email, password } = validated.value
 
       if (shouldUsePrisma()) {
         const existing = await prisma.user.findUnique({ where: { email } })
@@ -2048,9 +2235,15 @@ const handleApiRequest = async (req, res, url) => {
 
   if (url.pathname === '/api/auth/refresh' && req.method === 'POST') {
     if (!ensureCsrf(req, res)) return
-    const cookies = parseCookies(req.headers.cookie)
+    const cookies = parseCookies(req.headers.cookie || '')
     const refreshToken = cookies.refresh_token || ''
-    const payload = verifyJwt(refreshToken, JWT_REFRESH_SECRET)
+    let payload = null
+    try {
+      payload = verifyJwt(refreshToken, JWT_REFRESH_SECRET)
+    } catch {
+      clearAuthCookies(res)
+      return respond(res, 200, { user: null })
+    }
     if (!payload || payload.type !== 'refresh' || !payload.jti) {
       clearAuthCookies(res)
       return respond(res, 401, { error: 'Sessione scaduta.', code: 'session_expired' })
@@ -2080,14 +2273,19 @@ const handleApiRequest = async (req, res, url) => {
     const next = createAuthTokens(user)
     await createRefreshTokenRecord({ id: next.refreshId, userId: user.id, token: next.refreshToken })
     setAuthCookies(res, next.accessToken, next.refreshToken, next.csrfToken)
-    return respond(res, 200, { accessToken: next.accessToken, user: { ...user, approved: Boolean(user.approved) } })
+    return respond(res, 200, { user: { ...user, approved: Boolean(user.approved) } })
   }
 
   if (url.pathname === '/api/auth/logout' && req.method === 'POST') {
     if (!ensureCsrf(req, res)) return
-    const cookies = parseCookies(req.headers.cookie)
+    const cookies = parseCookies(req.headers.cookie || '')
     const refreshToken = cookies.refresh_token || ''
-    const payload = verifyJwt(refreshToken, JWT_REFRESH_SECRET)
+    let payload = null
+    try {
+      payload = verifyJwt(refreshToken, JWT_REFRESH_SECRET)
+    } catch {
+      payload = null
+    }
     if (payload?.jti) {
       await revokeRefreshTokenRecord(payload.jti)
     }
@@ -2098,11 +2296,11 @@ const handleApiRequest = async (req, res, url) => {
   if (url.pathname === '/api/auth/me' && req.method === 'GET') {
     try {
       const user = authenticateRequest(req)
-      if (!user) return respond(res, 401, { error: 'Sessione scaduta.', code: 'session_expired' })
+      if (!user) return respond(res, 200, { user: null })
       return respond(res, 200, { user })
     } catch (error) {
       console.warn('[auth] /api/auth/me non disponibile temporaneamente', error)
-      return respond(res, 503, { error: 'Servizio autenticazione temporaneamente non disponibile.', code: 'auth_temporarily_unavailable' })
+      return respond(res, 200, { user: null })
     }
   }
 
@@ -2126,7 +2324,7 @@ const handleApiRequest = async (req, res, url) => {
   if (!user) return
   if (!ensureRouteAuthorization(req, res, user, url.pathname)) return
   if (!ensureCsrf(req, res)) return
-  if (!checkApiRateLimit(req, res, user.id)) return
+  if (!(await checkApiRateLimit(req, res, user.id))) return
 
   if (req.method === 'GET' && url.pathname === '/api/bootstrap') {
     if (shouldUsePrisma()) {
@@ -3278,7 +3476,7 @@ const handleStaticRequest = async (pathname, res) => {
 const initializePrismaAvailability = async () => {
   if (!shouldUsePrisma()) return
   try {
-    await prisma.$queryRawUnsafe('SELECT 1 FROM "users" LIMIT 1')
+    await prisma.user.findFirst({ select: { id: true } })
   } catch (error) {
     disablePrismaIfUnavailable(error, 'startup_probe_users_table')
     if (shouldUsePrisma()) {
@@ -3290,10 +3488,10 @@ const initializePrismaAvailability = async () => {
 const ensurePostgresSearchIndexes = async () => {
   if (!shouldUsePrisma()) return
   try {
-    await prisma.$executeRawUnsafe('CREATE EXTENSION IF NOT EXISTS pg_trgm')
-    await prisma.$executeRawUnsafe('CREATE INDEX IF NOT EXISTS customers_name_trgm_idx ON "customers" USING gin ("name" gin_trgm_ops)')
-    await prisma.$executeRawUnsafe('CREATE INDEX IF NOT EXISTS interventions_description_trgm_idx ON "interventions" USING gin ("description" gin_trgm_ops)')
-    await prisma.$executeRawUnsafe('CREATE INDEX IF NOT EXISTS tickets_subject_trgm_idx ON "tickets" USING gin ("subject" gin_trgm_ops)')
+    await prisma.$executeRaw`CREATE EXTENSION IF NOT EXISTS pg_trgm`
+    await prisma.$executeRaw`CREATE INDEX IF NOT EXISTS customers_name_trgm_idx ON "customers" USING gin ("name" gin_trgm_ops)`
+    await prisma.$executeRaw`CREATE INDEX IF NOT EXISTS interventions_description_trgm_idx ON "interventions" USING gin ("description" gin_trgm_ops)`
+    await prisma.$executeRaw`CREATE INDEX IF NOT EXISTS tickets_subject_trgm_idx ON "tickets" USING gin ("subject" gin_trgm_ops)`
   } catch (error) {
     disablePrismaIfUnavailable(error, 'postgres_search_indexes')
     logEvent('warn', 'postgres_search_index_setup_failed', { error: error?.message || 'unknown_error' })
@@ -3323,16 +3521,17 @@ const server = createServer(async (req, res) => {
     }
 
     if (url.pathname.startsWith('/api/')) {
-      return handleApiRequest(req, res, url)
+      return await handleApiRequest(req, res, url)
     }
 
     if (req.method === 'GET') {
-      return handleStaticRequest(url.pathname, res)
+      return await handleStaticRequest(url.pathname, res)
     }
 
     return respond(res, 405, { error: 'Metodo non supportato.' })
-  } catch (error) {
-    handleErrorResponse(res, error, { path: req.url, method: req.method })
+  } catch (err) {
+    console.error('UNHANDLED ERROR', err)
+    return respond(res, 500, { error: 'Internal server error' })
   }
 })
 
