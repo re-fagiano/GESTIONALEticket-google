@@ -3517,11 +3517,11 @@ const server = createServer(async (req, res) => {
     }
 
     if (url.pathname.startsWith('/api/')) {
-      return handleApiRequest(req, res, url)
+      return await handleApiRequest(req, res, url)
     }
 
     if (req.method === 'GET') {
-      return handleStaticRequest(url.pathname, res)
+      return await handleStaticRequest(url.pathname, res)
     }
 
     return respond(res, 405, { error: 'Metodo non supportato.' })
