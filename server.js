@@ -3,6 +3,7 @@ import crypto from 'node:crypto'
 import { createReadStream } from 'node:fs'
 import { access, mkdir, stat } from 'node:fs/promises'
 import { createServer } from 'node:http'
+import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
@@ -24,6 +25,11 @@ const {
   API_RATE_LIMIT_MAX,
   LOGIN_RATE_LIMIT_WINDOW_MS,
   LOGIN_RATE_LIMIT_MAX,
+  CSP_STRICT_MODE,
+  CSP_REPORT_ONLY,
+  COOKIE_STRICT_MODE,
+  USE_STRONG_SANITIZER,
+  ENABLE_DESTRUCTIVE_OPERATIONS,
   REDIS_URL,
   ENFORCE_HTTPS,
   ADMIN_EMAIL,
@@ -69,6 +75,8 @@ const shouldUsePrisma = () => prismaEnabled
 
 let bcryptLib = null
 let jwtLib = null
+const require = createRequire(import.meta.url)
+let escapeHtmlLib = null
 try {
   const loaded = await import('bcryptjs')
   bcryptLib = loaded.default || loaded
@@ -80,6 +88,17 @@ try {
   jwtLib = loaded.default || loaded
 } catch {
   jwtLib = null
+}
+try {
+  const loaded = require('escape-html')
+  escapeHtmlLib = loaded.default || loaded
+} catch {
+  try {
+    const loaded = require('lodash.escape')
+    escapeHtmlLib = loaded.default || loaded
+  } catch {
+    escapeHtmlLib = null
+  }
 }
 
 const MIME_TYPES = {
@@ -94,6 +113,9 @@ const MIME_TYPES = {
   '.woff2': 'font/woff2',
 }
 
+const DEFAULT_CSP = "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+const STRICT_CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'"
+
 const SECURITY_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
   'X-Frame-Options': 'DENY',
@@ -101,23 +123,49 @@ const SECURITY_HEADERS = {
   'X-Download-Options': 'noopen',
   'X-Permitted-Cross-Domain-Policies': 'none',
   'X-XSS-Protection': '0',
+  'X-Powered-By': 'none',
   'Referrer-Policy': 'no-referrer',
   'Permissions-Policy': 'geolocation=(), camera=(), microphone=()',
   'Cross-Origin-Opener-Policy': 'same-origin',
   'Cross-Origin-Resource-Policy': 'same-origin',
-  'Content-Security-Policy': "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
 }
 
 if (isProduction) {
   SECURITY_HEADERS['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains; preload'
 }
 
+const getSecurityHeaders = () => {
+  if (CSP_REPORT_ONLY) {
+    return {
+      ...SECURITY_HEADERS,
+      'Content-Security-Policy': DEFAULT_CSP,
+      'Content-Security-Policy-Report-Only': STRICT_CSP,
+    }
+  }
+  return {
+    ...SECURITY_HEADERS,
+    'Content-Security-Policy': CSP_STRICT_MODE ? STRICT_CSP : DEFAULT_CSP,
+  }
+}
+
 const logEvent = (level, message, context = {}) => {
+  const maskSensitiveData = (value) => {
+    if (Array.isArray(value)) return value.map(maskSensitiveData)
+    if (!value || typeof value !== 'object') return value
+    return Object.entries(value).reduce((acc, [key, item]) => {
+      if (key.match(/password|token|email/i)) {
+        acc[key] = '***'
+      } else {
+        acc[key] = maskSensitiveData(item)
+      }
+      return acc
+    }, {})
+  }
   const entry = {
     ts: nowIso(),
     level,
     message,
-    ...context,
+    ...maskSensitiveData(context),
   }
   const output = JSON.stringify(entry)
   if (level === 'error') {
@@ -146,7 +194,7 @@ const createHttpError = (status, message, code = 'request_error') => {
 
 const handleErrorResponse = (res, error, context = {}) => {
   const status = Number.isInteger(error?.status) ? error.status : 500
-  const message = error?.message || 'Errore interno del server.'
+  const message = status >= 500 && isProduction ? 'Errore interno' : (error?.message || 'Errore interno del server.')
   logEvent(status >= 500 ? 'error' : 'warn', 'request_failed', {
     status,
     code: error?.code || 'internal_error',
@@ -202,7 +250,7 @@ const mapPrismaIntervention = (row) => {
     assignedToId: row.assignedToId || '',
     openedAt: row.openedAt?.toISOString?.() || row.openedAt,
     closedAt: row.closedAt?.toISOString?.() || row.closedAt,
-    description: row.description || '',
+    description: sanitizeOutput(row.description || ''),
     additionalData: row.additionalData || {},
     logs: Array.isArray(row.logs) ? row.logs.map((log) => ({
       id: log.id,
@@ -227,7 +275,7 @@ const respond = (res, statusCode, payload, headers = {}) => {
   const body = typeof payload === 'string' ? payload : JSON.stringify(payload)
   res.writeHead(statusCode, {
     'Content-Type': typeof payload === 'string' ? 'text/plain' : 'application/json',
-    ...SECURITY_HEADERS,
+    ...getSecurityHeaders(),
     ...headers,
   })
   res.end(body)
@@ -236,7 +284,7 @@ const respond = (res, statusCode, payload, headers = {}) => {
 const sendFile = (filePath, res) => {
   const ext = path.extname(filePath).toLowerCase()
   const contentType = MIME_TYPES[ext] || 'application/octet-stream'
-  res.writeHead(200, { 'Content-Type': contentType, ...SECURITY_HEADERS })
+  res.writeHead(200, { 'Content-Type': contentType, ...getSecurityHeaders() })
   const stream = createReadStream(filePath)
   stream.on('error', () => {
     respond(res, 500, { error: 'Errore durante la lettura del file.' })
@@ -273,10 +321,46 @@ const parseCookies = (cookieHeader = '') => {
   }, {})
 }
 
+const getClientIp = (req) => {
+  const forwarded = req.headers['x-forwarded-for']
+  if (forwarded) {
+    return forwarded.split(',')[0].trim()
+  }
+  return req.socket?.remoteAddress || 'unknown'
+}
+
 const sanitizeString = (value, fallback = '') => {
   if (typeof value !== 'string') return fallback
   return value.replace(/\0/g, '').trim()
 }
+
+const sanitizeHtml = (input) => {
+  if (typeof input !== 'string') return ''
+  return input
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+}
+
+const escapeHtmlFallback = (input) => {
+  if (typeof input !== 'string') return ''
+  return input
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+const escapeHtmlSafe = (input) => {
+  if (typeof input !== 'string') return ''
+  try {
+    return escapeHtmlLib ? escapeHtmlLib(input) : escapeHtmlFallback(input)
+  } catch {
+    return escapeHtmlFallback(input)
+  }
+}
+
+const sanitizeOutput = (value) => (USE_STRONG_SANITIZER ? escapeHtmlSafe(value) : sanitizeHtml(value))
 
 const sanitizeNumber = (value, fallback = 0) => {
   const parsed = Number(value)
@@ -482,8 +566,8 @@ const mapCustomerRow = (row) => (row ? ({
 
 const mapTicketRow = (row) => (row ? ({
   id: row.id,
-  subject: row.subject,
-  description: row.description,
+  subject: sanitizeOutput(row.subject),
+  description: sanitizeOutput(row.description),
   customerId: row.customer_id,
   status: row.status,
   date: row.date,
@@ -555,7 +639,7 @@ const mapInterventionRow = (row) => {
     updatedByUserId: row.updated_by_user_id || '',
     openedAt: row.opened_at,
     closedAt: row.closed_at,
-    description: row.description,
+    description: sanitizeOutput(row.description),
     parentInterventionId: row.parent_intervention_id,
     additionalData: (() => {
       try {
@@ -605,7 +689,7 @@ const mapSparePartOrderRow = (row) => (row ? ({
   })(),
   status: row.status,
   supplier: row.supplier,
-  notes: row.notes,
+  notes: sanitizeOutput(row.notes),
   createdAt: row.created_at,
   updatedAt: row.updated_at,
   version: row.version,
@@ -625,7 +709,7 @@ const mapQuoteRow = (row) => (row ? ({
   discount: row.discount,
   validUntil: row.valid_until,
   status: row.status,
-  notes: row.notes,
+  notes: sanitizeOutput(row.notes),
   createdAt: row.created_at,
   updatedAt: row.updated_at,
   version: row.version,
@@ -807,13 +891,15 @@ const getTokenFromRequest = (req) => {
 const sendUnauthorized = (res) => respond(res, 401, { error: 'Access token mancante o non valido.' })
 
 const makeCookieAttrs = (maxAge = 0) => {
-  const attrs = ['Path=/', 'HttpOnly', 'SameSite=Lax', `Max-Age=${maxAge}`]
+  const sameSitePolicy = COOKIE_STRICT_MODE ? 'Strict' : 'Lax'
+  const attrs = ['Path=/', 'HttpOnly', `SameSite=${sameSitePolicy}`, `Max-Age=${maxAge}`]
   if (isProduction) attrs.push('Secure')
   return attrs.join('; ')
 }
 
 const clearAuthCookies = (res) => {
-  const csrfAttrs = ['Path=/', 'SameSite=Lax', 'Max-Age=0']
+  const sameSitePolicy = COOKIE_STRICT_MODE ? 'Strict' : 'Lax'
+  const csrfAttrs = ['Path=/', `SameSite=${sameSitePolicy}`, 'Max-Age=0']
   if (isProduction) csrfAttrs.push('Secure')
   res.setHeader('Set-Cookie', [
     `access_token=; ${makeCookieAttrs(0)}`,
@@ -823,7 +909,8 @@ const clearAuthCookies = (res) => {
 }
 
 const setAuthCookies = (res, accessToken, refreshToken, csrfToken) => {
-  const csrfAttrs = ['Path=/', 'SameSite=Lax', `Max-Age=${REFRESH_TOKEN_TTL_SECONDS}`]
+  const sameSitePolicy = COOKIE_STRICT_MODE ? 'Strict' : 'Lax'
+  const csrfAttrs = ['Path=/', `SameSite=${sameSitePolicy}`, `Max-Age=${REFRESH_TOKEN_TTL_SECONDS}`]
   if (isProduction) csrfAttrs.push('Secure')
   const accessCookie = `access_token=${encodeURIComponent(accessToken)}; ${makeCookieAttrs(ACCESS_TOKEN_TTL_SECONDS)}`
   const refreshCookie = `refresh_token=${encodeURIComponent(refreshToken)}; ${makeCookieAttrs(REFRESH_TOKEN_TTL_SECONDS)}`
@@ -931,7 +1018,7 @@ const checkSharedRateLimit = async ({ scope, key, windowMs, max }) => {
 }
 
 const checkApiRateLimit = async (req, res, userId = '') => {
-  const key = userId || req.socket?.remoteAddress || 'unknown'
+  const key = userId || getClientIp(req)
   const allowed = await checkSharedRateLimit({ scope: 'api', key, windowMs: API_RATE_LIMIT_WINDOW_MS, max: API_RATE_LIMIT_MAX })
   if (!allowed) {
     respond(res, 429, { error: 'Troppe richieste, riprova più tardi.' })
@@ -941,7 +1028,8 @@ const checkApiRateLimit = async (req, res, userId = '') => {
 }
 
 const checkLoginRateLimit = async (req, res, username = '') => {
-  const key = `${req.socket?.remoteAddress || 'unknown'}:${username || 'anonymous'}`
+  const ip = getClientIp(req)
+  const key = `${ip}:${username || 'anonymous'}`
   const allowed = await checkSharedRateLimit({ scope: 'login', key, windowMs: LOGIN_RATE_LIMIT_WINDOW_MS, max: LOGIN_RATE_LIMIT_MAX })
   if (!allowed) {
     respond(res, 429, { error: 'Troppi tentativi di login. Riprova tra qualche minuto.' })
@@ -2088,7 +2176,7 @@ const handleApiRequest = async (req, res, url) => {
       const host = sanitizeString(req.headers.host)
       const redirectUrl = host ? `https://${host}${url.pathname}${url.search}` : ''
       if (redirectUrl) {
-        res.writeHead(301, { Location: redirectUrl, ...SECURITY_HEADERS })
+        res.writeHead(301, { Location: redirectUrl, ...getSecurityHeaders() })
         res.end()
         return
       }
@@ -2344,7 +2432,7 @@ const handleApiRequest = async (req, res, url) => {
       ])
       return respond(res, 200, {
         customers,
-        tickets,
+        tickets: tickets.map((ticket) => ({ ...ticket, subject: sanitizeOutput(ticket.subject), description: sanitizeOutput(ticket.description) })),
         interventions: interventions.map(mapPrismaIntervention),
         sparePartsOrders: [],
         quotes: [],
@@ -2391,14 +2479,20 @@ const handleApiRequest = async (req, res, url) => {
       if (transactionOpen) {
         db.exec('ROLLBACK')
       }
-      return respond(res, 400, { error: error.message || 'Errore durante la sincronizzazione.' })
+      return respond(res, 400, { error: isProduction ? 'Errore interno' : (error.message || 'Errore durante la sincronizzazione.') })
     }
   }
 
   if (req.method === 'POST' && url.pathname === '/api/import') {
     if (!ensureAdminRole(res, user)) return
+    if (!ENABLE_DESTRUCTIVE_OPERATIONS) {
+      return respond(res, 403, { error: 'Operazione disabilitata' })
+    }
     try {
       const payload = await readJsonBody(req)
+      if (sanitizeString(payload?.confirm) !== 'RESET_ALL_DATA') {
+        return respond(res, 400, { error: 'Conferma import non valida.' })
+      }
       const customers = Array.isArray(payload?.customers) ? payload.customers : []
       const tickets = Array.isArray(payload?.tickets) ? payload.tickets : []
       const interventions = Array.isArray(payload?.interventions) ? payload.interventions : []
@@ -2406,6 +2500,11 @@ const handleApiRequest = async (req, res, url) => {
       const quotes = Array.isArray(payload?.quotes) ? payload.quotes : []
       const inventory = Array.isArray(payload?.inventory) ? payload.inventory : []
       const settings = Array.isArray(payload?.settings) ? payload.settings : []
+      try {
+        await performBackup({ triggeredBy: 'pre-import-auto' })
+      } catch (error) {
+        logEvent('warn', 'pre_import_backup_failed', { error: error?.message || 'unknown_error' })
+      }
       db.exec('BEGIN')
       runQuery('DELETE FROM customers')
       runQuery('DELETE FROM tickets')
@@ -2479,7 +2578,7 @@ const handleApiRequest = async (req, res, url) => {
       return respond(res, 200, { status: 'ok' })
     } catch (error) {
       db.exec('ROLLBACK')
-      return respond(res, 400, { error: error.message || 'Errore import.' })
+      return respond(res, 400, { error: isProduction ? 'Errore interno' : (error.message || 'Errore import.') })
     }
   }
 
@@ -3286,7 +3385,7 @@ const handleApiRequest = async (req, res, url) => {
     res.writeHead(200, {
       'Content-Type': 'application/json',
       'Content-Disposition': `attachment; filename="${filename}"`,
-      ...SECURITY_HEADERS,
+      ...getSecurityHeaders(),
     })
     res.end(JSON.stringify(payload, null, 2))
     return
@@ -3307,7 +3406,7 @@ const handleApiRequest = async (req, res, url) => {
     res.writeHead(200, {
       'Content-Type': 'text/csv; charset=utf-8',
       'Content-Disposition': 'attachment; filename="export-tickets-interventi.csv"',
-      ...SECURITY_HEADERS,
+      ...getSecurityHeaders(),
     })
 
     res.end(merged)
@@ -3519,6 +3618,14 @@ const scheduleAutomaticBackup = () => {
 }
 
 const runtimePort = process.env.PORT || 3000
+
+process.on('uncaughtException', (err) => {
+  console.error('CRASH', err)
+})
+
+process.on('unhandledRejection', (err) => {
+  console.error('PROMISE ERROR', err)
+})
 
 const server = createServer(async (req, res) => {
   try {
