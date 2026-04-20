@@ -27,7 +27,7 @@
     "bcryptjs": "^2.4.3",
     "express": "^4.19.2",
     "jsonwebtoken": "^9.0.2",
-    "lucide-react": "^0.556.0",
+    "lucide-react": "^1.8.0",
     "prisma": "5",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
