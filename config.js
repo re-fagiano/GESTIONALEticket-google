@@ -48,6 +48,11 @@ export const config = {
   API_RATE_LIMIT_MAX: Number(process.env.API_RATE_LIMIT_MAX || 100),
   LOGIN_RATE_LIMIT_WINDOW_MS: Number(process.env.LOGIN_RATE_LIMIT_WINDOW_MS || 15 * 60 * 1000),
   LOGIN_RATE_LIMIT_MAX: Number(process.env.LOGIN_RATE_LIMIT_MAX || 5),
+  CSP_STRICT_MODE: ['1', 'true', 'yes', 'on'].includes(String(process.env.CSP_STRICT_MODE || 'false').toLowerCase()),
+  CSP_REPORT_ONLY: ['1', 'true', 'yes', 'on'].includes(String(process.env.CSP_REPORT_ONLY || 'true').toLowerCase()),
+  COOKIE_STRICT_MODE: ['1', 'true', 'yes', 'on'].includes(String(process.env.COOKIE_STRICT_MODE || 'false').toLowerCase()),
+  USE_STRONG_SANITIZER: ['1', 'true', 'yes', 'on'].includes(String(process.env.USE_STRONG_SANITIZER || 'false').toLowerCase()),
+  ENABLE_DESTRUCTIVE_OPERATIONS: ['1', 'true', 'yes', 'on'].includes(String(process.env.ENABLE_DESTRUCTIVE_OPERATIONS || 'false').toLowerCase()),
   REDIS_URL: (process.env.REDIS_URL || '').trim(),
   ENFORCE_HTTPS: String(process.env.ENFORCE_HTTPS || '').trim() ? ['1', 'true', 'yes', 'on'].includes(String(process.env.ENFORCE_HTTPS).toLowerCase()) : true,
   // Admin seed allineato a email/password esplicite via env.
