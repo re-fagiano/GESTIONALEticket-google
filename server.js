@@ -48,10 +48,6 @@ const __dirname = path.dirname(__filename)
 const DIST_DIR = path.join(__dirname, 'dist')
 const DIST_INDEX = path.join(DIST_DIR, 'index.html')
 const isProduction = NODE_ENV === 'production'
-const CSP_REPORT_ONLY_SAFE = typeof CSP_REPORT_ONLY !== 'undefined' ? CSP_REPORT_ONLY : false
-const CSP_STRICT_MODE_SAFE = typeof CSP_STRICT_MODE !== 'undefined' ? CSP_STRICT_MODE : false
-const COOKIE_STRICT_MODE_SAFE = typeof COOKIE_STRICT_MODE !== 'undefined' ? COOKIE_STRICT_MODE : false
-const USE_STRONG_SANITIZER_SAFE = typeof USE_STRONG_SANITIZER !== 'undefined' ? USE_STRONG_SANITIZER : false
 
 const getFlag = (name, defaultValue = false) => {
   try {
