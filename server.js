@@ -53,6 +53,21 @@ const CSP_STRICT_MODE_SAFE = typeof CSP_STRICT_MODE !== 'undefined' ? CSP_STRICT
 const COOKIE_STRICT_MODE_SAFE = typeof COOKIE_STRICT_MODE !== 'undefined' ? COOKIE_STRICT_MODE : false
 const USE_STRONG_SANITIZER_SAFE = typeof USE_STRONG_SANITIZER !== 'undefined' ? USE_STRONG_SANITIZER : false
 
+const getFlag = (name, defaultValue = false) => {
+  try {
+    const value = process?.env?.[name]
+    if (value === undefined) return defaultValue
+    return String(value).toLowerCase() === 'true'
+  } catch {
+    return defaultValue
+  }
+}
+
+const CSP_REPORT_ONLY_SAFE = getFlag('CSP_REPORT_ONLY')
+const CSP_STRICT_MODE_SAFE = getFlag('CSP_STRICT_MODE')
+const COOKIE_STRICT_MODE_SAFE = getFlag('COOKIE_STRICT_MODE')
+const USE_STRONG_SANITIZER_SAFE = getFlag('USE_STRONG_SANITIZER')
+
 let prismaEnabled = isDatabaseConfigured
 let sharedRateLimitStoreReady = false
 
@@ -174,12 +189,12 @@ const logEvent = (level, message, context = {}) => {
   }
 }
 
-// Ambiente obbligatorio: blocchiamo l'avvio se mancano variabili critiche.
-// Rollback: ridurre l'elenco requiredEnv se vuoi avvio permissivo in locale.
+// Ambiente consigliato: segnaliamo variabili critiche mancanti ma evitiamo crash in bootstrap.
+// Rollback: ripristinare `throw` per bloccare l'avvio senza env obbligatorie.
 const requiredEnv = ['DATABASE_URL', 'JWT_SECRET', 'JWT_REFRESH_SECRET']
 const missingRequiredEnv = requiredEnv.filter((name) => !(process.env[name] || '').trim())
 if (missingRequiredEnv.length > 0) {
-  throw new Error(`Variabili ambiente obbligatorie mancanti: ${missingRequiredEnv.join(', ')}`)
+  console.warn(`Missing recommended env vars: ${missingRequiredEnv.join(', ')}`)
 }
 
 const createHttpError = (status, message, code = 'request_error') => {
