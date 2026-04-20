@@ -20,7 +20,9 @@
     "preview": "vite preview",
     "prisma:migrate": "prisma migrate dev",
     "check:icons": "node scripts/check-icon-usage.js",
-    "security:audit": "pnpm audit --prod"
+    "security:audit": "pnpm audit --prod --audit-level=high",
+    "security:static": "node scripts/security-static-check.js",
+    "security:ci": "pnpm security:static && pnpm security:audit"
   },
   "dependencies": {
     "@prisma/client": "5",
