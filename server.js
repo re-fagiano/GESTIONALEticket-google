@@ -127,7 +127,7 @@ const MIME_TYPES = {
 const DEFAULT_CSP = "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 const STRICT_CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'"
 
-const SECURITY_HEADERS = {
+let SECURITY_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
   'X-Frame-Options': 'DENY',
   'X-DNS-Prefetch-Control': 'off',
@@ -147,7 +147,7 @@ if (isProduction) {
 }
 
 const getSecurityHeaders = () => {
-  if (CSP_REPORT_ONLY) {
+  if (CSP_REPORT_ONLY_SAFE) {
     return {
       ...SECURITY_HEADERS,
       'Content-Security-Policy': DEFAULT_CSP,
