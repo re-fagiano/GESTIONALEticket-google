@@ -28,4 +28,4 @@ jobs:
         run: pnpm install --store-dir /tmp/.pnpm-store --frozen-lockfile --no-optional
 
       - name: Production dependency audit
-        run: pnpm run security:audit
+        run: pnpm audit --prod
