@@ -68,3 +68,11 @@ Il backend ora supporta PostgreSQL via `DATABASE_URL` (Railway) con Prisma.
 ### Note operative
 - Se `DATABASE_URL` manca, il server termina con errore esplicito per evitare fallback legacy non coerenti.
 - Le API AI (DeepSeek/RAG) non sono state toccate; il focus è solo su persistenza DB/CRUD.
+
+## Manutenzione dipendenze e sicurezza
+
+Per ridurre regressioni in produzione e mantenere il backend aggiornato:
+
+- Dependabot è configurato per aggiornare automaticamente dipendenze `npm` e GitHub Actions con cadenza settimanale (`.github/dependabot.yml`).
+- È disponibile una pipeline schedulata (`.github/workflows/security-audit.yml`) che esegue `pnpm audit --prod` ogni lunedì e può essere lanciata manualmente.
+- Prima di applicare update major, validare sempre in staging con smoke test API e login, poi procedere al rollout graduale.
