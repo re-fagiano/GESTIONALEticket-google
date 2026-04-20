@@ -72,6 +72,7 @@ const shouldUsePrisma = () => prismaEnabled
 
 let bcryptLib = null
 let jwtLib = null
+let strongSanitizerLib = null
 try {
   const loaded = await import('bcryptjs')
   bcryptLib = loaded.default || loaded
@@ -83,6 +84,12 @@ try {
   jwtLib = loaded.default || loaded
 } catch {
   jwtLib = null
+}
+try {
+  const loaded = await import('isomorphic-dompurify')
+  strongSanitizerLib = loaded.default || loaded
+} catch {
+  strongSanitizerLib = null
 }
 
 const MIME_TYPES = {
@@ -117,6 +124,20 @@ const SECURITY_HEADERS = {
 
 if (isProduction) {
   SECURITY_HEADERS['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains; preload'
+}
+
+const getSecurityHeaders = () => {
+  if (CSP_REPORT_ONLY) {
+    return {
+      ...SECURITY_HEADERS,
+      'Content-Security-Policy': DEFAULT_CSP,
+      'Content-Security-Policy-Report-Only': STRICT_CSP,
+    }
+  }
+  return {
+    ...SECURITY_HEADERS,
+    'Content-Security-Policy': CSP_STRICT_MODE ? STRICT_CSP : DEFAULT_CSP,
+  }
 }
 
 const logEvent = (level, message, context = {}) => {
@@ -246,7 +267,7 @@ const respond = (res, statusCode, payload, headers = {}) => {
   const body = typeof payload === 'string' ? payload : JSON.stringify(payload)
   res.writeHead(statusCode, {
     'Content-Type': typeof payload === 'string' ? 'text/plain' : 'application/json',
-    ...SECURITY_HEADERS,
+    ...getSecurityHeaders(),
     ...headers,
   })
   res.end(body)
@@ -255,7 +276,7 @@ const respond = (res, statusCode, payload, headers = {}) => {
 const sendFile = (filePath, res) => {
   const ext = path.extname(filePath).toLowerCase()
   const contentType = MIME_TYPES[ext] || 'application/octet-stream'
-  res.writeHead(200, { 'Content-Type': contentType, ...SECURITY_HEADERS })
+  res.writeHead(200, { 'Content-Type': contentType, ...getSecurityHeaders() })
   const stream = createReadStream(filePath)
   stream.on('error', () => {
     respond(res, 500, { error: 'Errore durante la lettura del file.' })
@@ -978,7 +999,8 @@ const checkApiRateLimit = async (req, res, userId = '') => {
 }
 
 const checkLoginRateLimit = async (req, res, username = '') => {
-  const key = `${req.socket?.remoteAddress || 'unknown'}:${username || 'anonymous'}`
+  const ip = getClientIp(req)
+  const key = `${ip}:${username || 'anonymous'}`
   const allowed = await checkSharedRateLimit({ scope: 'login', key, windowMs: LOGIN_RATE_LIMIT_WINDOW_MS, max: LOGIN_RATE_LIMIT_MAX })
   if (!allowed) {
     respond(res, 429, { error: 'Troppi tentativi di login. Riprova tra qualche minuto.' })
@@ -2125,7 +2147,7 @@ const handleApiRequest = async (req, res, url) => {
       const host = sanitizeString(req.headers.host)
       const redirectUrl = host ? `https://${host}${url.pathname}${url.search}` : ''
       if (redirectUrl) {
-        res.writeHead(301, { Location: redirectUrl, ...SECURITY_HEADERS })
+        res.writeHead(301, { Location: redirectUrl, ...getSecurityHeaders() })
         res.end()
         return
       }
@@ -3334,7 +3356,7 @@ const handleApiRequest = async (req, res, url) => {
     res.writeHead(200, {
       'Content-Type': 'application/json',
       'Content-Disposition': `attachment; filename="${filename}"`,
-      ...SECURITY_HEADERS,
+      ...getSecurityHeaders(),
     })
     res.end(JSON.stringify(payload, null, 2))
     return
@@ -3355,7 +3377,7 @@ const handleApiRequest = async (req, res, url) => {
     res.writeHead(200, {
       'Content-Type': 'text/csv; charset=utf-8',
       'Content-Disposition': 'attachment; filename="export-tickets-interventi.csv"',
-      ...SECURITY_HEADERS,
+      ...getSecurityHeaders(),
     })
 
     res.end(merged)
@@ -3567,6 +3589,14 @@ const scheduleAutomaticBackup = () => {
 }
 
 const runtimePort = process.env.PORT || 3000
+
+process.on('uncaughtException', (err) => {
+  console.error('CRASH', err)
+})
+
+process.on('unhandledRejection', (err) => {
+  console.error('PROMISE ERROR', err)
+})
 
 const server = createServer(async (req, res) => {
   try {
