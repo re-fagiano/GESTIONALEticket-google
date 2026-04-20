@@ -26,9 +26,7 @@ const {
   LOGIN_RATE_LIMIT_WINDOW_MS,
   LOGIN_RATE_LIMIT_MAX,
   CSP_STRICT_MODE,
-  CSP_REPORT_ONLY,
   COOKIE_STRICT_MODE,
-  USE_STRONG_SANITIZER,
   ENABLE_DESTRUCTIVE_OPERATIONS,
   REDIS_URL,
   ENFORCE_HTTPS,
@@ -79,8 +77,7 @@ const shouldUsePrisma = () => prismaEnabled
 
 let bcryptLib = null
 let jwtLib = null
-const require = createRequire(import.meta.url)
-let escapeHtmlLib = null
+let strongSanitizerLib = null
 try {
   const loaded = await import('bcryptjs')
   bcryptLib = loaded.default || loaded
@@ -94,15 +91,10 @@ try {
   jwtLib = null
 }
 try {
-  const loaded = require('escape-html')
-  escapeHtmlLib = loaded.default || loaded
+  const loaded = await import('isomorphic-dompurify')
+  strongSanitizerLib = loaded.default || loaded
 } catch {
-  try {
-    const loaded = require('lodash.escape')
-    escapeHtmlLib = loaded.default || loaded
-  } catch {
-    escapeHtmlLib = null
-  }
+  strongSanitizerLib = null
 }
 
 const MIME_TYPES = {
@@ -132,6 +124,7 @@ const SECURITY_HEADERS = {
   'Permissions-Policy': 'geolocation=(), camera=(), microphone=()',
   'Cross-Origin-Opener-Policy': 'same-origin',
   'Cross-Origin-Resource-Policy': 'same-origin',
+  'Content-Security-Policy': CSP_STRICT_MODE ? STRICT_CSP : DEFAULT_CSP,
 }
 
 if (isProduction) {
@@ -139,7 +132,7 @@ if (isProduction) {
 }
 
 const getSecurityHeaders = () => {
-  if (CSP_REPORT_ONLY_SAFE) {
+  if (CSP_REPORT_ONLY) {
     return {
       ...SECURITY_HEADERS,
       'Content-Security-Policy': DEFAULT_CSP,
@@ -148,7 +141,7 @@ const getSecurityHeaders = () => {
   }
   return {
     ...SECURITY_HEADERS,
-    'Content-Security-Policy': CSP_STRICT_MODE_SAFE ? STRICT_CSP : DEFAULT_CSP,
+    'Content-Security-Policy': CSP_STRICT_MODE ? STRICT_CSP : DEFAULT_CSP,
   }
 }
 
@@ -157,7 +150,7 @@ const logEvent = (level, message, context = {}) => {
     if (Array.isArray(value)) return value.map(maskSensitiveData)
     if (!value || typeof value !== 'object') return value
     return Object.entries(value).reduce((acc, [key, item]) => {
-      if (key.match(/password|token|email/i)) {
+      if (key.toLowerCase().includes('password') || key.toLowerCase().includes('token')) {
         acc[key] = '***'
       } else {
         acc[key] = maskSensitiveData(item)
@@ -254,7 +247,7 @@ const mapPrismaIntervention = (row) => {
     assignedToId: row.assignedToId || '',
     openedAt: row.openedAt?.toISOString?.() || row.openedAt,
     closedAt: row.closedAt?.toISOString?.() || row.closedAt,
-    description: sanitizeOutput(row.description || ''),
+    description: sanitizeHtml(row.description || ''),
     additionalData: row.additionalData || {},
     logs: Array.isArray(row.logs) ? row.logs.map((log) => ({
       id: log.id,
@@ -344,27 +337,6 @@ const sanitizeHtml = (input) => {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
 }
-
-const escapeHtmlFallback = (input) => {
-  if (typeof input !== 'string') return ''
-  return input
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;')
-}
-
-const escapeHtmlSafe = (input) => {
-  if (typeof input !== 'string') return ''
-  try {
-    return escapeHtmlLib ? escapeHtmlLib(input) : escapeHtmlFallback(input)
-  } catch {
-    return escapeHtmlFallback(input)
-  }
-}
-
-const sanitizeOutput = (value) => (USE_STRONG_SANITIZER_SAFE ? escapeHtmlSafe(value) : sanitizeHtml(value))
 
 const sanitizeNumber = (value, fallback = 0) => {
   const parsed = Number(value)
@@ -570,8 +542,8 @@ const mapCustomerRow = (row) => (row ? ({
 
 const mapTicketRow = (row) => (row ? ({
   id: row.id,
-  subject: sanitizeOutput(row.subject),
-  description: sanitizeOutput(row.description),
+  subject: sanitizeHtml(row.subject),
+  description: sanitizeHtml(row.description),
   customerId: row.customer_id,
   status: row.status,
   date: row.date,
@@ -643,7 +615,7 @@ const mapInterventionRow = (row) => {
     updatedByUserId: row.updated_by_user_id || '',
     openedAt: row.opened_at,
     closedAt: row.closed_at,
-    description: sanitizeOutput(row.description),
+    description: sanitizeHtml(row.description),
     parentInterventionId: row.parent_intervention_id,
     additionalData: (() => {
       try {
@@ -693,7 +665,7 @@ const mapSparePartOrderRow = (row) => (row ? ({
   })(),
   status: row.status,
   supplier: row.supplier,
-  notes: sanitizeOutput(row.notes),
+  notes: sanitizeHtml(row.notes),
   createdAt: row.created_at,
   updatedAt: row.updated_at,
   version: row.version,
@@ -713,7 +685,7 @@ const mapQuoteRow = (row) => (row ? ({
   discount: row.discount,
   validUntil: row.valid_until,
   status: row.status,
-  notes: sanitizeOutput(row.notes),
+  notes: sanitizeHtml(row.notes),
   createdAt: row.created_at,
   updatedAt: row.updated_at,
   version: row.version,
@@ -895,14 +867,14 @@ const getTokenFromRequest = (req) => {
 const sendUnauthorized = (res) => respond(res, 401, { error: 'Access token mancante o non valido.' })
 
 const makeCookieAttrs = (maxAge = 0) => {
-  const sameSitePolicy = COOKIE_STRICT_MODE_SAFE ? 'Strict' : 'Lax'
+  const sameSitePolicy = COOKIE_STRICT_MODE ? 'Strict' : 'Lax'
   const attrs = ['Path=/', 'HttpOnly', `SameSite=${sameSitePolicy}`, `Max-Age=${maxAge}`]
   if (isProduction) attrs.push('Secure')
   return attrs.join('; ')
 }
 
 const clearAuthCookies = (res) => {
-  const sameSitePolicy = COOKIE_STRICT_MODE_SAFE ? 'Strict' : 'Lax'
+  const sameSitePolicy = COOKIE_STRICT_MODE ? 'Strict' : 'Lax'
   const csrfAttrs = ['Path=/', `SameSite=${sameSitePolicy}`, 'Max-Age=0']
   if (isProduction) csrfAttrs.push('Secure')
   res.setHeader('Set-Cookie', [
@@ -913,7 +885,7 @@ const clearAuthCookies = (res) => {
 }
 
 const setAuthCookies = (res, accessToken, refreshToken, csrfToken) => {
-  const sameSitePolicy = COOKIE_STRICT_MODE_SAFE ? 'Strict' : 'Lax'
+  const sameSitePolicy = COOKIE_STRICT_MODE ? 'Strict' : 'Lax'
   const csrfAttrs = ['Path=/', `SameSite=${sameSitePolicy}`, `Max-Age=${REFRESH_TOKEN_TTL_SECONDS}`]
   if (isProduction) csrfAttrs.push('Secure')
   const accessCookie = `access_token=${encodeURIComponent(accessToken)}; ${makeCookieAttrs(ACCESS_TOKEN_TTL_SECONDS)}`
@@ -2436,7 +2408,7 @@ const handleApiRequest = async (req, res, url) => {
       ])
       return respond(res, 200, {
         customers,
-        tickets: tickets.map((ticket) => ({ ...ticket, subject: sanitizeOutput(ticket.subject), description: sanitizeOutput(ticket.description) })),
+        tickets: tickets.map((ticket) => ({ ...ticket, subject: sanitizeHtml(ticket.subject), description: sanitizeHtml(ticket.description) })),
         interventions: interventions.map(mapPrismaIntervention),
         sparePartsOrders: [],
         quotes: [],
