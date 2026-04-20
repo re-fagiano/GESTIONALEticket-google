@@ -25,9 +25,7 @@ const {
   LOGIN_RATE_LIMIT_WINDOW_MS,
   LOGIN_RATE_LIMIT_MAX,
   CSP_STRICT_MODE,
-  CSP_REPORT_ONLY,
   COOKIE_STRICT_MODE,
-  USE_STRONG_SANITIZER,
   ENABLE_DESTRUCTIVE_OPERATIONS,
   REDIS_URL,
   ENFORCE_HTTPS,
@@ -121,6 +119,7 @@ const SECURITY_HEADERS = {
   'Permissions-Policy': 'geolocation=(), camera=(), microphone=()',
   'Cross-Origin-Opener-Policy': 'same-origin',
   'Cross-Origin-Resource-Policy': 'same-origin',
+  'Content-Security-Policy': CSP_STRICT_MODE ? STRICT_CSP : DEFAULT_CSP,
 }
 
 if (isProduction) {
@@ -146,7 +145,7 @@ const logEvent = (level, message, context = {}) => {
     if (Array.isArray(value)) return value.map(maskSensitiveData)
     if (!value || typeof value !== 'object') return value
     return Object.entries(value).reduce((acc, [key, item]) => {
-      if (key.match(/password|token|email/i)) {
+      if (key.toLowerCase().includes('password') || key.toLowerCase().includes('token')) {
         acc[key] = '***'
       } else {
         acc[key] = maskSensitiveData(item)
@@ -243,7 +242,7 @@ const mapPrismaIntervention = (row) => {
     assignedToId: row.assignedToId || '',
     openedAt: row.openedAt?.toISOString?.() || row.openedAt,
     closedAt: row.closedAt?.toISOString?.() || row.closedAt,
-    description: sanitizeOutput(row.description || ''),
+    description: sanitizeHtml(row.description || ''),
     additionalData: row.additionalData || {},
     logs: Array.isArray(row.logs) ? row.logs.map((log) => ({
       id: log.id,
@@ -333,18 +332,6 @@ const sanitizeHtml = (input) => {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
 }
-
-const sanitizeHtmlSafe = (input) => {
-  if (typeof input !== 'string') return ''
-  try {
-    if (!strongSanitizerLib?.sanitize) return input
-    return strongSanitizerLib.sanitize(input)
-  } catch {
-    return input
-  }
-}
-
-const sanitizeOutput = (value) => (USE_STRONG_SANITIZER ? sanitizeHtmlSafe(value) : sanitizeHtml(value))
 
 const sanitizeNumber = (value, fallback = 0) => {
   const parsed = Number(value)
@@ -550,8 +537,8 @@ const mapCustomerRow = (row) => (row ? ({
 
 const mapTicketRow = (row) => (row ? ({
   id: row.id,
-  subject: sanitizeOutput(row.subject),
-  description: sanitizeOutput(row.description),
+  subject: sanitizeHtml(row.subject),
+  description: sanitizeHtml(row.description),
   customerId: row.customer_id,
   status: row.status,
   date: row.date,
@@ -623,7 +610,7 @@ const mapInterventionRow = (row) => {
     updatedByUserId: row.updated_by_user_id || '',
     openedAt: row.opened_at,
     closedAt: row.closed_at,
-    description: sanitizeOutput(row.description),
+    description: sanitizeHtml(row.description),
     parentInterventionId: row.parent_intervention_id,
     additionalData: (() => {
       try {
@@ -673,7 +660,7 @@ const mapSparePartOrderRow = (row) => (row ? ({
   })(),
   status: row.status,
   supplier: row.supplier,
-  notes: sanitizeOutput(row.notes),
+  notes: sanitizeHtml(row.notes),
   createdAt: row.created_at,
   updatedAt: row.updated_at,
   version: row.version,
@@ -693,7 +680,7 @@ const mapQuoteRow = (row) => (row ? ({
   discount: row.discount,
   validUntil: row.valid_until,
   status: row.status,
-  notes: sanitizeOutput(row.notes),
+  notes: sanitizeHtml(row.notes),
   createdAt: row.created_at,
   updatedAt: row.updated_at,
   version: row.version,
@@ -2416,7 +2403,7 @@ const handleApiRequest = async (req, res, url) => {
       ])
       return respond(res, 200, {
         customers,
-        tickets: tickets.map((ticket) => ({ ...ticket, subject: sanitizeOutput(ticket.subject), description: sanitizeOutput(ticket.description) })),
+        tickets: tickets.map((ticket) => ({ ...ticket, subject: sanitizeHtml(ticket.subject), description: sanitizeHtml(ticket.description) })),
         interventions: interventions.map(mapPrismaIntervention),
         sparePartsOrders: [],
         quotes: [],
