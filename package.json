@@ -24,7 +24,7 @@
   },
   "dependencies": {
     "@prisma/client": "5",
-    "bcryptjs": "^2.4.3",
+    "bcryptjs": "^3.0.3",
     "express": "^4.19.2",
     "jsonwebtoken": "^9.0.2",
     "lucide-react": "^0.556.0",
