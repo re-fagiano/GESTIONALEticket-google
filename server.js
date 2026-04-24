@@ -3610,14 +3610,6 @@ const scheduleAutomaticBackup = () => {
 
 const runtimePort = process.env.PORT || 3000
 
-process.on('uncaughtException', (err) => {
-  console.error('CRASH', err)
-})
-
-process.on('unhandledRejection', (err) => {
-  console.error('PROMISE ERROR', err)
-})
-
 const server = createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://localhost:${runtimePort}`)
@@ -3671,3 +3663,6 @@ startup().catch((error) => {
     scheduleAutomaticBackup()
   })
 })
+
+process.on('uncaughtException', (err) => console.error('CRASH', err))
+process.on('unhandledRejection', (err) => console.error('PROMISE ERROR', err))
