@@ -25,8 +25,6 @@ const {
   API_RATE_LIMIT_MAX,
   LOGIN_RATE_LIMIT_WINDOW_MS,
   LOGIN_RATE_LIMIT_MAX,
-  CSP_STRICT_MODE,
-  COOKIE_STRICT_MODE,
   ENABLE_DESTRUCTIVE_OPERATIONS,
   REDIS_URL,
   ENFORCE_HTTPS,
@@ -49,15 +47,7 @@ const DIST_DIR = path.join(__dirname, 'dist')
 const DIST_INDEX = path.join(DIST_DIR, 'index.html')
 const isProduction = NODE_ENV === 'production'
 
-const getFlag = (name, defaultValue = false) => {
-  try {
-    const value = process?.env?.[name]
-    if (value === undefined) return defaultValue
-    return String(value).toLowerCase() === 'true'
-  } catch {
-    return defaultValue
-  }
-}
+const getFlag = (name, defaultValue = false) => process.env[name] === 'true' ? true : defaultValue
 
 const CSP_REPORT_ONLY_SAFE = getFlag('CSP_REPORT_ONLY')
 const CSP_STRICT_MODE_SAFE = getFlag('CSP_STRICT_MODE')
@@ -135,7 +125,7 @@ let SECURITY_HEADERS = {
   'Permissions-Policy': 'geolocation=(), camera=(), microphone=()',
   'Cross-Origin-Opener-Policy': 'same-origin',
   'Cross-Origin-Resource-Policy': 'same-origin',
-  'Content-Security-Policy': CSP_STRICT_MODE ? STRICT_CSP : DEFAULT_CSP,
+  'Content-Security-Policy': CSP_STRICT_MODE_SAFE ? STRICT_CSP : DEFAULT_CSP,
 }
 
 if (isProduction) {
@@ -152,7 +142,7 @@ const getSecurityHeaders = () => {
   }
   return {
     ...SECURITY_HEADERS,
-    'Content-Security-Policy': CSP_STRICT_MODE ? STRICT_CSP : DEFAULT_CSP,
+    'Content-Security-Policy': CSP_STRICT_MODE_SAFE ? STRICT_CSP : DEFAULT_CSP,
   }
 }
 
@@ -161,7 +151,7 @@ const logEvent = (level, message, context = {}) => {
     if (Array.isArray(value)) return value.map(maskSensitiveData)
     if (!value || typeof value !== 'object') return value
     return Object.entries(value).reduce((acc, [key, item]) => {
-      if (key.toLowerCase().includes('password') || key.toLowerCase().includes('token')) {
+      if (key.match(/password|token|email/i)) {
         acc[key] = '***'
       } else {
         acc[key] = maskSensitiveData(item)
@@ -258,7 +248,7 @@ const mapPrismaIntervention = (row) => {
     assignedToId: row.assignedToId || '',
     openedAt: row.openedAt?.toISOString?.() || row.openedAt,
     closedAt: row.closedAt?.toISOString?.() || row.closedAt,
-    description: sanitizeHtml(row.description || ''),
+    description: sanitizeOutput(row.description || ''),
     additionalData: row.additionalData || {},
     logs: Array.isArray(row.logs) ? row.logs.map((log) => ({
       id: log.id,
@@ -348,6 +338,20 @@ const sanitizeHtml = (input) => {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
 }
+
+const escapeHtmlSafe = (input) => {
+  if (typeof input !== 'string') return ''
+  return input
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+const sanitizeOutput = (value) => (
+  USE_STRONG_SANITIZER_SAFE ? escapeHtmlSafe(value) : sanitizeHtml(value)
+)
 
 const sanitizeNumber = (value, fallback = 0) => {
   const parsed = Number(value)
@@ -553,8 +557,8 @@ const mapCustomerRow = (row) => (row ? ({
 
 const mapTicketRow = (row) => (row ? ({
   id: row.id,
-  subject: sanitizeHtml(row.subject),
-  description: sanitizeHtml(row.description),
+  subject: sanitizeOutput(row.subject),
+  description: sanitizeOutput(row.description),
   customerId: row.customer_id,
   status: row.status,
   date: row.date,
@@ -626,7 +630,7 @@ const mapInterventionRow = (row) => {
     updatedByUserId: row.updated_by_user_id || '',
     openedAt: row.opened_at,
     closedAt: row.closed_at,
-    description: sanitizeHtml(row.description),
+    description: sanitizeOutput(row.description),
     parentInterventionId: row.parent_intervention_id,
     additionalData: (() => {
       try {
@@ -676,7 +680,7 @@ const mapSparePartOrderRow = (row) => (row ? ({
   })(),
   status: row.status,
   supplier: row.supplier,
-  notes: sanitizeHtml(row.notes),
+  notes: sanitizeOutput(row.notes),
   createdAt: row.created_at,
   updatedAt: row.updated_at,
   version: row.version,
@@ -696,7 +700,7 @@ const mapQuoteRow = (row) => (row ? ({
   discount: row.discount,
   validUntil: row.valid_until,
   status: row.status,
-  notes: sanitizeHtml(row.notes),
+  notes: sanitizeOutput(row.notes),
   createdAt: row.created_at,
   updatedAt: row.updated_at,
   version: row.version,
@@ -878,14 +882,14 @@ const getTokenFromRequest = (req) => {
 const sendUnauthorized = (res) => respond(res, 401, { error: 'Access token mancante o non valido.' })
 
 const makeCookieAttrs = (maxAge = 0) => {
-  const sameSitePolicy = COOKIE_STRICT_MODE ? 'Strict' : 'Lax'
+  const sameSitePolicy = COOKIE_STRICT_MODE_SAFE ? 'Strict' : 'Lax'
   const attrs = ['Path=/', 'HttpOnly', `SameSite=${sameSitePolicy}`, `Max-Age=${maxAge}`]
   if (isProduction) attrs.push('Secure')
   return attrs.join('; ')
 }
 
 const clearAuthCookies = (res) => {
-  const sameSitePolicy = COOKIE_STRICT_MODE ? 'Strict' : 'Lax'
+  const sameSitePolicy = COOKIE_STRICT_MODE_SAFE ? 'Strict' : 'Lax'
   const csrfAttrs = ['Path=/', `SameSite=${sameSitePolicy}`, 'Max-Age=0']
   if (isProduction) csrfAttrs.push('Secure')
   res.setHeader('Set-Cookie', [
@@ -896,7 +900,7 @@ const clearAuthCookies = (res) => {
 }
 
 const setAuthCookies = (res, accessToken, refreshToken, csrfToken) => {
-  const sameSitePolicy = COOKIE_STRICT_MODE ? 'Strict' : 'Lax'
+  const sameSitePolicy = COOKIE_STRICT_MODE_SAFE ? 'Strict' : 'Lax'
   const csrfAttrs = ['Path=/', `SameSite=${sameSitePolicy}`, `Max-Age=${REFRESH_TOKEN_TTL_SECONDS}`]
   if (isProduction) csrfAttrs.push('Secure')
   const accessCookie = `access_token=${encodeURIComponent(accessToken)}; ${makeCookieAttrs(ACCESS_TOKEN_TTL_SECONDS)}`
@@ -2419,7 +2423,7 @@ const handleApiRequest = async (req, res, url) => {
       ])
       return respond(res, 200, {
         customers,
-        tickets: tickets.map((ticket) => ({ ...ticket, subject: sanitizeHtml(ticket.subject), description: sanitizeHtml(ticket.description) })),
+        tickets: tickets.map((ticket) => ({ ...ticket, subject: sanitizeOutput(ticket.subject), description: sanitizeOutput(ticket.description) })),
         interventions: interventions.map(mapPrismaIntervention),
         sparePartsOrders: [],
         quotes: [],
@@ -3606,14 +3610,6 @@ const scheduleAutomaticBackup = () => {
 
 const runtimePort = process.env.PORT || 3000
 
-process.on('uncaughtException', (err) => {
-  console.error('CRASH', err)
-})
-
-process.on('unhandledRejection', (err) => {
-  console.error('PROMISE ERROR', err)
-})
-
 const server = createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://localhost:${runtimePort}`)
@@ -3667,3 +3663,6 @@ startup().catch((error) => {
     scheduleAutomaticBackup()
   })
 })
+
+process.on('uncaughtException', (err) => console.error('CRASH', err))
+process.on('unhandledRejection', (err) => console.error('PROMISE ERROR', err))
