@@ -49,10 +49,10 @@ const isProduction = NODE_ENV === 'production'
 
 const getFlag = (name, defaultValue = false) => process.env[name] === 'true' ? true : defaultValue
 
-const CSP_REPORT_ONLY_SAFE = getFlag('CSP_REPORT_ONLY', CSP_REPORT_ONLY)
-const CSP_STRICT_MODE_SAFE = getFlag('CSP_STRICT_MODE', CSP_STRICT_MODE)
-const COOKIE_STRICT_MODE_SAFE = getFlag('COOKIE_STRICT_MODE', COOKIE_STRICT_MODE)
-const USE_STRONG_SANITIZER_SAFE = getFlag('USE_STRONG_SANITIZER', USE_STRONG_SANITIZER)
+const CSP_REPORT_ONLY_SAFE = getFlag('CSP_REPORT_ONLY', false)
+const CSP_STRICT_MODE_SAFE = getFlag('CSP_STRICT_MODE', false)
+const COOKIE_STRICT_MODE_SAFE = getFlag('COOKIE_STRICT_MODE', false)
+const USE_STRONG_SANITIZER_SAFE = getFlag('USE_STRONG_SANITIZER', false)
 
 let prismaEnabled = isDatabaseConfigured
 let sharedRateLimitStoreReady = false
