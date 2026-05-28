@@ -25,7 +25,7 @@
     "security:ci": "pnpm security:static && pnpm security:audit"
   },
   "dependencies": {
-    "@prisma/client": "5",
+    "@prisma/client": "7",
     "bcryptjs": "^2.4.3",
     "express": "^4.19.2",
     "jsonwebtoken": "^9.0.2",
