@@ -22,16 +22,16 @@ importers:
         version: 9.0.3
       lucide-react:
         specifier: ^0.556.0
-        version: 0.556.0(react@19.2.4)
+        version: 0.556.0(react@19.2.5)
       prisma:
         specifier: '5'
         version: 5.22.0
       react:
-        specifier: ^19.2.0
-        version: 19.2.4
+        specifier: ^19.2.5
+        version: 19.2.5
       react-dom:
         specifier: ^19.2.0
-        version: 19.2.4(react@19.2.4)
+        version: 19.2.4(react@19.2.5)
     devDependencies:
       '@eslint/js':
         specifier: ^9.39.1
@@ -1355,8 +1355,8 @@ packages:
     resolution: {integrity: sha512-QgT5//D3jfjJb6Gsjxv0Slpj23ip+HtOpnNgnb2S5zU3CB26G/IDPGoy4RJB42wzFE46DRsstbW6tKHoKbhAxw==}
     engines: {node: '>=0.10.0'}
 
-  react@19.2.4:
-    resolution: {integrity: sha512-9nfp2hYpCwOjAN+8TZFGhtWEwgvWHXqESH8qT89AT/lWklpLON22Lc8pEtnpsZz7VmawabSU0gCjnj8aC0euHQ==}
+  react@19.2.5:
+    resolution: {integrity: sha512-llUJLzz1zTUBrskt2pwZgLq59AemifIftw4aB7JxOqf1HY2FDaGDxgwpAPVzHU1kdWabH7FauP4i1oEeer2WCA==}
     engines: {node: '>=0.10.0'}
 
   read-cache@1.0.0:
@@ -2606,9 +2606,9 @@ snapshots:
     dependencies:
       yallist: 3.1.1
 
-  lucide-react@0.556.0(react@19.2.4):
+  lucide-react@0.556.0(react@19.2.5):
     dependencies:
-      react: 19.2.4
+      react: 19.2.5
 
   math-intrinsics@1.1.0: {}
 
@@ -2775,14 +2775,14 @@ snapshots:
       iconv-lite: 0.4.24
       unpipe: 1.0.0
 
-  react-dom@19.2.4(react@19.2.4):
+  react-dom@19.2.4(react@19.2.5):
     dependencies:
-      react: 19.2.4
+      react: 19.2.5
       scheduler: 0.27.0
 
   react-refresh@0.18.0: {}
 
-  react@19.2.4: {}
+  react@19.2.5: {}
 
   read-cache@1.0.0:
     dependencies:
