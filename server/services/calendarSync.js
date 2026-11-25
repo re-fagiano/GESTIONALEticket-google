@@ -28,6 +28,9 @@ export const CALENDAR_DEFAULTS = {
   colorOperators: {},
   // Data di attivazione: le chiamate create PRIMA non vengono inviate (probabilmente sono già scritte a mano su Google).
   pushSince: null,
+  // Solo lettura: il gestionale legge Google Calendar ma non scrive/sposta/cancella mai nulla.
+  // Predefinito alla prima attivazione: si toglie a mano dopo aver controllato che tutto vada bene.
+  readOnly: true,
   defaultMinutes: 60,
   timeZone: 'Europe/Rome',
 }
@@ -62,6 +65,43 @@ export const extractPhones = (text = '') => {
   return [...new Set(found.map((raw) => raw.replace(/\D/g, '').replace(/^39(?=[03]\d{7,})/, '')).filter((digits) => digits.length >= 8 && digits.length <= 11))]
 }
 
+// ——— Formato iCalendar (RFC 5545) per il backup ———
+const icsText = (value = '') => String(value).replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n')
+const icsDateTime = (iso) => new Date(iso).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '')
+const icsDate = (date) => String(date).replace(/-/g, '')
+const icsFold = (line) => {
+  // Righe al massimo di 75 byte; le continuazioni iniziano con uno spazio.
+  const out = []
+  let current = ''
+  for (const char of line) {
+    if (Buffer.byteLength(current + char) > (out.length ? 74 : 75)) { out.push(current); current = char } else current += char
+  }
+  out.push(current)
+  return out.join('\r\n ')
+}
+const icsTime = (name, time) => (time?.date ? `${name};VALUE=DATE:${icsDate(time.date)}` : `${name}:${icsDateTime(time?.dateTime)}`)
+
+export const toIcs = (events, calendarId = '') => {
+  const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//FixLab//Backup Google Calendar//IT', 'CALSCALE:GREGORIAN', `X-WR-CALNAME:${icsText(`Backup ${calendarId}`)}`]
+  for (const event of events) {
+    if (!event.start || (!event.start.dateTime && !event.start.date)) continue
+    lines.push('BEGIN:VEVENT')
+    lines.push(`UID:${icsText(event.iCalUID || `${event.id}@google.com`)}`)
+    lines.push(`DTSTAMP:${icsDateTime(event.updated || new Date().toISOString())}`)
+    lines.push(icsTime('DTSTART', event.start))
+    if (event.end) lines.push(icsTime('DTEND', event.end))
+    if (event.originalStartTime) lines.push(icsTime('RECURRENCE-ID', event.originalStartTime))
+    for (const rule of event.recurrence || []) lines.push(rule)
+    lines.push(`SUMMARY:${icsText(event.summary || '')}`)
+    if (event.description) lines.push(`DESCRIPTION:${icsText(event.description)}`)
+    if (event.location) lines.push(`LOCATION:${icsText(event.location)}`)
+    if (event.colorId) lines.push(`X-GOOGLE-COLOR-ID:${icsText(event.colorId)}`)
+    lines.push('END:VEVENT')
+  }
+  lines.push('END:VCALENDAR')
+  return `${lines.map(icsFold).join('\r\n')}\r\n`
+}
+
 const hashOf = (value) => crypto.createHash('sha1').update(JSON.stringify(value)).digest('hex')
 const isGone = (error) => error instanceof GoogleApiError && [404, 410].includes(error.status)
 
@@ -75,25 +115,33 @@ export const createCalendarSync = ({ db, google, settings, config, logger }) => 
 
   const getLink = (entityType, entityId) => db.one('SELECT * FROM "google_event_links" WHERE "entityType" = $1 AND "entityId" = $2', [entityType, entityId])
   const getLinkByEvent = (calendarId, googleEventId) => db.one('SELECT * FROM "google_event_links" WHERE "calendarId" = $1 AND "googleEventId" = $2', [calendarId, googleEventId])
-  const saveLink = async ({ entityType, entityId, calendarId, event, pushedHash }) => {
+  // origin: 'google' = evento scritto a mano su Google, 'app' = creato dal gestionale, null = invariato.
+  const saveLink = async ({ entityType, entityId, calendarId, event, pushedHash, origin = null }) => {
     await db.query(
-      `INSERT INTO "google_event_links" ("id", "entityType", "entityId", "calendarId", "googleEventId", "etag", "htmlLink", "googleUpdatedAt", "pushedHash", "lastSyncedAt", "createdAt")
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
+      `INSERT INTO "google_event_links" ("id", "entityType", "entityId", "calendarId", "googleEventId", "etag", "htmlLink", "googleUpdatedAt", "pushedHash", "origin", "lastSyncedAt", "createdAt")
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
        ON CONFLICT ("entityType", "entityId") DO UPDATE SET "calendarId" = EXCLUDED."calendarId", "googleEventId" = EXCLUDED."googleEventId",
          "etag" = EXCLUDED."etag", "htmlLink" = EXCLUDED."htmlLink", "googleUpdatedAt" = EXCLUDED."googleUpdatedAt",
-         "pushedHash" = EXCLUDED."pushedHash", "lastSyncedAt" = NOW()`,
-      [newId(), entityType, entityId, calendarId, event.id, event.etag || null, event.htmlLink || null, event.updated ? new Date(event.updated) : null, pushedHash],
+         "pushedHash" = EXCLUDED."pushedHash", "origin" = COALESCE("google_event_links"."origin", EXCLUDED."origin"), "lastSyncedAt" = NOW()`,
+      [newId(), entityType, entityId, calendarId, event.id, event.etag || null, event.htmlLink || null, event.updated ? new Date(event.updated) : null, pushedHash, origin],
     )
   }
   const removeLink = (id) => db.query('DELETE FROM "google_event_links" WHERE "id" = $1', [id])
 
+  // REGOLA DI SICUREZZA: un evento scritto a mano su Google non viene MAI cancellato dal gestionale.
+  // Se la chiamata collegata viene annullata/eliminata, togliamo solo il collegamento.
   const deleteRemote = async (link) => {
+    if (link.origin === 'google') {
+      await removeLink(link.id)
+      return 'unlinked'
+    }
     try {
       await gcal({ method: 'DELETE', url: eventsUrl(link.calendarId, `/${encodeURIComponent(link.googleEventId)}`) })
     } catch (error) {
       if (!isGone(error)) throw error
     }
     await removeLink(link.id)
+    return 'deleted'
   }
 
   // ——— App → Google ———
@@ -163,6 +211,8 @@ export const createCalendarSync = ({ db, google, settings, config, logger }) => 
   const upsertRemote = async ({ entityType, entityId, body, link, cfg }) => {
     const hash = hashOf(body)
     if (link?.pushedHash === DELETED_IN_GOOGLE) return 'skipped_deleted_in_google'
+    // Gli eventi scritti a mano su Google restano nel loro calendario: non li spostiamo né li ricreiamo altrove.
+    if (link?.origin === 'google' && link.calendarId !== cfg.calendarId) return 'kept'
     if (link && link.calendarId !== cfg.calendarId) { await deleteRemote(link); link = null }
     if (link && link.pushedHash === hash) return 'unchanged'
     let event = null
@@ -175,7 +225,7 @@ export const createCalendarSync = ({ db, google, settings, config, logger }) => 
       }
     }
     if (!event) event = await gcal({ method: 'POST', url: eventsUrl(cfg.calendarId), body })
-    await saveLink({ entityType, entityId, calendarId: cfg.calendarId, event, pushedHash: hash })
+    await saveLink({ entityType, entityId, calendarId: cfg.calendarId, event, pushedHash: hash, origin: link ? null : 'app' })
     return link ? 'updated' : 'created'
   }
 
@@ -192,9 +242,11 @@ export const createCalendarSync = ({ db, google, settings, config, logger }) => 
     const isNewEnough = !cfg.pushSince || new Date(row?.createdAt) >= new Date(cfg.pushSince)
     const wanted = row && cfg.pushTypes.includes(row.type) && row.status !== 'annullato' && (link || isNewEnough)
     if (!wanted) {
-      if (link && link.pushedHash !== DELETED_IN_GOOGLE) { await deleteRemote(link); return 'deleted' }
+      if (link && link.pushedHash !== DELETED_IN_GOOGLE) return deleteRemote(link)
       return 'ignored'
     }
+    // Una chiamata nata su Google senza più collegamento non va ricreata (avrebbe solo l'orario, senza titolo).
+    if (row.additionalData?.source === 'google' && !link) return 'ignored'
     return upsertRemote({ entityType: 'intervention', entityId: id, body: interventionEvent(row, cfg), link, cfg })
   }
 
@@ -202,7 +254,7 @@ export const createCalendarSync = ({ db, google, settings, config, logger }) => 
     const item = await db.one('SELECT * FROM "calendar_items" WHERE "id" = $1', [id])
     const link = await getLink('calendar_item', id)
     if (!item) {
-      if (link) { await deleteRemote(link); return 'deleted' }
+      if (link) return deleteRemote(link)
       return 'ignored'
     }
     if (item.interventionId) return 'ignored' // l'appuntamento viaggia già con l'intervento
@@ -282,7 +334,7 @@ export const createCalendarSync = ({ db, google, settings, config, logger }) => 
     })
     report.importedCalls = (report.importedCalls || 0) + 1
     const fresh = await loadIntervention(id)
-    await saveLink({ entityType: 'intervention', entityId: id, calendarId: cfg.calendarId, event, pushedHash: hashOf(interventionEvent(fresh, cfg)) })
+    await saveLink({ entityType: 'intervention', entityId: id, calendarId: cfg.calendarId, event, pushedHash: hashOf(interventionEvent(fresh, cfg)), origin: 'google' })
   }
 
   const applyIntervention = async (event, link, cfg, report) => {
@@ -349,7 +401,7 @@ export const createCalendarSync = ({ db, google, settings, config, logger }) => 
       report.importedEvents += 1
     }
     const item = await db.one('SELECT * FROM "calendar_items" WHERE "id" = $1', [itemId])
-    await saveLink({ entityType: 'calendar_item', entityId: itemId, calendarId: cfg.calendarId, event, pushedHash: hashOf(calendarItemEvent(item, cfg)) })
+    await saveLink({ entityType: 'calendar_item', entityId: itemId, calendarId: cfg.calendarId, event, pushedHash: hashOf(calendarItemEvent(item, cfg)), origin: item.source === 'google' ? 'google' : null })
   }
 
   const processEvent = async (event, cfg, report) => {
@@ -432,7 +484,7 @@ export const createCalendarSync = ({ db, google, settings, config, logger }) => 
   const flush = () => exclusive(async () => {
     flushTimer = null
     const cfg = await getConfig()
-    if (!cfg.enabled || (await google.getMode()) === 'none') { queue.clear(); return }
+    if (!cfg.enabled || cfg.readOnly || (await google.getMode()) === 'none') { queue.clear(); return }
     const items = [...queue.values()]
     queue.clear()
     for (const { entityType, id } of items) {
@@ -457,19 +509,23 @@ export const createCalendarSync = ({ db, google, settings, config, logger }) => 
     const cfg = await getConfig()
     if (!cfg.enabled) return { skipped: 'disabled' }
     if ((await google.getMode()) === 'none') return { skipped: 'not_connected' }
-    const report = { pushed: { created: 0, updated: 0, unchanged: 0, deleted: 0, ignored: 0, skipped_deleted_in_google: 0 }, pulled: null, errors: [] }
+    const report = { pushed: { created: 0, updated: 0, unchanged: 0, deleted: 0, unlinked: 0, kept: 0, ignored: 0, skipped_deleted_in_google: 0, read_only: 0 }, pulled: null, errors: [] }
     try {
       if (recreateDeleted) await db.query('DELETE FROM "google_event_links" WHERE "pushedHash" = $1', [DELETED_IN_GOOGLE])
       const interventions = await db.query(
         `SELECT "id" FROM "interventions" WHERE "openedAt" >= NOW() - interval '30 days'
          UNION SELECT "entityId" FROM "google_event_links" WHERE "entityType" = 'intervention'`,
       )
-      for (const { id } of interventions) {
-        try { report.pushed[await pushIntervention(id, cfg)] += 1 } catch (error) { report.errors.push(error.message) }
-      }
       const items = await db.query(`SELECT "id" FROM "calendar_items" WHERE "source" = 'app' AND "endAt" >= NOW() - interval '30 days'`)
-      for (const { id } of items) {
-        try { report.pushed[await pushCalendarItem(id, cfg)] += 1 } catch (error) { report.errors.push(error.message) }
+      if (cfg.readOnly) {
+        report.pushed.read_only = interventions.length + items.length
+      } else {
+        for (const { id } of interventions) {
+          try { report.pushed[await pushIntervention(id, cfg)] += 1 } catch (error) { report.errors.push(error.message) }
+        }
+        for (const { id } of items) {
+          try { report.pushed[await pushCalendarItem(id, cfg)] += 1 } catch (error) { report.errors.push(error.message) }
+        }
       }
       report.pulled = await pull(cfg)
       await setState({ lastSyncAt: new Date().toISOString(), lastReport: report, lastError: report.errors[0] || null })
@@ -516,6 +572,7 @@ export const createCalendarSync = ({ db, google, settings, config, logger }) => 
     if (Array.isArray(patch.pushTypes)) next.pushTypes = patch.pushTypes.filter((type) => TYPE_LABEL[type])
     if (patch.importEvents !== undefined) next.importEvents = Boolean(patch.importEvents)
     if (patch.importAsCalls !== undefined) next.importAsCalls = Boolean(patch.importAsCalls)
+    if (patch.readOnly !== undefined) next.readOnly = Boolean(patch.readOnly)
     if (patch.colorOperators && typeof patch.colorOperators === 'object') {
       next.colorOperators = Object.fromEntries(Object.entries(patch.colorOperators)
         .filter(([color, userId]) => GOOGLE_EVENT_COLORS[color] && typeof userId === 'string' && userId))
@@ -525,6 +582,22 @@ export const createCalendarSync = ({ db, google, settings, config, logger }) => 
     await settings.set(CALENDAR_SETTINGS_KEY, next)
     if (next.calendarId !== current.calendarId) await setState({ syncToken: null })
     return next
+  }
+
+  // ——— Backup del calendario Google: tutti gli eventi in formato .ics (reimportabile in Google
+  // Calendar da Impostazioni → Importa) più una copia JSON completa (colori, proprietà, ID). ———
+  const exportCalendar = async (calendarId) => {
+    const events = []
+    let pageToken = null
+    for (let guard = 0; guard < 400; guard += 1) {
+      const params = new URLSearchParams({ maxResults: '2500', singleEvents: 'false', showDeleted: 'false' })
+      if (pageToken) params.set('pageToken', pageToken)
+      const page = await gcal({ url: `${eventsUrl(calendarId)}?${params}` })
+      events.push(...(page.items || []).filter((event) => event.status !== 'cancelled'))
+      if (!page.nextPageToken) break
+      pageToken = page.nextPageToken
+    }
+    return { events, ics: toIcs(events, calendarId) }
   }
 
   const htmlLinkFor = async (entityType, entityId) => (await getLink(entityType, entityId))?.htmlLink || null
@@ -550,5 +623,5 @@ export const createCalendarSync = ({ db, google, settings, config, logger }) => 
     await chain
   }
 
-  return { enqueue, syncNow, pullNow, status, updateSettings, getConfig, htmlLinkFor, start, stop, idle, interventionEvent }
+  return { enqueue, syncNow, pullNow, status, updateSettings, getConfig, htmlLinkFor, exportCalendar, start, stop, idle, interventionEvent }
 }
