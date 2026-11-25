@@ -2,29 +2,22 @@ import { useEffect, useMemo, useState } from 'react'
 import { Bot, CalendarDays, Download, ExternalLink, FileText, MapPin, Package, Paperclip, Phone, Plus, Search, Trash2, Wrench } from 'lucide-react'
 import { api, qs, request } from '../lib/api'
 import { useAuth } from '../lib/auth'
-import { INTERVENTION_TYPES, MOVEMENT_REASONS, STATUSES, URGENCY, attachmentsOf, descriptionEntries, isOpen } from '../lib/domain'
+import { INTERVENTION_TYPES, MOVEMENT_REASONS, STATUSES, URGENCY, attachmentUrl, attachmentsOf, descriptionEntries, isOpen } from '../lib/domain'
+import { uploadFile } from '../lib/files'
 import { fileSize, fmtDate, fmtDateTime, fmtEuro, fromLocalInput, newId, relativeDays, toLocalInput } from '../lib/format'
 import { navigate, useAsync, useShared } from '../lib/hooks'
 import CustomerPicker from '../components/CustomerPicker'
 import { Badge, Button, Card, EmptyState, ErrorBox, Input, Modal, Pagination, Select, Spinner, Stat, Tabs, Textarea, cx, useDebounced, useToast } from '../components/ui'
 
 const PAGE_SIZE = 25
-const MAX_ATTACHMENT_MB = 8
-
-const readAsDataUrl = (file) => new Promise((resolve, reject) => {
-  const reader = new FileReader()
-  reader.onload = () => resolve(String(reader.result || ''))
-  reader.onerror = () => reject(new Error(`Impossibile leggere ${file.name}`))
-  reader.readAsDataURL(file)
-})
-
-const toAttachments = async (files, operator) => {
-  const tooBig = files.find((file) => file.size > MAX_ATTACHMENT_MB * 1024 * 1024)
-  if (tooBig) throw new Error(`${tooBig.name} supera ${MAX_ATTACHMENT_MB} MB.`)
-  return Promise.all(files.map(async (file) => ({
-    id: newId(), fileName: file.name, mimeType: file.type || 'application/octet-stream', size: file.size,
-    uploadedAt: new Date().toISOString(), uploadedBy: operator, dataUrl: await readAsDataUrl(file),
-  })))
+// Ogni file viene compresso (se foto) e caricato a parte: nell'intervento restano solo i metadati.
+const toAttachments = async (files, operator, interventionId) => {
+  const list = []
+  for (const file of files) {
+    const saved = await uploadFile(file, { interventionId })
+    list.push({ id: newId(), fileId: saved.id, fileName: saved.fileName, mimeType: saved.mimeType, size: saved.size, uploadedAt: new Date().toISOString(), uploadedBy: operator })
+  }
+  return list
 }
 
 // Campi specifici per tipo (stessi nomi usati dalla vecchia interfaccia in additionalData).
@@ -129,10 +122,11 @@ function NewInterventionModal({ type, onClose, onCreated, defaults = {} }) {
     if (!form.clientId) return toast('Seleziona o crea il cliente.', 'error')
     setBusy(true)
     try {
-      const attachments = await toAttachments(files, user.operatorCode)
+      const id = newId()
+      const attachments = await toAttachments(files, user.operatorCode, id)
       const text = form.description.trim()
       const created = await api.post('/api/interventions', {
-        id: newId(),
+        id,
         clientId: form.clientId,
         type,
         status: form.status,
@@ -273,7 +267,7 @@ function InterventionDrawer({ id, onClose, onChanged }) {
     const text = note.trim()
     if (!text && !files.length) return
     try {
-      const newFiles = await toAttachments(files, user.operatorCode)
+      const newFiles = await toAttachments(files, user.operatorCode, item.id)
       const entries = [...descriptionEntries(item)]
       if (text) entries.push({ id: newId(), text, authorCode: user.operatorCode, authorName: user.email.split('@')[0], createdAt: new Date().toISOString(), source: 'note' })
       const updated = await patch({
@@ -316,7 +310,8 @@ function InterventionDrawer({ id, onClose, onChanged }) {
   }
 
   const openAttachment = (attachment) => {
-    // I data URL non si aprono direttamente in una nuova scheda: li convertiamo in Blob.
+    if (attachment.fileId) { window.open(attachmentUrl(attachment), '_blank', 'noopener'); return }
+    // I vecchi data URL non si aprono direttamente in una nuova scheda: li convertiamo in Blob.
     fetch(attachment.dataUrl).then((r) => r.blob()).then((blob) => window.open(URL.createObjectURL(blob), '_blank', 'noopener'))
   }
 
@@ -412,7 +407,7 @@ function InterventionDrawer({ id, onClose, onChanged }) {
                   <div key={attachment.id} className="group relative overflow-hidden rounded-lg border border-slate-200">
                     <button type="button" onClick={() => openAttachment(attachment)} className="block w-full text-left">
                       {attachment.mimeType?.startsWith('image/')
-                        ? <img src={attachment.dataUrl} alt={attachment.fileName} className="h-24 w-full object-cover" />
+                        ? <img src={attachmentUrl(attachment)} alt={attachment.fileName} loading="lazy" className="h-24 w-full object-cover" />
                         : <div className="flex h-24 items-center justify-center bg-slate-50"><FileText className="h-8 w-8 text-slate-400" /></div>}
                       <div className="truncate px-2 py-1 text-xs text-slate-600">{attachment.fileName} · {fileSize(attachment.size)}</div>
                     </button>

@@ -83,7 +83,7 @@ export const startTestApp = async ({ env = {}, fetchImpl, extensions = [] } = {}
     const jar = new Map()
     const request = async (method, url, body, { headers = {}, raw = false } = {}) => {
       const cookieHeader = [...jar.entries()].map(([k, v]) => `${k}=${v}`).join('; ')
-      const isJson = body !== undefined && typeof body !== 'string'
+      const isJson = body !== undefined && typeof body !== 'string' && !(body instanceof Uint8Array)
       const response = await fetch(`${baseUrl}${url}`, {
         method,
         headers: {
@@ -141,5 +141,5 @@ export const startTestApp = async ({ env = {}, fetchImpl, extensions = [] } = {}
     await database.drop()
   }
 
-  return { app, db, config, baseUrl, client, createUser, loggedIn, stop, deps: app.locals.deps }
+  return { app, db, config, baseUrl, client, createUser, loggedIn, stop, backup, deps: app.locals.deps }
 }
