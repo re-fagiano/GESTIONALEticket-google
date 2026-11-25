@@ -1,78 +1,91 @@
-# Gestionale Ticket FIXLAB
+# FixLab — gestionale assistenza e magazzino
 
-Il gestionale salva i dati direttamente nel browser (localStorage/IndexedDB). Per evitare cancellazioni automatiche o perdite quando si svuota la cache:
+Gestionale per il laboratorio di riparazione elettrodomestici: clienti, chiamate, riparazioni, ordini ricambi,
+preventivi, calendario e magazzino. Frontend React (Vite) + backend Node/Express su PostgreSQL, pubblicato su Railway.
 
-- Usa il pulsante **"💾 Blocca dati nel browser"** nella barra "Backup e Export" per richiedere storage persistente (quando supportato dal browser).
-- Il gestionale salva automaticamente un backup locale con timestamp e consente di scaricare/ripristinare l’ultimo backup dalla sezione Backup.
-- Scarica un backup JSON o i CSV (Ticket/Magazzino/Clienti) e conservali in una cartella del progetto o su cloud (Drive, Dropbox, ecc.).
-- Puoi anche salvare direttamente un file locale con **"📂 Salva in cartella"**: scegli una directory e il backup verrà scritto lì (feature supportata dai browser basati su Chromium).
+## Struttura
 
-## Formato import/export magazzino
+```
+server/            backend v2 (Express + pg, SQL esplicito)
+  index.js         avvio, seed admin, backup pianificato
+  app.js           creazione app (usata anche dai test)
+  routes/          auth, admin, customers, tickets, interventions, inventory, calendar, ai, legacy
+  services/        google (Drive/Calendar), backup, settings
+  middleware/      autenticazione JWT + CSRF, sicurezza, rate limit
+prisma/migrations/ migrazioni SQL (applicate con `prisma migrate deploy`)
+src/               frontend React
+tests/             test automatici del backend (database Postgres reale)
+```
 
-L'importazione del magazzino accetta file **CSV** o **Excel (.xlsx)** con intestazioni **esattamente** in questo ordine:
+Tutti i dati stanno su **PostgreSQL**. Il vecchio server scriveva una parte dei dati (ticket, import CSV, export CSV)
+in un file SQLite sul disco temporaneo di Railway, che si cancella a ogni deploy: non succede più.
 
-1. POSIZIONE
-2. CODICE
-3. DESCRIZIONE
-4. PREZZO AL PUBBLICO
-5. QUANTITA
+## Variabili d'ambiente (Railway)
 
-Le righe vuote vengono ignorate. Tutti i campi sono obbligatori tranne **POSIZIONE**. Il gestionale verifica i codici duplicati nel file e somma le quantità se un codice è già presente nel magazzino. I numeri possono usare la virgola come separatore decimale (es. `12,50`).
+| Variabile | Obbligatoria | Note |
+|---|---|---|
+| `DATABASE_URL` | sì | Postgres di Railway |
+| `JWT_SECRET`, `JWT_REFRESH_SECRET` | sì | stringhe casuali lunghe; senza, il server non parte |
+| `ADMIN_EMAIL`, `ADMIN_PASSWORD` | consigliate | l'admin viene creato/allineato all'avvio |
+| `PUBLIC_URL` | no | URL pubblico (su Railway viene ricavato da `RAILWAY_PUBLIC_DOMAIN`) |
+| `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET` | per Google | collegamento dell'account Google del negozio (Drive + Calendar) |
+| `GOOGLE_SERVICE_ACCOUNT_EMAIL`, `GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY(_BASE64)` | alternativa | service account (non salva su Drive di account Gmail personali) |
+| `GOOGLE_DRIVE_FOLDER_ID` / `GOOGLE_DRIVE_FOLDER_NAME` | no | cartella dei backup |
+| `BACKUP_INTERVAL_HOURS` | no | default 24 |
+| `DEEPSEEK_API_KEY`, `DEEPSEEK_API_URL`, `RAG_API_URL` | no | assistente AI (le chiavi restano sul server) |
+| `ENABLE_DESTRUCTIVE_OPERATIONS` | no | abilita il ripristino completo da backup (`/api/import`) |
+| `API_RATE_LIMIT_MAX` | no | richieste per utente ogni 15 minuti (default 1500) |
 
-Per estendere il formato con nuove colonne (es. fornitore, categoria, data di scadenza), aggiungi le nuove intestazioni e aggiorna il parser in `src/utils/inventoryImport.js` mantenendo la validazione dell'ordine delle colonne.
+## Backup
 
-## DeepSeek AI configuration
+- Automatico ogni `BACKUP_INTERVAL_HOURS` su Google Drive, con **tutte** le tabelle (clienti, ticket, interventi,
+  storico, note, calendario, magazzino, movimenti, utenti).
+- Se Google non è collegato lo stato è **`not_configured`**: il backup **non** è stato salvato. (Prima veniva mostrato
+  come "degraded", che sembrava un backup riuscito a metà.)
+- Un service account Google non ha spazio su Drive: con un account Gmail personale bisogna collegare l'account
+  del negozio con OAuth (`GOOGLE_OAUTH_*`) oppure usare un Drive condiviso (Google Workspace).
+- Export manuale sempre disponibile: Impostazioni → Export JSON / CSV.
 
-The frontend calls only the internal proxy endpoint `/api/deepseek`.
-Configure DeepSeek credentials only on the backend environment:
+## Magazzino (API)
 
-- `DEEPSEEK_API_KEY`: required server-side API key used by `server.js`.
-- `DEEPSEEK_API_URL`: optional base URL (default `https://api.deepseek.com`).
+| Metodo | Percorso | Descrizione |
+|---|---|---|
+| GET | `/api/inventory?q=&stock=low\|out\|available&location=&sort=&order=&skip=&take=` | ricerca per codice, codici alternativi, descrizione, posizione (più parole = tutte devono comparire) |
+| GET | `/api/inventory/summary` | articoli, pezzi, valore, sotto scorta, esauriti, posizioni |
+| GET | `/api/inventory/:id` | scheda con ultimi 100 movimenti |
+| POST | `/api/inventory` | nuovo articolo (codice duplicato → 409 `code_exists`) |
+| PUT | `/api/inventory/:id` | modifica con controllo di versione (409 `conflict` se modificato da altri) |
+| POST | `/api/inventory/:id/movements` | carico/scarico atomico `{delta, reason, note, interventionId}`; giacenza negativa → 409 |
+| GET | `/api/inventory/movements?interventionId=` | ultimi movimenti |
+| POST | `/api/inventory/import` | import `{csv}` o `{rows}`, `mode: add` (somma) o `set` (inventario), `dryRun` per l'anteprima |
+| GET | `/api/inventory/export.csv` | export per Excel (separatore `;`, virgola decimale) |
 
-Copy `.env.example` to `.env` and set backend values locally when testing. Do not expose DeepSeek keys with `VITE_*` variables.
+Il file Excel/CSV usa le intestazioni del negozio: `POSIZIONE; CODICE; DESCRIZIONE; PREZZO AL PUBBLICO; QUANTITA`
+(opzionali `SCORTA MINIMA`, `CODICI ALTERNATIVI`). L'export si può re-importare così com'è.
 
-## Modalità memoria MBI e deploy su Railway/"Highway"
+## Sviluppo
 
-La modalità **MBI (Mirror Backup Incrementale)** nel pannello Impostazioni aggiunge:
-- snapshot ridondante locale su IndexedDB;
-- pulsante **Sincronizza MBI ora** per inviare subito lo snapshot al backend remoto (`/api/import`).
+```bash
+pnpm install
+pnpm server        # backend su :3000 (serve DATABASE_URL e JWT_* nel .env)
+pnpm dev           # frontend Vite, inoltra /api al backend
+pnpm test          # test backend: serve un Postgres locale (TEST_DATABASE_ADMIN_URL)
+pnpm build
+```
 
-Per avere persistenza stabile in cloud (Railway):
-1. configura un volume persistente e imposta `DB_PATH` (es. `/data/gestionale.db`);
-2. imposta `API_TOKEN` in variabili ambiente per autenticare il backend;
-3. esponi l'app via dominio Railway e usa il token dalla sezione Impostazioni del frontend;
-4. (consigliato) pianifica un job periodico che richiama backup JSON e lo salva su Google Drive.
+I test creano un database temporaneo, applicano tutte le migrazioni e lo eliminano alla fine.
+`TEST_DATABASE_ADMIN_URL` deve puntare a un utente che può creare database (default
+`postgresql://postgres@localhost:5433/postgres?host=/tmp`).
 
-Google Drive come storage remoto:
-- usare Drive come **backup snapshot** (JSON), non come database primario;
-- mantenere una cartella per ambiente (`prod`, `staging`) e retention (es. ultimi 30 file).
+## Deploy su Railway
 
-## Persistenza Postgres con Prisma (Railway)
+`railway.json`: build `pnpm run build`, avvio `prisma migrate deploy && node server/index.js`, healthcheck `/healthz`.
+Le migrazioni v2 sono solo additive (nuove tabelle e indici) e non modificano i dati esistenti.
 
-Il backend ora supporta PostgreSQL via `DATABASE_URL` (Railway) con Prisma.
+Promuovere un utente ad admin: `node scripts/promote-user-admin.js email@esempio.it`.
 
-### Setup locale
-1. Imposta `DATABASE_URL` nel tuo `.env`.
-2. Genera il client Prisma:
-   - `pnpm prisma:generate`
-3. Crea/applica migration in sviluppo:
-   - `pnpm prisma:migrate`
+## Sicurezza
 
-### Deploy su Railway (produzione)
-1. Verifica nel service backend che sia presente `DATABASE_URL=postgresql://...` e che punti al database Postgres corretto in Architecture.
-2. Imposta anche `NODE_VERSION=22` nelle variabili ambiente Railway per usare Node.js compatibile con `node:sqlite`.
-3. In produzione **non** usare `prisma migrate dev`.
-4. Esegui obbligatoriamente le migration con `pnpm prisma:deploy`.
-5. Questo repository include `railway.json` con build command `pnpm prisma:deploy && pnpm build`, così le tabelle Prisma (es. `users`) vengono create/aggiornate ad ogni deploy.
-
-### Note operative
-- Se `DATABASE_URL` manca, il server termina con errore esplicito per evitare fallback legacy non coerenti.
-- Le API AI (DeepSeek/RAG) non sono state toccate; il focus è solo su persistenza DB/CRUD.
-
-## Manutenzione dipendenze e sicurezza
-
-Per ridurre regressioni in produzione e mantenere il backend aggiornato:
-
-- Dependabot è configurato per aggiornare automaticamente dipendenze `npm` e GitHub Actions con cadenza settimanale (`.github/dependabot.yml`).
-- È disponibile una pipeline schedulata (`.github/workflows/security-audit.yml`) che esegue `pnpm audit --prod` ogni lunedì e può essere lanciata manualmente.
-- Prima di applicare update major, validare sempre in staging con smoke test API e login, poi procedere al rollout graduale.
+- Il file `.env` non va mai committato (è in `.gitignore`).
+- Sessione con cookie HttpOnly (access 15 min + refresh 14 giorni ruotato) e token CSRF per ogni modifica.
+- Ruoli: `ADMIN` (tutto), `OPERATOR` (lavoro quotidiano), `VIEWER` (sola lettura).

@@ -1,3 +1,6 @@
+// FixLab v2: il backend usa SQL diretto (pg). Prisma serve solo ad applicare le migrazioni in prisma/migrations.
+// Tabelle aggiunte dalla v2 solo via SQL: inventory_movements, app_settings, rate_limits.
+
 generator client {
   provider = "prisma-client-js"
 }

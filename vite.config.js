@@ -1,4 +1,3 @@
-/* eslint-env node */
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
@@ -7,5 +6,12 @@ export default defineConfig({
   plugins: [react()],
   build: {
     sourcemap: true,
+  },
+  // In sviluppo le chiamate /api vanno al backend (pnpm server, porta 3000).
+  server: {
+    proxy: {
+      '/api': 'http://localhost:3000',
+      '/healthz': 'http://localhost:3000',
+    },
   },
 })
