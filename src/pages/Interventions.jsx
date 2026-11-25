@@ -53,7 +53,9 @@ function TypeFields({ type, data, onChange, disabled }) {
 const offlineDiagnosis = (text) => {
   const lower = text.toLowerCase()
   const hints = []
-  if (/scaric|pompa|acqua/.test(lower)) hints.push('Controlla filtro e pompa di scarico, tubo e sifone.')
+  if (/non carica|carica acqua|non entra acqua|caricamento/.test(lower)) hints.push('Non carica acqua: rubinetto aperto e tubo non piegato, filtrino d\'ingresso, elettrovalvola (bobine), pressostato e relativo tubicino, blocco porta chiuso.')
+  else if (/scaric|pompa/.test(lower)) hints.push('Controlla filtro e pompa di scarico, tubo e sifone.')
+  else if (/acqua/.test(lower)) hints.push('Verifica il circuito idraulico: carico (elettrovalvola, filtrino) e scarico (pompa, filtro, tubo).')
   if (/scald|resistenz|fredd/.test(lower)) hints.push('Verifica resistenza, termostato/NTC e relè della scheda.')
   if (/rumor|vibra|cuscinett/.test(lower)) hints.push('Controlla cuscinetti, ammortizzatori e corpi estranei nel cesto.')
   if (/non parte|spent|alimentaz/.test(lower)) hints.push('Verifica alimentazione, fusibile, blocco porta e scheda di potenza.')
@@ -84,7 +86,19 @@ function AiDiagnosis({ subject, description }) {
           { role: 'user', content: `Oggetto: ${subject}. Descrizione: ${description}` },
         ],
       })
-      setState({ loading: false, text: data?.choices?.[0]?.message?.content || offlineDiagnosis(description), error: data?.fallback ? 'Assistente AI non configurato: suggerimento offline.' : '' })
+      // Se DeepSeek non risponde il server manda un testo generico: meglio il nostro suggerimento offline mirato.
+      const reasons = {
+        'DEEPSEEK_API_KEY missing': 'chiave DEEPSEEK_API_KEY mancante su Railway',
+        deepseek_upstream_401: 'chiave DeepSeek non valida (controlla DEEPSEEK_API_KEY su Railway)',
+        deepseek_upstream_402: 'credito DeepSeek esaurito (ricarica su platform.deepseek.com)',
+        deepseek_upstream_403: 'chiave DeepSeek senza permessi',
+        deepseek_upstream_429: 'troppe richieste a DeepSeek, riprova tra poco',
+      }
+      if (data?.fallback) {
+        setState({ loading: false, text: offlineDiagnosis(description), error: `AI non disponibile: ${reasons[data.reason] || data.reason || 'motivo sconosciuto'}. Suggerimento offline.` })
+      } else {
+        setState({ loading: false, text: data?.choices?.[0]?.message?.content || offlineDiagnosis(description), error: '' })
+      }
     } catch (error) {
       setState({ loading: false, text: offlineDiagnosis(description), error: `AI non disponibile (${error.message}). Suggerimento offline.` })
     }
