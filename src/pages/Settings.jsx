@@ -8,6 +8,7 @@ import { navigate, useAsync, useShared } from '../lib/hooks'
 import { scanLegacyData, uploadLegacyData } from '../lib/legacyRecovery'
 import { Badge, Button, Card, ErrorBox, Select, Spinner, Tabs, useToast } from '../components/ui'
 import GoogleSettings from '../components/GoogleSettings'
+import ShopSettings from '../components/ShopSettings'
 
 const BACKUP_STATUS = {
   success: { label: 'Riuscito', className: 'bg-green-100 text-green-800' },
@@ -181,7 +182,7 @@ export default function SettingsPage({ params = {} }) {
   const tab = params.tab || 'profilo'
   const tabs = [
     { value: 'profilo', label: 'Profilo' },
-    ...(isAdmin ? [{ value: 'utenti', label: 'Utenti' }, { value: 'backup', label: 'Backup' }, { value: 'google', label: 'Google' }] : []),
+    ...(isAdmin ? [{ value: 'negozio', label: 'Negozio' }, { value: 'utenti', label: 'Utenti' }, { value: 'backup', label: 'Backup' }, { value: 'google', label: 'Google' }] : []),
     { value: 'recupero', label: 'Recupero dati' },
   ]
   return (
@@ -189,6 +190,7 @@ export default function SettingsPage({ params = {} }) {
       <h1 className="text-2xl font-bold text-slate-900">Impostazioni</h1>
       <Tabs tabs={tabs} value={tab} onChange={(value) => navigate('impostazioni', { tab: value })} />
       {tab === 'profilo' && <Profile />}
+      {tab === 'negozio' && isAdmin && <ShopSettings />}
       {tab === 'utenti' && isAdmin && <UsersAdmin />}
       {tab === 'backup' && isAdmin && <Backup />}
       {tab === 'google' && isAdmin && <GoogleSettings />}

@@ -109,7 +109,12 @@ export function Modal({ open, onClose, title, subtitle, children, footer, size =
   const panel = useRef(null)
   useEffect(() => {
     if (!open) return undefined
-    const onKey = (event) => { if (event.key === 'Escape') onClose?.() }
+    const onKey = (event) => {
+      if (event.key !== 'Escape') return
+      // Con due finestre aperte (es. rapportino sopra la scheda) Esc chiude solo quella in primo piano.
+      const dialogs = document.querySelectorAll('[role="dialog"]')
+      if (dialogs[dialogs.length - 1] === panel.current) onClose?.()
+    }
     document.addEventListener('keydown', onKey)
     const previous = document.activeElement
     panel.current?.querySelector('input, select, textarea, button:not([data-close])')?.focus()

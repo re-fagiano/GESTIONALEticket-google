@@ -40,6 +40,7 @@ const mapMovement = (row) => ({
   userEmail: row.userEmail || null,
   itemName: row.itemName,
   itemCode: row.itemCode,
+  ...(row.itemPrice !== undefined ? { itemPrice: Number(row.itemPrice) || 0 } : {}),
   createdAt: iso(row.createdAt),
 })
 
@@ -153,7 +154,7 @@ export const inventoryRoutes = ({ db, auth }) => {
     const filters = []
     if (str(req.query.interventionId)) { params.push(str(req.query.interventionId)); filters.push(`m."interventionId" = $${params.length}`) }
     const rows = await db.query(
-      `SELECT m.*, i."name" AS "itemName", coalesce(i."code", i."id") AS "itemCode", u."email" AS "userEmail"
+      `SELECT m.*, i."name" AS "itemName", coalesce(i."code", i."id") AS "itemCode", i."price" AS "itemPrice", u."email" AS "userEmail"
        FROM "inventory_movements" m JOIN "inventory" i ON i."id" = m."itemId" LEFT JOIN "users" u ON u."id" = m."userId"
        ${filters.length ? `WHERE ${filters.join(' AND ')}` : ''}
        ORDER BY m."createdAt" DESC LIMIT $1`,

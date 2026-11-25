@@ -13,6 +13,7 @@ import { fileRoutes } from './routes/files.js'
 import { interventionRoutes } from './routes/interventions.js'
 import { inventoryImportRoute, inventoryRoutes } from './routes/inventory.js'
 import { legacyRoutes } from './routes/legacy.js'
+import { reportRoutes } from './routes/reports.js'
 import { ticketRoutes } from './routes/tickets.js'
 import { createFileStore } from './services/files.js'
 
@@ -76,6 +77,7 @@ export const createApp = ({ db, config, logger, backup, google, settings, extens
   api.use('/files', fileRoutes(deps))
   const interventionHooks = { onChange: (...args) => deps.hooks?.interventions?.(...args) }
   api.use('/', interventionRoutes({ ...deps, hooks: interventionHooks }))
+  api.use('/', reportRoutes({ ...deps, hooks: interventionHooks }))
   api.post('/inventory/import', auth.requireRole('ADMIN', 'OPERATOR'), inventoryImportRoute(deps))
   api.use('/inventory', inventoryRoutes(deps))
   api.use('/magazzino', inventoryRoutes(deps))
