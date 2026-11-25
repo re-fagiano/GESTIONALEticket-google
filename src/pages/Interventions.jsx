@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Bot, Download, ExternalLink, FileText, MapPin, Package, Paperclip, Phone, Plus, Search, Trash2, Wrench } from 'lucide-react'
+import { Bot, CalendarDays, Download, ExternalLink, FileText, MapPin, Package, Paperclip, Phone, Plus, Search, Trash2, Wrench } from 'lucide-react'
 import { api, qs, request } from '../lib/api'
 import { useAuth } from '../lib/auth'
 import { INTERVENTION_TYPES, MOVEMENT_REASONS, STATUSES, URGENCY, attachmentsOf, descriptionEntries, isOpen } from '../lib/domain'
@@ -221,6 +221,7 @@ function InterventionDrawer({ id, onClose, onChanged }) {
   const { customerById, operators, operatorName } = useShared()
   const { toast, confirm } = useToast()
   const { data: item, loading, error, reload, setData } = useAsync(() => api.get(`/api/interventions/${id}`), [id])
+  const googleLink = useAsync(() => api.get(`/api/google/calendar/link/intervention/${id}`).catch(() => null), [id, item?.version])
   const [note, setNote] = useState('')
   const [files, setFiles] = useState([])
   const [extra, setExtra] = useState({})
@@ -310,6 +311,7 @@ function InterventionDrawer({ id, onClose, onChanged }) {
       subtitle={item && <span className="flex flex-wrap items-center gap-2"><Badge className={STATUSES[item.status]?.color}>{STATUSES[item.status]?.label}</Badge>aperta {fmtDateTime(item.openedAt)} · {item.durationDays} gg{item.closedAt ? ` · chiusa ${fmtDate(item.closedAt)}` : ''}</span>}
       footer={item && <>
         {isAdmin && <Button variant="dangerGhost" icon={Trash2} onClick={remove} className="mr-auto">Elimina</Button>}
+        {googleLink.data?.htmlLink && <a href={googleLink.data.htmlLink} target="_blank" rel="noreferrer"><Button variant="ghost" icon={CalendarDays}>Google Calendar</Button></a>}
         {canEdit && item.type === 'chiamata' && isOpen(item) && <Button variant="secondary" icon={Wrench} onClick={convert} loading={busy === 'convert'}>Porta in laboratorio (riparazione)</Button>}
         <Button variant="secondary" onClick={onClose}>Chiudi</Button>
       </>}
