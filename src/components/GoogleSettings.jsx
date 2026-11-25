@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { CalendarDays, CheckCircle2, Copy, Link2, RefreshCw, Unlink } from 'lucide-react'
-import { api } from '../lib/api'
+import { CalendarDays, CheckCircle2, Copy, Download, Link2, RefreshCw, ShieldCheck, Unlink } from 'lucide-react'
+import { api, download } from '../lib/api'
 import { INTERVENTION_TYPES } from '../lib/domain'
 import { fmtDateTime } from '../lib/format'
 import { useAsync, useRoute, useShared } from '../lib/hooks'
@@ -134,8 +134,21 @@ export default function GoogleSettings() {
             <h3 className="flex items-center gap-2 font-semibold"><CalendarDays className="h-5 w-5" /> Ponte con Google Calendar</h3>
             <Badge className={cal.settings.enabled ? 'bg-green-100 text-green-800' : 'bg-slate-100 text-slate-600'}>{cal.settings.enabled ? 'Attivo' : 'Spento'}</Badge>
           </div>
+          <div className="space-y-1 rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-900">
+            <div className="flex items-center gap-2 font-medium"><ShieldCheck className="h-4 w-4" /> Il vostro calendario è protetto</div>
+            <ul className="list-disc space-y-0.5 pl-5 text-xs">
+              <li>Gli eventi scritti a mano su Google <b>non vengono mai cancellati</b> né spostati in un altro calendario; titolo e note non vengono mai riscritti (al massimo orario e colore).</li>
+              <li>Ogni giorno una <b>copia completa del calendario</b> (.ics reimportabile + .json) va su Google Drive insieme al backup del gestionale; le copie più vecchie di 90 giorni vengono tolte.</li>
+              <li>Prima di attivare la sincronizzazione viene fatta una copia: se non riesce, la sincronizzazione non parte.</li>
+            </ul>
+            <Button size="sm" variant="secondary" icon={Download} onClick={() => download('/api/google/calendar/export.ics', 'calendario.ics')}>Scarica ora una copia del calendario</Button>
+          </div>
           <label className="flex items-center gap-2 text-sm font-medium">
             <input type="checkbox" checked={form.enabled} onChange={(e) => setForm({ ...form, enabled: e.target.checked })} /> Sincronizza gli appuntamenti con Google Calendar
+          </label>
+          <label className="flex items-start gap-2 text-sm">
+            <input type="checkbox" className="mt-1" checked={Boolean(form.readOnly)} onChange={(e) => setForm({ ...form, readOnly: e.target.checked })} />
+            <span><b>Solo lettura</b>: il gestionale legge Google Calendar (importa chiamate e spostamenti) ma non scrive mai nulla su Google. Consigliato per i primi giorni.</span>
           </label>
           <div className="grid gap-3 sm:grid-cols-2">
             <Select label="Calendario Google" value={form.calendarId} onChange={(e) => setForm({ ...form, calendarId: e.target.value })}>

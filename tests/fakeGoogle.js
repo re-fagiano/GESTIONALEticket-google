@@ -74,7 +74,13 @@ export const createFakeGoogle = ({ email = 'negozio@gmail.com' } = {}) => {
 
     if (url.pathname === '/drive/v3/files' && method === 'GET') return json(200, { files: [] })
     if (url.pathname === '/drive/v3/files' && method === 'POST') return json(200, { id: 'folder-1' })
-    if (url.pathname === '/upload/drive/v3/files') { driveFiles.push(String(init.body).length); return json(200, { id: `file-${driveFiles.length}`, name: 'backup.json' }) }
+    if (url.pathname === '/upload/drive/v3/files') {
+      const raw = Buffer.isBuffer(init.body) ? init.body.toString('utf8') : String(init.body)
+      const name = raw.match(/"name":"([^"]+)"/)?.[1] || 'file'
+      const content = raw.split(/\r\n\r\n/).slice(2).join('\r\n\r\n')
+      driveFiles.push({ name, content })
+      return json(200, { id: `file-${driveFiles.length}`, name })
+    }
 
     return json(404, { error: { message: `fake google: ${method} ${url.pathname} non gestito` } })
   }

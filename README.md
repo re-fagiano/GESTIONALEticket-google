@@ -76,6 +76,15 @@ Impostazioni → Google → **Collega account Google** (una volta sola), poi sce
   Un evento di intervento cancellato a mano su Google non viene ricreato (si può forzare con "Ricreali").
 - Ogni 6 ore un giro completo recupera eventuali modifiche perse. Tutte le operazioni sono in coda unica (niente doppioni).
 
+**Protezione del calendario del negozio**
+- Gli eventi scritti a mano su Google non vengono **mai cancellati** né spostati di calendario; titolo e note non vengono mai
+  riscritti (solo orario e colore). Annullare o eliminare la chiamata nel gestionale toglie solo il collegamento.
+- Alla prima attivazione si parte in **solo lettura** (il gestionale importa ma non scrive su Google).
+- Prima di attivare viene salvata una copia completa del calendario su Drive: se non riesce, la sincronizzazione non parte.
+- **Backup quotidiano** su Drive: database (`backup-*.json`) + calendario (`calendario-*.ics` reimportabile e `calendario-*.json`
+  completo). Le copie oltre 90 giorni vengono eliminate. Controllo ogni ora: un backup al giorno anche con riavvii frequenti.
+- Ripristino del calendario: Google Calendar → Impostazioni → Importa ed esporta → Importa il file `.ics`.
+
 Configurazione Google Cloud: abilita Calendar API e Drive API, crea un *ID client OAuth* (applicazione web) con URI di
 reindirizzamento `https://<dominio>/api/google/callback`, pubblica la schermata di consenso (altrimenti il collegamento scade
 dopo 7 giorni) e imposta `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` su Railway. Il refresh token è salvato

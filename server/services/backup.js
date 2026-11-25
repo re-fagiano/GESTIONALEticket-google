@@ -19,7 +19,13 @@ const stamp = (date = new Date()) => {
   return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}-${pad(date.getUTCHours())}${pad(date.getUTCMinutes())}`
 }
 
+const RETENTION_DAYS = 90
+
 export const createBackupService = ({ db, google, config, logger }) => {
+  // Altri file da salvare insieme al backup del database (es. il Google Calendar).
+  // Ogni provider restituisce [{ fileName, buffer, mimeType }].
+  const providers = []
+  const addProvider = (provider) => providers.push(provider)
   const buildPayload = async () => {
     const entries = await Promise.all(Object.entries(BACKUP_TABLES).map(async ([name, sql]) => [name, await db.query(sql)]))
     return { exportedAt: new Date().toISOString(), source: 'server', format: 'fixlab-v2', ...Object.fromEntries(entries) }
@@ -54,11 +60,11 @@ export const createBackupService = ({ db, google, config, logger }) => {
     return created?.id || ''
   }
 
-  const upload = async ({ fileName, buffer, folderId }) => {
+  const upload = async ({ fileName, buffer, folderId, mimeType = 'application/json' }) => {
     const boundary = `fixlab-${Date.now()}`
-    const metadata = JSON.stringify({ name: fileName, mimeType: 'application/json', ...(folderId ? { parents: [folderId] } : {}) })
+    const metadata = JSON.stringify({ name: fileName, mimeType, ...(folderId ? { parents: [folderId] } : {}) })
     const body = Buffer.concat([
-      Buffer.from(`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${metadata}\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n`),
+      Buffer.from(`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${metadata}\r\n--${boundary}\r\nContent-Type: ${mimeType}\r\n\r\n`),
       buffer,
       Buffer.from(`\r\n--${boundary}--`),
     ])
@@ -71,7 +77,21 @@ export const createBackupService = ({ db, google, config, logger }) => {
     })
   }
 
-  const perform = async ({ triggeredBy = 'manual' } = {}) => {
+  // Cancella dalla cartella i backup più vecchi di 90 giorni (solo file creati da questa app).
+  const prune = async (folderId) => {
+    if (!folderId) return 0
+    const before = new Date(Date.now() - RETENTION_DAYS * 86_400_000).toISOString()
+    const q = encodeURIComponent(`'${folderId}' in parents and trashed=false and createdTime < '${before}' and (name contains 'backup-' or name contains 'calendario-')`)
+    const list = await google.request({ scopes: GOOGLE_SCOPES.drive, url: `/drive/v3/files?q=${q}&fields=files(id,name)&pageSize=200&supportsAllDrives=true&includeItemsFromAllDrives=true` })
+    let removed = 0
+    for (const file of list?.files || []) {
+      await google.request({ scopes: GOOGLE_SCOPES.drive, method: 'DELETE', url: `/drive/v3/files/${file.id}?supportsAllDrives=true` }).catch(() => {})
+      removed += 1
+    }
+    return removed
+  }
+
+  const perform = async ({ triggeredBy = 'manual', context = {} } = {}) => {
     const fileName = `backup-${stamp()}.json`
     let payload
     try {
@@ -95,9 +115,29 @@ export const createBackupService = ({ db, google, config, logger }) => {
     try {
       const folderId = await ensureFolder()
       const created = await upload({ fileName, buffer: Buffer.from(JSON.stringify(payload)), folderId })
-      await storeRun({ status: 'success', fileName, driveFileId: created?.id || null })
-      logger.info('backup_completed', { triggeredBy, fileName, mode })
-      return { ok: true, mode: 'drive', fileName, exportedAt: payload.exportedAt, driveFileId: created?.id || '' }
+      const extraFiles = []
+      const extraErrors = []
+      for (const provider of providers) {
+        try {
+          for (const file of (await provider(context)) || []) {
+            const saved = await upload({ ...file, folderId })
+            extraFiles.push({ fileName: file.fileName, driveFileId: saved?.id || '' })
+          }
+        } catch (error) {
+          extraErrors.push(error.message)
+          logger.error('backup_extra_failed', { error: error.message })
+        }
+      }
+      const pruned = await prune(folderId).catch(() => 0)
+      const allNames = [fileName, ...extraFiles.map((f) => f.fileName)].join(', ')
+      if (extraErrors.length) {
+        const message = `Database salvato, ma backup del calendario non riuscito: ${extraErrors[0]}`
+        await storeRun({ status: 'failed', fileName: allNames, driveFileId: created?.id || null, errorMessage: message })
+        return { ok: false, mode: 'failed', fileName, exportedAt: payload.exportedAt, message, extraFiles }
+      }
+      await storeRun({ status: 'success', fileName: allNames, driveFileId: created?.id || null })
+      logger.info('backup_completed', { triggeredBy, files: allNames, pruned })
+      return { ok: true, mode: 'drive', fileName, exportedAt: payload.exportedAt, driveFileId: created?.id || '', extraFiles, pruned }
     } catch (error) {
       let message = error.message || 'Errore backup sconosciuto'
       if (/storage quota/i.test(message)) {
@@ -109,13 +149,25 @@ export const createBackupService = ({ db, google, config, logger }) => {
     }
   }
 
+  // Controllo orario: se l'ultimo backup (riuscito, o saltato perché Google non è collegato) è più vecchio dell'intervallo (default 24 ore) ne facciamo uno.
+  // Così il backup resta quotidiano anche se Railway riavvia spesso il server; se fallisce si riprova ogni ora.
+  const runIfDue = async (triggeredBy) => {
+    try {
+      const row = await db.one(`SELECT "createdAt" FROM "backup_runs" WHERE "status" IN ('success', 'not_configured') ORDER BY "createdAt" DESC LIMIT 1`)
+      const ageHours = row ? (Date.now() - new Date(row.createdAt).getTime()) / 3600_000 : Infinity
+      if (ageHours >= config.BACKUP_INTERVAL_HOURS - 0.5) await perform({ triggeredBy })
+    } catch (error) {
+      logger.error('backup_schedule_failed', { error: error.message })
+    }
+  }
+
   let timers = []
   const schedule = () => {
-    timers.push(setTimeout(() => perform({ triggeredBy: 'startup-auto' }), 60_000))
-    timers.push(setInterval(() => perform({ triggeredBy: 'scheduled' }), config.BACKUP_INTERVAL_HOURS * 3600_000))
+    timers.push(setTimeout(() => runIfDue('startup-auto'), 60_000))
+    timers.push(setInterval(() => runIfDue('scheduled'), 3600_000))
     timers.forEach((t) => t.unref?.())
   }
   const stop = () => { timers.forEach((t) => { clearTimeout(t); clearInterval(t) }); timers = [] }
 
-  return { buildPayload, perform, lastRun, schedule, stop }
+  return { buildPayload, perform, lastRun, schedule, stop, addProvider, runIfDue }
 }

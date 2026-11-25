@@ -68,12 +68,14 @@ describe('Google: collegamento account, ponte Calendar, backup Drive', () => {
     await admin.post('/api/interventions', { clientId: customer.id, type: 'riparazione', openedAt: '2026-12-01T11:00:00.000Z' })
     const old = (await admin.post('/api/interventions', { clientId: customer.id, type: 'chiamata', openedAt: '2026-12-01T08:00:00.000Z', description: 'già scritta a mano su Google' })).data
     await t.db.query(`UPDATE "interventions" SET "createdAt" = NOW() - interval '1 hour' WHERE "id" IN ($1, $2)`, [old.id, call.id])
-    const settings = await admin.put('/api/google/calendar/settings', { enabled: true, calendarId: 'interventi@group.calendar.google.com', pushTypes: ['chiamata'] })
+    const settings = await admin.put('/api/google/calendar/settings', { enabled: true, readOnly: false, calendarId: 'interventi@group.calendar.google.com', pushTypes: ['chiamata'] })
     assert.ok(settings.data.pushSince, 'attivazione: si parte da adesso')
     await sync.idle()
     assert.equal(fake.live().length, 0, 'le chiamate già esistenti non vengono inviate (eviterebbe doppioni)')
     await admin.put('/api/google/calendar/settings', { pushExisting: true })
     assert.equal(settings.data.enabled, true)
+    const preBackup = fake.driveFiles.find((f) => f.name.endsWith('.json') && f.name.startsWith('calendario-'))
+    assert.match(preBackup.content, /"calendarId":"interventi@group.calendar.google.com"/, 'il backup preventivo riguarda il calendario che si sta collegando')
     const report = await admin.post('/api/google/calendar/sync')
     assert.equal(report.status, 200)
     // l'attivazione avvia già un giro in background; quello manuale aspetta il suo turno
@@ -258,7 +260,10 @@ describe('Google: collegamento account, ponte Calendar, backup Drive', () => {
     await admin.put('/api/google/calendar/settings', { calendarId: 'primary-id' })
     await admin.post('/api/google/calendar/sync')
     const onNew = fake.live().filter((e) => e.calendarId === 'primary-id' && e.extendedProperties?.private?.fixlabType === 'intervention')
-    const onOld = fake.live().filter((e) => e.calendarId === 'interventi@group.calendar.google.com' && e.extendedProperties?.private?.fixlabType === 'intervention')
+    // si spostano solo gli eventi creati dal gestionale; quelli scritti a mano restano dov'erano
+    const createdByApp = (e) => /^(✔ )?\[/.test(e.summary || '')
+    const onOld = fake.live().filter((e) => e.calendarId === 'interventi@group.calendar.google.com' && e.extendedProperties?.private?.fixlabType === 'intervention' && createdByApp(e))
+    assert.ok(fake.live().some((e) => e.calendarId === 'interventi@group.calendar.google.com' && e.summary === 'Bianchi Luca via Mazzini 8'), 'evento scritto a mano rimasto al suo posto')
     assert.ok(onNew.length >= 2)
     assert.deepEqual(onOld.map((e) => [e.id, e.summary]), [])
   })
@@ -268,7 +273,13 @@ describe('Google: collegamento account, ponte Calendar, backup Drive', () => {
     assert.equal(res.status, 200)
     assert.equal(res.data.result.mode, 'drive')
     assert.equal(res.data.lastRun.status, 'success')
-    assert.equal(fake.driveFiles.length, 1)
+    const names = fake.driveFiles.map((f) => f.name)
+    assert.ok(names.some((n) => /^backup-.*\.json$/.test(n)), 'database')
+    const ics = [...fake.driveFiles].reverse().find((f) => f.name.endsWith('.ics'))
+    assert.ok(ics, 'copia del calendario in formato .ics')
+    assert.match(ics.content, /BEGIN:VCALENDAR/)
+    assert.match(ics.content, /SUMMARY:\[Chiamata\] Rossi Maria/)
+    assert.ok(names.some((n) => /^calendario-.*\.json$/.test(n)), 'copia JSON completa del calendario')
   })
 
   test('scollega: token revocato e sincronizzazione disattivata', async () => {
@@ -278,5 +289,116 @@ describe('Google: collegamento account, ponte Calendar, backup Drive', () => {
     assert.equal(status.mode, 'none')
     assert.equal(status.calendar.settings.enabled, false)
     assert.ok(fake.calls.includes('POST /revoke'))
+  })
+})
+
+describe('Protezione del Google Calendar del negozio', () => {
+  let t
+  let admin
+  let fake
+  let sync
+  const cal = 'primary'
+
+  before(async () => {
+    fake = createFakeGoogle()
+    t = await startTestApp({
+      env: { GOOGLE_OAUTH_CLIENT_ID: 'client-id', GOOGLE_OAUTH_CLIENT_SECRET: 'client-secret', PUBLIC_URL: 'https://fixlab.example' },
+      fetchImpl: fake.fetchImpl,
+      extensions: [googleExtension],
+    })
+    admin = await t.loggedIn('ADMIN')
+    sync = t.deps.calendarSync
+    const state = new URL((await admin.get('/api/google/connect')).data.url).searchParams.get('state')
+    await admin.get(`/api/google/callback?code=abc&state=${state}`, { raw: true })
+  })
+  after(async () => { await t.stop() })
+
+  const handwritten = (summary, start) => fake.userCreate(cal, {
+    summary, description: '3394445555 lavatrice', colorId: '4',
+    start: { dateTime: start }, end: { dateTime: new Date(new Date(start).getTime() + 3600_000).toISOString() },
+  })
+
+  test('se il backup su Drive non riesce, la sincronizzazione NON si attiva', async () => {
+    handwritten('Rossi via Roma 1', '2026-12-15T09:00:00.000Z')
+    fake.failNextRequest('/upload/drive', 500, 'Drive non disponibile')
+    const res = await admin.put('/api/google/calendar/settings', { enabled: true, calendarId: cal })
+    assert.equal(res.status, 503, 'anche in solo lettura la prima attivazione richiede il backup')
+    assert.equal(res.data.code, 'calendar_backup_failed')
+    assert.equal((await admin.get('/api/google/status')).data.calendar.settings.enabled, false)
+  })
+
+  test("all'attivazione viene salvata prima una copia completa del calendario", async () => {
+    const before = fake.driveFiles.length
+    const res = await admin.put('/api/google/calendar/settings', { enabled: true, calendarId: cal })
+    assert.equal(res.status, 200)
+    assert.equal(res.data.readOnly, true, 'alla prima attivazione si parte in solo lettura')
+    await admin.put('/api/google/calendar/settings', { readOnly: false })
+    const saved = fake.driveFiles.slice(before)
+    assert.ok(saved.some((f) => f.name.endsWith('.ics') && f.content.includes('SUMMARY:Rossi via Roma 1')))
+    await sync.idle()
+  })
+
+  test('eventi scritti a mano: annullare o eliminare la chiamata NON cancella l\'evento su Google', async () => {
+    const annul = handwritten('Verdi via Po 2', '2026-12-16T09:00:00.000Z')
+    const remove = handwritten('Neri via Tevere 3', '2026-12-17T09:00:00.000Z')
+    await sync.pullNow()
+    const calls = (await admin.get('/api/chiamate?take=50')).data
+    const a = calls.find((c) => c.additionalData.googleTitle === 'Verdi via Po 2')
+    const r = calls.find((c) => c.additionalData.googleTitle === 'Neri via Tevere 3')
+    await admin.patch(`/api/interventions/${a.id}`, { status: 'annullato' })
+    await admin.del(`/api/interventions/${r.id}`)
+    await sync.idle()
+    await admin.post('/api/google/calendar/sync')
+    assert.equal(fake.find((e) => e.id === annul.id).status, 'confirmed')
+    assert.equal(fake.find((e) => e.id === remove.id).status, 'confirmed')
+    assert.equal(fake.find((e) => e.id === annul.id).summary, 'Verdi via Po 2', 'titolo intatto')
+  })
+
+  test('cambio calendario: gli eventi scritti a mano restano dove sono, senza copie', async () => {
+    const mine = handwritten('Gialli via Arno 4', '2026-12-18T09:00:00.000Z')
+    await sync.pullNow()
+    const liveBefore = fake.live().length
+    await admin.put('/api/google/calendar/settings', { calendarId: 'interventi@group.calendar.google.com' })
+    await admin.post('/api/google/calendar/sync')
+    const event = fake.find((e) => e.id === mine.id)
+    assert.equal(event.status, 'confirmed')
+    assert.equal(event.calendarId, cal)
+    assert.equal(fake.live().length, liveBefore, 'nessun evento duplicato o cancellato')
+    await admin.put('/api/google/calendar/settings', { calendarId: cal })
+  })
+
+  test('solo lettura: il gestionale legge Google ma non scrive mai', async () => {
+    await admin.put('/api/google/calendar/settings', { readOnly: true })
+    const writesBefore = fake.calls.filter((c) => /^(POST|PATCH|DELETE) \/calendar/.test(c)).length
+    const imported = (await admin.get('/api/chiamate?q=gialli')).data[0]
+    await admin.patch(`/api/interventions/${imported.id}`, { openedAt: '2026-12-18T15:00:00.000Z' })
+    const customer = (await admin.post('/api/customers', { name: 'Test' })).data
+    await admin.post('/api/interventions', { clientId: customer.id, type: 'chiamata', openedAt: '2026-12-19T09:00:00.000Z' })
+    await sync.idle()
+    const report = await admin.post('/api/google/calendar/sync')
+    assert.ok(report.data.pushed.read_only > 0)
+    // ma la lettura funziona ancora
+    handwritten('Blu via Tevere 9', '2026-12-20T09:00:00.000Z')
+    assert.equal((await sync.pullNow()).importedCalls, 1)
+    assert.equal(fake.calls.filter((c) => /^(POST|PATCH|DELETE) \/calendar/.test(c)).length, writesBefore)
+  })
+
+  test('backup quotidiano: uno al giorno anche con molti riavvii', async () => {
+    const before = fake.driveFiles.length
+    await t.deps.backup.runIfDue('test')
+    await t.deps.backup.runIfDue('test')
+    assert.equal(fake.driveFiles.length, before, 'già fatto oggi (all\'attivazione)')
+    await t.db.query(`UPDATE "backup_runs" SET "createdAt" = NOW() - interval '25 hours'`)
+    await t.deps.backup.runIfDue('test')
+    assert.equal(fake.driveFiles.length, before + 3, 'database + calendario .ics + calendario .json')
+    await t.deps.backup.runIfDue('test')
+    assert.equal(fake.driveFiles.length, before + 3)
+  })
+
+  test('export .ics scaricabile dalle impostazioni', async () => {
+    const res = await admin.get('/api/google/calendar/export.ics')
+    assert.equal(res.status, 200)
+    assert.match(res.data, /BEGIN:VEVENT/)
+    assert.match(res.data, /DESCRIPTION:3394445555 lavatrice/)
   })
 })

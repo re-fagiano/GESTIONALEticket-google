@@ -26,6 +26,22 @@ export const googleExtension = ({ app, api, deps }) => {
   deps.hooks.calendar = (event, id) => sync.enqueue('calendar_item', id)
   deps.jobs.push({ start: sync.start, stop: sync.stop })
 
+  // Backup del Google Calendar dentro il backup quotidiano su Drive (anche con sincronizzazione spenta).
+  const calendarBackupFiles = async (context = {}) => {
+    if ((await google.getMode()) === 'none') return []
+    const account = await settings.get(ACCOUNT_KEY)
+    if (account && account.calendar === false) return []
+    const cfg = await sync.getConfig()
+    const calendarId = context.calendarId || cfg.calendarId
+    const { events, ics } = await sync.exportCalendar(calendarId)
+    const day = new Date().toISOString().slice(0, 16).replace('T', '-').replace(':', '')
+    return [
+      { fileName: `calendario-${day}.ics`, buffer: Buffer.from(ics, 'utf-8'), mimeType: 'text/calendar' },
+      { fileName: `calendario-${day}.json`, buffer: Buffer.from(JSON.stringify({ calendarId, exportedAt: new Date().toISOString(), events })), mimeType: 'application/json' },
+    ]
+  }
+  deps.backup?.addProvider?.(calendarBackupFiles)
+
   const redirectUri = (req) => `${config.PUBLIC_URL || `${req.protocol}://${req.get('host')}`}/api/google/callback`
 
   const router = Router()
@@ -100,6 +116,18 @@ export const googleExtension = ({ app, api, deps }) => {
 
   router.put('/calendar/settings', adminOnly, asyncHandler(async (req, res) => {
     const before = await sync.getConfig()
+    // Prima di accendere la sincronizzazione (o di passare da solo lettura a scrittura) salviamo
+    // una copia completa del calendario su Drive. Se il backup non riesce, non attiviamo nulla.
+    const willEnable = Boolean(req.body?.enabled ?? before.enabled)
+    const willWrite = willEnable && !(req.body?.readOnly ?? before.readOnly)
+    const wasWriting = before.enabled && !before.readOnly
+    if ((willEnable && !before.enabled) || (willWrite && !wasWriting)) {
+      const target = typeof req.body?.calendarId === 'string' && req.body.calendarId.trim() ? req.body.calendarId.trim() : before.calendarId
+      const result = await deps.backup.perform({ triggeredBy: 'pre-calendar-sync', context: { calendarId: target } })
+      if (!result.ok || result.mode !== 'drive' || !result.extraFiles?.some((f) => f.fileName.endsWith('.ics'))) {
+        throw new HttpError(503, `Backup del calendario non riuscito, sincronizzazione NON attivata: ${result.message || 'Google Drive non disponibile'}`, 'calendar_backup_failed')
+      }
+    }
     const next = await sync.updateSettings(req.body || {})
     // Appena attivato (o cambiato calendario) facciamo subito un giro completo.
     if (next.enabled && (!before.enabled || before.calendarId !== next.calendarId || JSON.stringify(before.pushTypes) !== JSON.stringify(next.pushTypes))) {
@@ -110,6 +138,16 @@ export const googleExtension = ({ app, api, deps }) => {
 
   router.post('/calendar/sync', adminOnly, asyncHandler(async (req, res) => {
     res.json(await sync.syncNow({ recreateDeleted: Boolean(req.body?.recreateDeleted) }))
+  }))
+
+  // Scarica subito una copia del calendario (.ics) da conservare o reimportare in Google Calendar.
+  router.get('/calendar/export.ics', adminOnly, asyncHandler(async (req, res) => {
+    if ((await google.getMode()) === 'none') throw badRequest('Account Google non collegato.', 'not_connected')
+    const cfg = await sync.getConfig()
+    const { ics } = await sync.exportCalendar(cfg.calendarId)
+    res.setHeader('Content-Type', 'text/calendar; charset=utf-8')
+    res.setHeader('Content-Disposition', `attachment; filename="calendario-${new Date().toISOString().slice(0, 10)}.ics"`)
+    res.send(ics)
   }))
 
   // Link all'evento Google (per il pulsante "Apri in Google Calendar"): visibile a tutti gli utenti.
