@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Bot, CalendarDays, Download, ExternalLink, FileSignature, FileText, MapPin, Package, Paperclip, Phone, Plus, Search, Trash2, Wrench } from 'lucide-react'
+import { BellRing, Bot, CalendarDays, Download, ExternalLink, FileSignature, FileText, MapPin, Package, Paperclip, Phone, Plus, Search, Trash2, Wrench } from 'lucide-react'
 import { api, qs, request } from '../lib/api'
 import { useAuth } from '../lib/auth'
 import { INTERVENTION_TYPES, MOVEMENT_REASONS, PAYMENT_METHODS, STATUSES, URGENCY, attachmentUrl, attachmentsOf, descriptionEntries, isOpen } from '../lib/domain'
@@ -8,6 +8,7 @@ import { fileSize, fmtDate, fmtDateTime, fmtEuro, fromLocalInput, newId, relativ
 import { navigate, useAsync, useShared } from '../lib/hooks'
 import CustomerPicker from '../components/CustomerPicker'
 import ReportModal from '../components/ReportModal'
+import NotifyCustomerModal from '../components/NotifyCustomerModal'
 import { Badge, Button, Card, EmptyState, ErrorBox, Input, Modal, Pagination, Select, Spinner, Stat, Tabs, Textarea, cx, useDebounced, useToast } from '../components/ui'
 
 const PAGE_SIZE = 25
@@ -244,6 +245,7 @@ function InterventionDrawer({ id, onClose, onChanged }) {
   const [extra, setExtra] = useState({})
   const [busy, setBusy] = useState('')
   const [reportOpen, setReportOpen] = useState(false)
+  const [notifyOpen, setNotifyOpen] = useState(false)
 
   useEffect(() => { if (item) setExtra(item.additionalData || {}) }, [item])
 
@@ -331,12 +333,14 @@ function InterventionDrawer({ id, onClose, onChanged }) {
       footer={item && <>
         {isAdmin && <Button variant="dangerGhost" icon={Trash2} onClick={remove} className="mr-auto">Elimina</Button>}
         {googleLink.data?.htmlLink && <a href={googleLink.data.htmlLink} target="_blank" rel="noreferrer"><Button variant="ghost" icon={CalendarDays}>Google Calendar</Button></a>}
+        {canEdit && <Button variant="secondary" icon={BellRing} onClick={() => setNotifyOpen(true)}>Avvisa cliente</Button>}
         {canEdit && item.type === 'chiamata' && isOpen(item) && <Button variant="secondary" icon={Wrench} onClick={convert} loading={busy === 'convert'}>Porta in laboratorio (riparazione)</Button>}
         <Button variant="secondary" onClick={onClose}>Chiudi</Button>
       </>}
     >
       {loading && !item && <Spinner />}
       <ErrorBox error={error} onRetry={reload} />
+      {item && notifyOpen && <NotifyCustomerModal item={item} customer={customer} onClose={() => setNotifyOpen(false)} onSent={reload} />}
       {item && reportOpen && (
         <ReportModal
           intervention={item}
@@ -466,6 +470,8 @@ function InterventionDrawer({ id, onClose, onChanged }) {
                   intervento_creato: 'creato', status_changed: log.note, assigned_operator: `assegnato a ${operatorName(log.note) || log.note}`,
                   note_added: 'nota aggiunta', converted_to_repair: 'convertito in riparazione', created_from_call: 'creato da chiamata',
                   importato_da_google: 'importato da Google Calendar', spostato_da_google: 'spostato su Google Calendar',
+                  rapportino_creato: `rapportino ${log.note}`, rapportino_aggiornato: `rapportino aggiornato ${log.note}`,
+                  cliente_avvisato: `cliente avvisato (${log.note})`,
                 }[log.action] || log.action}</li>
               ))}
             </ul>

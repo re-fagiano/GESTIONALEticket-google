@@ -14,6 +14,7 @@ import { interventionRoutes } from './routes/interventions.js'
 import { inventoryImportRoute, inventoryRoutes } from './routes/inventory.js'
 import { legacyRoutes } from './routes/legacy.js'
 import { reportRoutes } from './routes/reports.js'
+import { publicLinkRoutes, publicStatusRoutes } from './routes/publicStatus.js'
 import { ticketRoutes } from './routes/tickets.js'
 import { createFileStore } from './services/files.js'
 
@@ -53,6 +54,8 @@ export const createApp = ({ db, config, logger, backup, google, settings, extens
   app.use('/api', express.json({ limit: '30mb' }))
 
   app.use('/api/auth', authRoutes(deps))
+  // Pagina di stato per i clienti: senza login, solo con il token del link.
+  app.use('/api/public', publicStatusRoutes(deps))
 
   const api = express.Router()
   api.use(auth.requireUser, auth.requireCsrf, auth.viewerReadOnly)
@@ -78,6 +81,7 @@ export const createApp = ({ db, config, logger, backup, google, settings, extens
   const interventionHooks = { onChange: (...args) => deps.hooks?.interventions?.(...args) }
   api.use('/', interventionRoutes({ ...deps, hooks: interventionHooks }))
   api.use('/', reportRoutes({ ...deps, hooks: interventionHooks }))
+  api.use('/', publicLinkRoutes(deps))
   api.post('/inventory/import', auth.requireRole('ADMIN', 'OPERATOR'), inventoryImportRoute(deps))
   api.use('/inventory', inventoryRoutes(deps))
   api.use('/magazzino', inventoryRoutes(deps))
