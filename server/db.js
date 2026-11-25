@@ -13,6 +13,12 @@ export const createDb = (connectionString, { max = 10 } = {}) => {
   // timezone=UTC: le colonne TIMESTAMP(3) (senza fuso) sono sempre in UTC, anche per NOW() lato database.
   const pool = new pg.Pool({ connectionString, max, options: '-c timezone=UTC', ...(useSsl ? { ssl: { rejectUnauthorized: false } } : {}) })
 
+  // Una connessione inattiva chiusa da Postgres (riavvio, cambio password, manutenzione) emette un errore
+  // sul pool: senza questo gestore farebbe cadere tutto il server. Il pool ne apre un'altra da solo.
+  pool.on('error', (error) => {
+    if (process.env.LOG_SILENT !== '1') console.warn(JSON.stringify({ ts: new Date().toISOString(), level: 'warn', message: 'db_idle_connection_lost', error: error.message }))
+  })
+
   const query = async (text, params = []) => (await pool.query(text, params)).rows
   const one = async (text, params = []) => (await pool.query(text, params)).rows[0] || null
 
