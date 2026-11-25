@@ -62,10 +62,18 @@ const offlineDiagnosis = (text) => {
   return `Diagnosi rapida (offline):\n- ${hints.join('\n- ')}`
 }
 
+// Testo per la diagnosi: descrizione + campi dell'apparecchio (marca, modello, difetto).
+const diagnosisText = (description, data = {}) => [
+  description,
+  data.defect ? `Difetto: ${data.defect}` : '',
+  [data.applianceBrand, data.applianceModel].filter(Boolean).length ? `Apparecchio: ${[data.applianceBrand, data.applianceModel].filter(Boolean).join(' ')}` : '',
+  data.serialNumber ? `Matricola: ${data.serialNumber}` : '',
+].filter((part) => String(part || '').trim()).join('\n')
+
 function AiDiagnosis({ subject, description }) {
   const [state, setState] = useState({ loading: false, text: '', error: '' })
   const run = async () => {
-    if (!description.trim()) return setState({ loading: false, text: '', error: 'Scrivi prima la descrizione del problema.' })
+    if (!description.trim()) return setState({ loading: false, text: '', error: 'Scrivi prima il problema (descrizione o difetto segnalato).' })
     setState({ loading: true, text: '', error: '' })
     try {
       const data = await api.post('/api/deepseek', {
@@ -155,7 +163,7 @@ function NewInterventionModal({ type, onClose, onCreated, defaults = {} }) {
           <input type="file" multiple accept="image/*,application/pdf" onChange={(e) => setFiles([...(e.target.files || [])])} className="block w-full text-sm" />
           {files.length > 0 && <p className="mt-1 text-xs text-slate-500">{files.length} file · {fileSize(files.reduce((sum, f) => sum + f.size, 0))}</p>}
         </div>
-        {(type === 'chiamata' || type === 'riparazione') && <AiDiagnosis subject={`${meta.singular} ${form.additionalData.applianceBrand || ''}`} description={form.description} />}
+        {(type === 'chiamata' || type === 'riparazione') && <AiDiagnosis subject={`${meta.singular} ${form.additionalData.applianceBrand || ''} ${form.additionalData.applianceModel || ''}`} description={diagnosisText(form.description, form.additionalData)} />}
       </div>
     </Modal>
   )
@@ -379,7 +387,7 @@ function InterventionDrawer({ id, onClose, onChanged }) {
                 </div>
               </div>
             )}
-            {(item.type === 'chiamata' || item.type === 'riparazione') && <AiDiagnosis subject={`${meta.singular} ${item.additionalData?.applianceBrand || ''} ${item.additionalData?.applianceModel || ''}`} description={descriptionEntries(item).map((e) => e.text).join('\n')} />}
+            {(item.type === 'chiamata' || item.type === 'riparazione') && <AiDiagnosis subject={`${meta.singular} ${item.additionalData?.applianceBrand || ''} ${item.additionalData?.applianceModel || ''}`} description={diagnosisText(descriptionEntries(item).map((e) => e.text).join('\n'), item.additionalData)} />}
           </section>
 
           {attachmentsOf(item).length > 0 && (
