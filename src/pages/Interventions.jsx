@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Bot, CalendarDays, Download, ExternalLink, FileText, MapPin, Package, Paperclip, Phone, Plus, Search, Trash2, Wrench } from 'lucide-react'
+import { Bot, CalendarDays, Download, ExternalLink, FileSignature, FileText, MapPin, Package, Paperclip, Phone, Plus, Search, Trash2, Wrench } from 'lucide-react'
 import { api, qs, request } from '../lib/api'
 import { useAuth } from '../lib/auth'
-import { INTERVENTION_TYPES, MOVEMENT_REASONS, STATUSES, URGENCY, attachmentUrl, attachmentsOf, descriptionEntries, isOpen } from '../lib/domain'
+import { INTERVENTION_TYPES, MOVEMENT_REASONS, PAYMENT_METHODS, STATUSES, URGENCY, attachmentUrl, attachmentsOf, descriptionEntries, isOpen } from '../lib/domain'
 import { uploadFile } from '../lib/files'
 import { fileSize, fmtDate, fmtDateTime, fmtEuro, fromLocalInput, newId, relativeDays, toLocalInput } from '../lib/format'
 import { navigate, useAsync, useShared } from '../lib/hooks'
 import CustomerPicker from '../components/CustomerPicker'
+import ReportModal from '../components/ReportModal'
 import { Badge, Button, Card, EmptyState, ErrorBox, Input, Modal, Pagination, Select, Spinner, Stat, Tabs, Textarea, cx, useDebounced, useToast } from '../components/ui'
 
 const PAGE_SIZE = 25
@@ -242,6 +243,7 @@ function InterventionDrawer({ id, onClose, onChanged }) {
   const [files, setFiles] = useState([])
   const [extra, setExtra] = useState({})
   const [busy, setBusy] = useState('')
+  const [reportOpen, setReportOpen] = useState(false)
 
   useEffect(() => { if (item) setExtra(item.additionalData || {}) }, [item])
 
@@ -335,6 +337,14 @@ function InterventionDrawer({ id, onClose, onChanged }) {
     >
       {loading && !item && <Spinner />}
       <ErrorBox error={error} onRetry={reload} />
+      {item && reportOpen && (
+        <ReportModal
+          intervention={item}
+          customer={customer}
+          onClose={() => setReportOpen(false)}
+          onSaved={(updated) => { setData(updated); onChanged(updated); setReportOpen(false) }}
+        />
+      )}
       {item && (
         <div className="space-y-6">
           {item.additionalData?.source === 'google' && (
@@ -398,6 +408,29 @@ function InterventionDrawer({ id, onClose, onChanged }) {
             )}
             {(item.type === 'chiamata' || item.type === 'riparazione') && <AiDiagnosis subject={`${meta.singular} ${item.additionalData?.applianceBrand || ''} ${item.additionalData?.applianceModel || ''}`} description={diagnosisText(descriptionEntries(item).map((e) => e.text).join('\n'), item.additionalData)} />}
           </section>
+
+          {(item.type === 'chiamata' || item.type === 'riparazione') && (
+            <section className="space-y-2">
+              <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-700"><FileSignature className="h-4 w-4" /> Rapportino</h3>
+              {item.additionalData?.report ? (
+                <Card className="flex flex-wrap items-center gap-x-5 gap-y-2 p-3 text-sm">
+                  <div>
+                    <div className="font-semibold text-slate-900">N. {item.additionalData.report.number} · {fmtEuro(item.additionalData.report.total)}</div>
+                    <div className="text-xs text-slate-500">
+                      {item.additionalData.report.signerName ? `Firmato da ${item.additionalData.report.signerName}` : 'Senza firma'} · {fmtDateTime(item.additionalData.report.updatedAt)}
+                      {item.additionalData.report.paymentMethod && ` · ${Object.fromEntries(PAYMENT_METHODS)[item.additionalData.report.paymentMethod]}`}
+                    </div>
+                  </div>
+                  <div className="ml-auto flex gap-2">
+                    <a href={`/api/files/${item.additionalData.report.pdfFileId}`} target="_blank" rel="noreferrer"><Button size="sm" variant="secondary" icon={FileText}>Apri PDF</Button></a>
+                    {canEdit && <Button size="sm" variant="ghost" onClick={() => setReportOpen(true)}>Modifica</Button>}
+                  </div>
+                </Card>
+              ) : canEdit ? (
+                <Button variant="secondary" icon={FileSignature} onClick={() => setReportOpen(true)}>Crea rapportino con firma del cliente</Button>
+              ) : <p className="text-sm text-slate-500">Nessun rapportino.</p>}
+            </section>
+          )}
 
           {attachmentsOf(item).length > 0 && (
             <section className="space-y-2">

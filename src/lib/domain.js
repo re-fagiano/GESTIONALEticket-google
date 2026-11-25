@@ -64,3 +64,9 @@ export const textOn = (hex = '#000000') => {
   const [r, g, b] = [0, 2, 4].map((i) => parseInt(value.slice(i, i + 2), 16))
   return (r * 299 + g * 587 + b * 114) / 1000 > 160 ? '#1e293b' : '#ffffff'
 }
+
+// Metodi di pagamento del rapportino (stessi codici usati dal server).
+export const PAYMENT_METHODS = [
+  ['', '— non indicato —'], ['contanti', 'Contanti'], ['carta', 'Carta / bancomat'], ['bonifico', 'Bonifico'],
+  ['da_fatturare', 'Da fatturare'], ['garanzia', 'In garanzia'], ['gia_pagato', 'Già pagato'],
+]
