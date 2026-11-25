@@ -3,6 +3,21 @@
 Gestionale per il laboratorio di riparazione elettrodomestici: clienti, chiamate, riparazioni, ordini ricambi,
 preventivi, calendario e magazzino. Frontend React (Vite) + backend Node/Express su PostgreSQL, pubblicato su Railway.
 
+## Interfaccia (v2)
+
+![Magazzino](docs/screenshots/07-magazzino.png)
+
+- **Dashboard**: appuntamenti di oggi, urgenze, interventi assegnati a me, articoli sotto scorta, avviso se il backup non è attivo.
+- **Chiamate / Riparazioni / Ordini ricambi / Preventivi**: elenco con stato, urgenza, operatore e ricerca; scheda con note firmate,
+  foto/documenti, diagnosi AI, **ricambi scaricati dal magazzino** collegati all'intervento, conversione chiamata → riparazione.
+- **Clienti**: ricerca istantanea, scheda con storico interventi, chiamata e mappa con un tocco, creazione rapida dagli interventi.
+- **Calendario**: settimana/giorno/mese/elenco, trascina per spostare, clic su uno spazio libero per creare.
+- **Magazzino**: ricerca anche da lettore di codici a barre (Invio apre l'articolo o propone di crearlo), +/− rapidi,
+  carico/scarico con causale, storico movimenti, import con anteprima, export per Excel.
+- **Impostazioni**: utenti e richieste di accesso, backup, codice operatore, recupero dei dati rimasti nel browser dalla vecchia versione.
+
+Percorsi: `#/dashboard`, `#/clienti`, `#/chiamate`, `#/riparazioni`, `#/ordini`, `#/preventivi`, `#/calendario`, `#/magazzino`, `#/impostazioni`.
+
 ## Struttura
 
 ```
@@ -14,6 +29,9 @@ server/            backend v2 (Express + pg, SQL esplicito)
   middleware/      autenticazione JWT + CSRF, sicurezza, rate limit
 prisma/migrations/ migrazioni SQL (applicate con `prisma migrate deploy`)
 src/               frontend React
+  lib/             client API, routing, formattazione, vocabolario del dominio
+  components/      UI di base, selettore clienti
+  pages/           Dashboard, Clienti, Interventi, Calendario, Magazzino, Impostazioni
 tests/             test automatici del backend (database Postgres reale)
 ```
 

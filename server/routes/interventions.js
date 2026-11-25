@@ -80,22 +80,61 @@ export const interventionRoutes = ({ db, auth, hooks = {} }) => {
     if (INTERVENTION_TYPES.includes(type)) { params.push(type); where.push(`i."type" = $${params.length}`) }
     const status = str(req.query.status)
     if (INTERVENTION_STATUSES.includes(status)) { params.push(status); where.push(`i."status" = $${params.length}`) }
+    if (str(req.query.open) === '1') where.push(`i."status" IN ('pendente', 'in_lavorazione')`)
     const customerId = str(req.query.customerId || req.query.clientId)
     if (customerId) { params.push(customerId); where.push(`i."customerId" = $${params.length}`) }
+    const urgency = int(req.query.urgency, 0)
+    if ([1, 2, 3].includes(urgency)) { params.push(urgency); where.push(`i."priority" = $${params.length}`) }
+    const assignedToId = str(req.query.assignedToId)
+    if (assignedToId === 'none') where.push('i."assignedToId" IS NULL')
+    else if (assignedToId) { params.push(assignedToId); where.push(`i."assignedToId" = $${params.length}`) }
+    const from = iso(req.query.from)
+    if (from) { params.push(from); where.push(`i."openedAt" >= $${params.length}`) }
+    const to = iso(req.query.to)
+    if (to) { params.push(to); where.push(`i."openedAt" <= $${params.length}`) }
     for (const term of searchTerms(q)) {
       params.push(`%${escapeLike(term)}%`)
       const p = `$${params.length}`
       where.push(`(lower(i."code") LIKE ${p} OR lower(coalesce(i."description",'')) LIKE ${p} OR lower(c."name") LIKE ${p})`)
     }
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : ''
+    if (str(req.query.withTotal) === '1') {
+      const total = await db.one(`SELECT COUNT(*)::int AS n FROM "interventions" i JOIN "customers" c ON c."id" = i."customerId" ${whereSql}`, params)
+      res.setHeader('X-Total-Count', String(total?.n ?? 0))
+    }
+    // Gli allegati (base64) possono essere pesanti: nell'elenco mandiamo solo il loro numero.
+    const light = str(req.query.light) === '1'
     params.push(take, skip)
     const rows = await db.query(
-      `SELECT i.*, c."name" AS "customerName" FROM "interventions" i JOIN "customers" c ON c."id" = i."customerId"
-       ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+      `SELECT i.*, c."name" AS "customerName", c."phone" AS "customerPhone" FROM "interventions" i JOIN "customers" c ON c."id" = i."customerId"
+       ${whereSql}
        ORDER BY ${sortColumn} ${order}, i."id" LIMIT $${params.length - 1} OFFSET $${params.length}`,
       params,
     )
-    res.json(rows.map((row) => mapIntervention(row)))
+    res.json(rows.map((row) => {
+      const mapped = mapIntervention(row)
+      if (row.customerPhone !== undefined) mapped.customerPhone = row.customerPhone || ''
+      if (light && mapped.additionalData) {
+        const { attachments, files, ...rest } = mapped.additionalData
+        const count = (Array.isArray(attachments) ? attachments.length : 0) + (Array.isArray(files) ? files.length : 0)
+        mapped.additionalData = { ...rest, attachmentsCount: count }
+      }
+      return mapped
+    }))
   })
+
+  // Contatori per la dashboard (aperti per tipo, urgenti, da assegnare, appuntamenti di oggi).
+  router.get('/interventions/stats', asyncHandler(async (req, res) => {
+    const rows = await db.query(`
+      SELECT "type",
+             COUNT(*) FILTER (WHERE "status" IN ('pendente','in_lavorazione'))::int AS "open",
+             COUNT(*) FILTER (WHERE "status" IN ('pendente','in_lavorazione') AND "priority" = 3)::int AS "urgent",
+             COUNT(*) FILTER (WHERE "status" IN ('pendente','in_lavorazione') AND "assignedToId" IS NULL)::int AS "unassigned",
+             COUNT(*) FILTER (WHERE "status" = 'completato' AND "closedAt" >= date_trunc('month', NOW()))::int AS "closedThisMonth",
+             COUNT(*)::int AS "total"
+      FROM "interventions" GROUP BY "type"`)
+    res.json(Object.fromEntries(rows.map((row) => [row.type, row])))
+  }))
 
   router.get('/interventions', list())
   router.get('/chiamate', list('chiamata'))
@@ -146,7 +185,7 @@ export const interventionRoutes = ({ db, auth, hooks = {} }) => {
       const set = {}
       const logs = []
 
-      const partialKeys = ['status', 'priority', 'urgency', 'assignedToId', 'assignedTo', 'description', 'notes', 'note']
+      const partialKeys = ['status', 'priority', 'urgency', 'assignedToId', 'assignedTo', 'description', 'notes', 'note', 'additionalData', 'openedAt']
       const isPartial = partialKeys.some((key) => body[key] !== undefined) && body.type === undefined
 
       if (isPartial) {

@@ -25,19 +25,19 @@ const inspectFile = (fullPath) => {
     issues.push(`${path.relative(process.cwd(), fullPath)}: trovato uso non valido di icona chiamata come funzione (es. faPlus())`);
   }
 
-  if (/from\s+['\"]react-icons\/fa(?:6)?['\"]/.test(content) && /import\s*\{[^}]*\bfa[A-Z]\w*/.test(content)) {
+  if (/from\s+['"]react-icons\/fa(?:6)?['"]/.test(content) && /import\s*\{[^}]*\bfa[A-Z]\w*/.test(content)) {
     issues.push(`${path.relative(process.cwd(), fullPath)}: import errato da react-icons/fa (usa componenti con prefisso Fa...)`);
   }
 
-  if (/import\s*\{[^}]*\bfa[A-Z]\w*\b[^}]*\}\s*from\s+['\"]react-icons\/fa(?:6)?['\"]/.test(content)) {
+  if (/import\s*\{[^}]*\bfa[A-Z]\w*\b[^}]*\}\s*from\s+['"]react-icons\/fa(?:6)?['"]/.test(content)) {
     issues.push(`${path.relative(process.cwd(), fullPath)}: import errato da react-icons/fa con nome minuscolo (es. faPlus). Usa FaPlus`);
   }
 
-  if (/import\s+fa\s+from\s+['\"]date-fns\/locale\/(?:fa|fa-IR)['\"]/.test(content)) {
+  if (/import\s+fa\s+from\s+['"]date-fns\/locale\/(?:fa|fa-IR)['"]/.test(content)) {
     issues.push(`${path.relative(process.cwd(), fullPath)}: import locale date-fns non valido (usa faIR da 'date-fns/locale/fa-IR')`);
   }
 
-  if (/from\s+['\"]date-fns\/locale\/(?:fa|fa-IR)['\"]/.test(content) && /\bfa\s*\(/.test(content)) {
+  if (/from\s+['"]date-fns\/locale\/(?:fa|fa-IR)['"]/.test(content) && /\bfa\s*\(/.test(content)) {
     issues.push(`${path.relative(process.cwd(), fullPath)}: locale date-fns fa/fa-IR usata come funzione (usa { locale: faIR })`);
   }
 };
