@@ -9,10 +9,12 @@ import { aiRoutes } from './routes/ai.js'
 import { authRoutes } from './routes/auth.js'
 import { calendarRoutes } from './routes/calendar.js'
 import { customerRoutes } from './routes/customers.js'
+import { fileRoutes } from './routes/files.js'
 import { interventionRoutes } from './routes/interventions.js'
 import { inventoryImportRoute, inventoryRoutes } from './routes/inventory.js'
 import { legacyRoutes } from './routes/legacy.js'
 import { ticketRoutes } from './routes/tickets.js'
+import { createFileStore } from './services/files.js'
 
 // Crea l'applicazione Express. Tutte le dipendenze sono passate dall'esterno (database, Google,
 // backup, logger) così i test possono usare un database di prova e servizi finti.
@@ -23,7 +25,16 @@ export const createApp = ({ db, config, logger, backup, google, settings, extens
 
   const auth = createAuth(config)
   const rateLimit = createRateLimiter(db, logger)
-  const deps = { db, config, logger, backup, google, settings, auth, rateLimit, fetchImpl, hooks: {}, jobs: [] }
+  const files = createFileStore({ db, logger })
+  const deps = { db, config, logger, backup, google, settings, auth, rateLimit, fetchImpl, files, hooks: {}, jobs: [] }
+  // Allegati: copia incrementale su Drive col backup quotidiano + spostamento una tantum dei vecchi base64.
+  backup?.addProvider?.(() => files.backupProvider())
+  deps.jobs.push({
+    start: () => {
+      const timer = setTimeout(() => files.migrateInlineAttachments().catch((error) => logger.error('inline_attachments_migration_failed', { error: error.message })), 20_000)
+      timer.unref?.()
+    },
+  })
 
   app.use(securityHeaders(config))
   app.use(httpsRedirect(config))
@@ -37,7 +48,7 @@ export const createApp = ({ db, config, logger, backup, google, settings, extens
     }
   })
 
-  // Gli allegati degli interventi viaggiano come base64 dentro additionalData: serve un limite ampio.
+  // Gli allegati ora viaggiano a parte (/api/files); il limite resta ampio per i vecchi client e gli import.
   app.use('/api', express.json({ limit: '30mb' }))
 
   app.use('/api/auth', authRoutes(deps))
@@ -62,6 +73,7 @@ export const createApp = ({ db, config, logger, backup, google, settings, extens
   api.use('/customers', customerRoutes(deps))
   api.use('/clienti', customerRoutes(deps))
   api.use('/tickets', ticketRoutes(deps))
+  api.use('/files', fileRoutes(deps))
   const interventionHooks = { onChange: (...args) => deps.hooks?.interventions?.(...args) }
   api.use('/', interventionRoutes({ ...deps, hooks: interventionHooks }))
   api.post('/inventory/import', auth.requireRole('ADMIN', 'OPERATOR'), inventoryImportRoute(deps))

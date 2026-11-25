@@ -44,8 +44,13 @@ export const descriptionEntries = (intervention) => {
 export const attachmentsOf = (intervention) => {
   const data = intervention?.additionalData || {}
   const list = Array.isArray(data.attachments) ? data.attachments : (Array.isArray(data.files) ? data.files : [])
-  return list.filter((item) => item && typeof item.dataUrl === 'string' && item.dataUrl)
+  return list.filter((item) => item && (item.fileId || (typeof item.dataUrl === 'string' && item.dataUrl)))
 }
+
+// Indirizzo di un allegato: file sul server (nuovo) o vecchio data URL in base64.
+export const attachmentUrl = (attachment, { download = false } = {}) => (attachment?.fileId
+  ? `/api/files/${encodeURIComponent(attachment.fileId)}${download ? '?download=1' : ''}`
+  : attachment?.dataUrl || '')
 
 // Colori degli eventi di Google Calendar (id → tinta mostrata da Google).
 export const GOOGLE_EVENT_COLORS = {

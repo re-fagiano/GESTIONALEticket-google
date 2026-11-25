@@ -32,7 +32,8 @@ const refreshSession = () => {
 export const request = async (method, path, body, { retry = true, raw = false, signal } = {}) => {
   const headers = {}
   const isForm = body instanceof FormData
-  if (body !== undefined && !isForm) headers['Content-Type'] = 'application/json'
+  const isBlob = typeof Blob !== 'undefined' && body instanceof Blob
+  if (body !== undefined && !isForm) headers['Content-Type'] = isBlob ? (body.type || 'application/octet-stream') : 'application/json'
   if (!['GET', 'HEAD'].includes(method)) headers['X-CSRF-Token'] = csrfToken()
 
   let response
@@ -41,7 +42,7 @@ export const request = async (method, path, body, { retry = true, raw = false, s
       method,
       headers,
       credentials: 'include',
-      body: body === undefined ? undefined : (isForm ? body : JSON.stringify(body)),
+      body: body === undefined ? undefined : (isForm || isBlob ? body : JSON.stringify(body)),
       signal,
     })
   } catch (error) {

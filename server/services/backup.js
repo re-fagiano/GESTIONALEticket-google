@@ -60,6 +60,28 @@ export const createBackupService = ({ db, google, config, logger }) => {
     return created?.id || ''
   }
 
+  // Sottocartella (es. "allegati") dentro la cartella dei backup: i file qui non vengono mai potati,
+  // perché ogni allegato viene caricato una sola volta (backup incrementale).
+  const subfolders = new Map()
+  const ensureSubfolder = async (parentId, name) => {
+    const key = `${parentId}/${name}`
+    if (subfolders.has(key)) return subfolders.get(key)
+    const q = encodeURIComponent(`name='${name.replace(/'/g, "\\'")}' and '${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`)
+    const existing = await google.request({ scopes: GOOGLE_SCOPES.drive, url: `/drive/v3/files?q=${q}&fields=files(id,name)&pageSize=1&supportsAllDrives=true&includeItemsFromAllDrives=true` })
+    let id = existing?.files?.[0]?.id
+    if (!id) {
+      const created = await google.request({
+        scopes: GOOGLE_SCOPES.drive,
+        method: 'POST',
+        url: '/drive/v3/files?fields=id&supportsAllDrives=true',
+        body: { name, mimeType: 'application/vnd.google-apps.folder', ...(parentId ? { parents: [parentId] } : {}) },
+      })
+      id = created?.id || parentId
+    }
+    subfolders.set(key, id)
+    return id
+  }
+
   const upload = async ({ fileName, buffer, folderId, mimeType = 'application/json' }) => {
     const boundary = `fixlab-${Date.now()}`
     const metadata = JSON.stringify({ name: fileName, mimeType, ...(folderId ? { parents: [folderId] } : {}) })
@@ -117,11 +139,15 @@ export const createBackupService = ({ db, google, config, logger }) => {
       const created = await upload({ fileName, buffer: Buffer.from(JSON.stringify(payload)), folderId })
       const extraFiles = []
       const extraErrors = []
+      let extraCount = 0
       for (const provider of providers) {
         try {
           for (const file of (await provider(context)) || []) {
-            const saved = await upload({ ...file, folderId })
-            extraFiles.push({ fileName: file.fileName, driveFileId: saved?.id || '' })
+            const target = file.folder ? await ensureSubfolder(folderId, file.folder) : folderId
+            const saved = await upload({ fileName: file.fileName, buffer: file.buffer, mimeType: file.mimeType, folderId: target })
+            await file.onUploaded?.(saved?.id || '')
+            if (!file.folder) extraFiles.push({ fileName: file.fileName, driveFileId: saved?.id || '' })
+            else extraCount += 1
           }
         } catch (error) {
           extraErrors.push(error.message)
@@ -129,9 +155,9 @@ export const createBackupService = ({ db, google, config, logger }) => {
         }
       }
       const pruned = await prune(folderId).catch(() => 0)
-      const allNames = [fileName, ...extraFiles.map((f) => f.fileName)].join(', ')
+      const allNames = [fileName, ...extraFiles.map((f) => f.fileName), ...(extraCount ? [`${extraCount} allegati nuovi`] : [])].join(', ')
       if (extraErrors.length) {
-        const message = `Database salvato, ma backup del calendario non riuscito: ${extraErrors[0]}`
+        const message = `Database salvato, ma backup aggiuntivo (calendario/allegati) non riuscito: ${extraErrors[0]}`
         await storeRun({ status: 'failed', fileName: allNames, driveFileId: created?.id || null, errorMessage: message })
         return { ok: false, mode: 'failed', fileName, exportedAt: payload.exportedAt, message, extraFiles }
       }
