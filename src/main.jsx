@@ -1,90 +1,41 @@
-import React, { StrictMode } from 'react'
+import { Component, StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App'
 import './index.css'
-import { clearAllClientData } from './services/clientStorage'
 
-const STORAGE_VERSION = 'v3'
-const APP_VERSION_KEY = '__app_version__'
-const LEGACY_DB_NAMES = ['gestionale-ticket-db']
-const SAFE_BOOT = true
-
-const resetStorageOnVersionMismatch = () => {
-  if (typeof window === 'undefined') return
-
-  const storedVersion = window.localStorage?.getItem(APP_VERSION_KEY)
-  if (storedVersion === STORAGE_VERSION) return
-
-  console.warn('STORAGE VERSION MISMATCH — RESET')
-  window.localStorage?.clear()
-
-  if (window.indexedDB) {
-    LEGACY_DB_NAMES.forEach((dbName) => {
-      window.indexedDB.deleteDatabase(dbName)
-    })
-  }
-
-  window.localStorage?.setItem(APP_VERSION_KEY, STORAGE_VERSION)
-}
-
-resetStorageOnVersionMismatch()
-
-// rehydrate DISABILITATO per debug
-if (!SAFE_BOOT) {
-  // rehydrate()
-}
-
-class RootErrorBoundary extends React.Component {
+class ErrorBoundary extends Component {
   constructor(props) {
     super(props)
-    this.state = { hasError: false, message: '' }
+    this.state = { error: null }
   }
 
   static getDerivedStateFromError(error) {
-    return { hasError: true, message: error?.message || 'Errore applicativo inatteso.' }
+    return { error }
   }
 
   componentDidCatch(error, info) {
-    console.error('ERROR_BOUNDARY_CAUGHT', error, info)
-  }
-
-  handleReload = async () => {
-    await clearAllClientData()
-    window.location.reload()
+    console.error('Errore applicazione', error, info)
   }
 
   render() {
-    if (this.state.hasError) {
-      return (
-        <div className="min-h-screen bg-slate-100 flex items-center justify-center p-6">
-          <div className="bg-white shadow-md rounded-lg p-6 max-w-lg w-full space-y-3 border border-slate-200">
-            <h1 className="text-xl font-bold text-red-600">Qualcosa è andato storto</h1>
-            <p className="text-sm text-slate-700">L&apos;app non è riuscita ad avviarsi correttamente.</p>
-            <p className="text-xs text-slate-500 break-all">{this.state.message}</p>
-            <div className="flex flex-wrap gap-2">
-              <button onClick={this.handleReload} className="px-4 py-2 bg-red-600 text-white rounded text-sm">Svuota dati locali e ricarica</button>
-              <button onClick={() => window.location.reload()} className="px-4 py-2 bg-slate-200 text-slate-800 rounded text-sm">Riprova</button>
-            </div>
-          </div>
+    if (!this.state.error) return this.props.children
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-100 p-6">
+        <div className="max-w-lg space-y-3 rounded-xl border border-slate-200 bg-white p-6 shadow">
+          <h1 className="text-lg font-bold text-red-600">Qualcosa è andato storto</h1>
+          <p className="text-sm text-slate-600">I dati sono al sicuro sul server. Ricarica la pagina per continuare.</p>
+          <p className="break-all text-xs text-slate-400">{this.state.error.message}</p>
+          <button type="button" onClick={() => window.location.reload()} className="rounded-lg bg-slate-900 px-4 py-2 text-sm text-white">Ricarica</button>
         </div>
-      )
-    }
-    return this.props.children
+      </div>
+    )
   }
 }
 
-window.addEventListener('unhandledrejection', (event) => {
-  console.error('Promise non gestita:', event.reason)
-})
-
-window.addEventListener('error', (event) => {
-  console.error('GLOBAL_ERROR', event.error)
-})
-
 createRoot(document.getElementById('root')).render(
   <StrictMode>
-    <RootErrorBoundary>
+    <ErrorBoundary>
       <App />
-    </RootErrorBoundary>
+    </ErrorBoundary>
   </StrictMode>,
 )

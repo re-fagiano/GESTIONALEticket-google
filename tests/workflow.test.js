@@ -99,6 +99,23 @@ describe('clienti, ticket, interventi, calendario, backup', () => {
     assert.ok('alternateCodes' in res.data.inventory[0])
   })
 
+  test('filtri elenco interventi, contatori dashboard, elenco operatori', async () => {
+    const operators = await admin.get('/api/users/operators')
+    assert.ok(operators.data.some((u) => u.id === admin.user.id))
+    assert.ok(!('passwordHash' in operators.data[0]))
+    await admin.post('/api/interventions', { clientId: customer.id, type: 'riparazione', urgency: 3, assignedToId: admin.user.id, openedAt: '2026-12-10T08:00:00.000Z', additionalData: { attachments: [{ id: 'a', fileName: 'foto.jpg', dataUrl: 'data:image/jpeg;base64,AAAA' }] } })
+    const urgentMine = await admin.get(`/api/interventions?type=riparazione&open=1&urgency=3&assignedToId=${admin.user.id}&light=1&withTotal=1`)
+    assert.equal(urgentMine.status, 200)
+    assert.ok(Number(urgentMine.headers.get('x-total-count')) >= 1)
+    assert.ok(urgentMine.data.every((i) => i.urgency === 3 && i.assignedToId === admin.user.id))
+    assert.equal(urgentMine.data[0].additionalData.attachments, undefined, 'light=1 non manda gli allegati')
+    assert.equal(urgentMine.data[0].additionalData.attachmentsCount, 1)
+    const inRange = await admin.get('/api/interventions?from=2026-12-10T00:00:00.000Z&to=2026-12-11T00:00:00.000Z')
+    assert.equal(inRange.data.length, 1)
+    const stats = await admin.get('/api/interventions/stats')
+    assert.ok(stats.data.riparazione.urgent >= 1)
+  })
+
   test('le date scritte dal database sono in UTC (nessuno spostamento di fuso)', async () => {
     const before = Date.now()
     const item = (await admin.post('/api/inventory', { code: 'TZ-1', name: 'Orario' })).data

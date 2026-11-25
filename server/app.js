@@ -52,6 +52,13 @@ export const createApp = ({ db, config, logger, backup, google, settings, extens
   }))
 
   api.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }))
+  // Elenco operatori attivi (per assegnare interventi): visibile a tutti gli utenti autenticati.
+  api.get('/users/operators', async (req, res, next) => {
+    try {
+      const rows = await db.query(`SELECT "id", "email", "operatorCode", "role" FROM "users" WHERE "approved" = true AND "status" <> 'disabled' AND "role" <> 'VIEWER' ORDER BY "email"`)
+      res.json(rows)
+    } catch (error) { next(error) }
+  })
   api.use('/customers', customerRoutes(deps))
   api.use('/clienti', customerRoutes(deps))
   api.use('/tickets', ticketRoutes(deps))
