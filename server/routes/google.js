@@ -9,6 +9,9 @@ import { createCalendarSync } from '../services/calendarSync.js'
 const REFRESH_KEY = 'google.oauth.refreshToken'
 const ACCOUNT_KEY = 'google.oauth.account'
 const STATE_COOKIE = 'google_oauth_state'
+const PENDING_KEY = 'google.oauth.pending'
+const CONSENT_MINUTES = 30
+const sha256 = (value) => crypto.createHash('sha256').update(String(value)).digest('hex')
 const OAUTH_SCOPES = ['openid', 'email', GOOGLE_SCOPES.calendar, GOOGLE_SCOPES.drive]
 
 const decodeJwtPayload = (token) => {
@@ -59,21 +62,30 @@ export const googleExtension = ({ app, api, deps }) => {
     })
   }))
 
-  router.get('/connect', adminOnly, (req, res, next) => {
-    if (!google.hasOAuthClient) return next(new HttpError(400, 'Configura GOOGLE_OAUTH_CLIENT_ID e GOOGLE_OAUTH_CLIENT_SECRET su Railway.', 'oauth_not_configured'))
+  router.get('/connect', adminOnly, asyncHandler(async (req, res) => {
+    if (!google.hasOAuthClient) throw new HttpError(400, 'Configura GOOGLE_OAUTH_CLIENT_ID e GOOGLE_OAUTH_CLIENT_SECRET su Railway.', 'oauth_not_configured')
     const state = crypto.randomBytes(24).toString('base64url')
-    res.setHeader('Set-Cookie', `${STATE_COOKIE}=${state}; Path=/api/google; HttpOnly; SameSite=Lax; Max-Age=600${config.isProduction ? '; Secure' : ''}`)
-    return res.json({ url: google.buildConsentUrl({ redirectUri: redirectUri(req), state, scopes: OAUTH_SCOPES }) })
-  })
+    // Il consenso su Google può richiedere più dei 15 minuti di validità dell'accesso al gestionale:
+    // ricordiamo lato server chi ha avviato il collegamento, così il ritorno non dipende dalla sessione.
+    await settings.set(PENDING_KEY, { stateHash: sha256(state), userEmail: req.user.email, expiresAt: Date.now() + CONSENT_MINUTES * 60_000 })
+    res.setHeader('Set-Cookie', `${STATE_COOKIE}=${state}; Path=/api/google; HttpOnly; SameSite=Lax; Max-Age=${CONSENT_MINUTES * 60}${config.isProduction ? '; Secure' : ''}`)
+    res.json({ url: google.buildConsentUrl({ redirectUri: redirectUri(req), state, scopes: OAUTH_SCOPES }) })
+  }))
 
   // Ritorno dal consenso Google (navigazione del browser, non fetch): rispondiamo con un redirect all'app.
-  router.get('/callback', adminOnly, async (req, res) => {
+  // Non richiede la sessione: vale solo se lo "state" coincide sia con il cookie del browser che ha
+  // avviato il collegamento sia con quello registrato sul server da un amministratore (max 30 minuti).
+  app.get('/api/google/callback', async (req, res) => {
     const back = (params) => res.redirect(`/#/impostazioni?tab=google&${new URLSearchParams(params)}`)
     try {
       const expected = parseCookies(req.headers.cookie)[STATE_COOKIE]
       res.append('Set-Cookie', `${STATE_COOKIE}=; Path=/api/google; HttpOnly; SameSite=Lax; Max-Age=0`)
       if (req.query.error) return back({ error: str(req.query.error) })
-      if (!expected || expected !== str(req.query.state)) return back({ error: 'state_non_valido' })
+      const pending = await settings.get(PENDING_KEY)
+      const state = str(req.query.state)
+      if (!expected || expected !== state || !pending || pending.stateHash !== sha256(state)) return back({ error: 'state_non_valido' })
+      await settings.remove(PENDING_KEY)
+      if (Date.now() > Number(pending.expiresAt)) return back({ error: 'collegamento_scaduto' })
       const tokens = await google.exchangeAuthCode({ code: str(req.query.code), redirectUri: redirectUri(req) })
       if (!tokens.refresh_token) return back({ error: 'refresh_token_mancante' })
       const grantedScopes = String(tokens.scope || '').split(' ')
@@ -81,7 +93,7 @@ export const googleExtension = ({ app, api, deps }) => {
       await settings.set(ACCOUNT_KEY, {
         email: decodeJwtPayload(tokens.id_token)?.email || null,
         connectedAt: new Date().toISOString(),
-        connectedBy: req.user.email,
+        connectedBy: pending.userEmail,
         calendar: grantedScopes.includes(GOOGLE_SCOPES.calendar),
         drive: grantedScopes.includes(GOOGLE_SCOPES.drive),
       })

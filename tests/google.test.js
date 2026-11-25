@@ -43,8 +43,18 @@ describe('Google: collegamento account, ponte Calendar, backup Drive', () => {
     // il cookie state è stato cancellato dal tentativo falso: ne chiediamo uno nuovo
     const again = new URL((await admin.get('/api/google/connect')).data.url).searchParams.get('state')
     assert.notEqual(again, state)
+    // il ritorno da Google funziona anche se nel frattempo l'accesso al gestionale è scaduto
+    const accessCookie = admin.jar.get('access_token')
+    admin.jar.delete('access_token')
     const ok = await admin.get(`/api/google/callback?code=abc&state=${again}`, { raw: true })
     assert.match(ok.headers.get('location'), /connected=1/)
+    admin.jar.set('access_token', accessCookie)
+
+    // uno state rubato da un altro browser (senza il cookie) non serve a nulla
+    const stolen = new URL((await admin.get('/api/google/connect')).data.url).searchParams.get('state')
+    const stranger = t.client()
+    const attack = await stranger.get(`/api/google/callback?code=abc&state=${stolen}`, { raw: true })
+    assert.match(attack.headers.get('location'), /error=state_non_valido/)
 
     const stored = await t.db.one(`SELECT "value" FROM "app_settings" WHERE "key" = 'google.oauth.refreshToken'`)
     assert.equal(stored.value.enc, 'v1')

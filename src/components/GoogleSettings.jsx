@@ -14,7 +14,8 @@ const EVENT_COLORS = [
 ]
 
 const CALLBACK_ERRORS = {
-  state_non_valido: 'Collegamento scaduto o non valido: riprova.',
+  state_non_valido: 'Collegamento non valido (avviato da un altro browser o già usato): riprova da qui.',
+  collegamento_scaduto: 'Sono passati più di 30 minuti dalla richiesta: premi di nuovo "Collega account Google".',
   refresh_token_mancante: "Google non ha concesso l'accesso permanente. Rimuovi l'app da myaccount.google.com/permissions e riprova.",
   scambio_codice_fallito: 'Google ha rifiutato il collegamento. Controlla Client ID/Secret e URI di reindirizzamento.',
   access_denied: 'Accesso negato su Google.',
