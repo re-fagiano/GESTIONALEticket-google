@@ -4,32 +4,33 @@
   "version": "0.0.0",
   "type": "module",
   "engines": {
-    "node": ">=22.5.0"
+    "node": ">=20.11.0"
   },
   "packageManager": "pnpm@9.1.0",
   "scripts": {
     "dev": "vite",
-    "build": "prisma generate && vite build",
-    "start": "pnpm prisma migrate deploy || true && node server.js",
+    "build": "vite build",
+    "start": "node server/index.js",
     "prisma:deploy": "prisma migrate deploy",
-    "prisma:generate": "prisma generate",
-    "db:seed": "prisma db seed",
     "lint": "eslint .",
-    "test": "echo \"No tests configured\"",
+    "test": "node --test --test-concurrency=1 tests/*.test.js",
     "clean": "rm -rf dist .vite",
     "preview": "vite preview",
     "prisma:migrate": "prisma migrate dev",
     "check:icons": "node scripts/check-icon-usage.js",
     "security:audit": "pnpm audit --prod --audit-level=high",
     "security:static": "node scripts/security-static-check.js",
-    "security:ci": "pnpm security:static && pnpm security:audit"
+    "security:ci": "pnpm security:static && pnpm security:audit",
+    "start:prod": "prisma migrate deploy && node server/index.js",
+    "server": "node --watch server/index.js",
+    "prisma:generate": "prisma generate"
   },
   "dependencies": {
-    "@prisma/client": "5",
     "bcryptjs": "^2.4.3",
     "express": "^4.19.2",
     "jsonwebtoken": "^9.0.2",
     "lucide-react": "^0.556.0",
+    "pg": "^8",
     "prisma": "5",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
@@ -47,8 +48,5 @@
     "postcss": "^8.5.6",
     "tailwindcss": "^3.4.18",
     "vite": "^7.2.4"
-  },
-  "prisma": {
-    "seed": "node prisma/seed.js"
   }
 }
