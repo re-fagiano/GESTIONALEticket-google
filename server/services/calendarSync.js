@@ -22,6 +22,12 @@ export const CALENDAR_DEFAULTS = {
   calendarId: 'primary',
   pushTypes: ['chiamata'],
   importEvents: true,
+  // Gli eventi creati a mano su Google (es. "Rossi via Roma 12" con telefono in descrizione) diventano chiamate.
+  importAsCalls: true,
+  // Colore evento Google → tecnico ({ '7': userId, default: userId }). Usato in entrambe le direzioni.
+  colorOperators: {},
+  // Data di attivazione: le chiamate create PRIMA non vengono inviate (probabilmente sono già scritte a mano su Google).
+  pushSince: null,
   defaultMinutes: 60,
   timeZone: 'Europe/Rome',
 }
@@ -32,6 +38,29 @@ const STATUS_LABEL = { pendente: 'Da fare', in_lavorazione: 'In lavorazione', co
 const URGENCY_LABEL = { 1: 'Bassa', 2: 'Media', 3: 'Alta' }
 // Colori Google Calendar: 7 pavone, 3 vinaccia, 6 mandarino, 10 basilico, 11 pomodoro (urgente), 8 grafite (completato)
 const TYPE_COLOR = { chiamata: '7', riparazione: '3', ordine_ricambi: '6', preventivo: '10' }
+
+export const GOOGLE_EVENT_COLORS = {
+  1: 'Lavanda', 2: 'Salvia', 3: 'Vinaccia', 4: 'Fenicottero', 5: 'Banana', 6: 'Mandarino',
+  7: 'Pavone', 8: 'Grafite', 9: 'Mirtillo', 10: 'Basilico', 11: 'Pomodoro', default: 'Colore del calendario',
+}
+
+// "Rossi Mario via Roma 12" → { name: 'Rossi Mario', address: 'via Roma 12' }
+const ADDRESS_WORD = /(^|[\s,–-])(via|viale|v\.le|piazza|p\.zza|p\.za|piazzale|strada|str\.|corso|c\.so|largo|vicolo|loc\.|località|localita|contrada|borgo|lungomare|frazione|fraz\.)(?=[\s.])/i
+export const parseEventTitle = (title = '') => {
+  const text = String(title).replace(/\s+/g, ' ').trim()
+  const match = text.match(ADDRESS_WORD)
+  if (!match) return { name: text, address: null }
+  const index = match.index + match[1].length
+  const name = text.slice(0, index).replace(/[\s,–-]+$/, '').trim()
+  const address = text.slice(index).trim()
+  return name ? { name, address } : { name: text, address }
+}
+
+// Numeri di telefono italiani (cellulari 3xx e fissi 0xx) dentro un testo libero; ignora codici più lunghi.
+export const extractPhones = (text = '') => {
+  const found = String(text).match(/(?<![\d])(?:\+?39[\s.]?)?(?:3\d{2}|0\d{1,3})(?:[\s./-]?\d){5,8}(?![\d])/g) || []
+  return [...new Set(found.map((raw) => raw.replace(/\D/g, '').replace(/^39(?=[03]\d{7,})/, '')).filter((digits) => digits.length >= 8 && digits.length <= 11))]
+}
 
 const hashOf = (value) => crypto.createHash('sha1').update(JSON.stringify(value)).digest('hex')
 const isGone = (error) => error instanceof GoogleApiError && [404, 410].includes(error.status)
@@ -69,10 +98,23 @@ export const createCalendarSync = ({ db, google, settings, config, logger }) => 
 
   // ——— App → Google ———
 
+  const operatorColor = (row, cfg) => Object.entries(cfg.colorOperators || {}).find(([color, userId]) => color !== 'default' && userId && userId === row.assignedToId)?.[0]
+  const colorsByOperator = (cfg) => Object.values(cfg.colorOperators || {}).some(Boolean)
+
   const interventionEvent = (row, cfg) => {
     const minutes = Number(row.additionalData?.durationMinutes) || cfg.defaultMinutes
     const start = new Date(row.openedAt)
     const end = new Date(start.getTime() + minutes * 60_000)
+    const ownColor = operatorColor(row, cfg)
+    if (row.additionalData?.source === 'google') {
+      // Evento scritto a mano su Google: titolo e descrizione restano vostri, aggiorniamo solo orario e colore.
+      return {
+        start: { dateTime: start.toISOString(), timeZone: cfg.timeZone },
+        end: { dateTime: end.toISOString(), timeZone: cfg.timeZone },
+        ...(ownColor ? { colorId: ownColor } : {}),
+        extendedProperties: { private: { fixlabType: 'intervention', fixlabId: row.id, fixlabCode: row.code } },
+      }
+    }
     const what = row.description || [row.additionalData?.applianceBrand, row.additionalData?.defect].filter(Boolean).join(' ') || ''
     const done = row.status === 'completato'
     const summary = `${done ? '✔ ' : ''}[${TYPE_LABEL[row.type]}] ${row.customerName}${what ? ` — ${what}` : ''}`.slice(0, 200)
@@ -92,7 +134,10 @@ export const createCalendarSync = ({ db, google, settings, config, logger }) => 
       location: row.customerAddress || undefined,
       start: { dateTime: start.toISOString(), timeZone: cfg.timeZone },
       end: { dateTime: end.toISOString(), timeZone: cfg.timeZone },
-      colorId: done ? '8' : (row.priority === 3 ? '11' : TYPE_COLOR[row.type]),
+      // Se i colori indicano i tecnici usiamo il colore del tecnico assegnato, altrimenti colore per tipo/stato.
+      ...(colorsByOperator(cfg)
+        ? (ownColor ? { colorId: ownColor } : {})
+        : { colorId: done ? '8' : (row.priority === 3 ? '11' : TYPE_COLOR[row.type]) }),
       extendedProperties: { private: { fixlabType: 'intervention', fixlabId: row.id, fixlabCode: row.code } },
     }
   }
@@ -144,7 +189,8 @@ export const createCalendarSync = ({ db, google, settings, config, logger }) => 
   const pushIntervention = async (id, cfg) => {
     const row = await loadIntervention(id)
     const link = await getLink('intervention', id)
-    const wanted = row && cfg.pushTypes.includes(row.type) && row.status !== 'annullato'
+    const isNewEnough = !cfg.pushSince || new Date(row?.createdAt) >= new Date(cfg.pushSince)
+    const wanted = row && cfg.pushTypes.includes(row.type) && row.status !== 'annullato' && (link || isNewEnough)
     if (!wanted) {
       if (link && link.pushedHash !== DELETED_IN_GOOGLE) { await deleteRemote(link); return 'deleted' }
       return 'ignored'
@@ -179,6 +225,66 @@ export const createCalendarSync = ({ db, google, settings, config, logger }) => 
     return null
   }
 
+  // undefined = nessun abbinamento configurato per quel colore (non tocchiamo l'assegnazione)
+  const operatorFromColor = (event, cfg) => {
+    const userId = (cfg.colorOperators || {})[event.colorId || 'default']
+    return userId || undefined
+  }
+
+  // Evento creato a mano su Google → nuova chiamata. Il cliente si riconosce dal telefono,
+  // altrimenti da nome + indirizzo, altrimenti viene creato.
+  const looksLikeCall = (event) => Boolean(extractPhones(`${event.summary || ''} ${event.description || ''}`).length || parseEventTitle(event.summary).address)
+
+  const importCall = async (event, cfg, report) => {
+    const times = eventTimes(event, cfg)
+    const { name, address } = parseEventTitle(event.summary || '(senza titolo)')
+    const phones = extractPhones(`${event.summary || ''}\n${event.description || ''}`)
+    const operatorId = operatorFromColor(event, cfg) || null
+    const id = await db.tx(async (client) => {
+      let customer = null
+      for (const phone of phones) {
+        customer = await client.one(
+          `SELECT * FROM "customers" WHERE regexp_replace(coalesce("phone", ''), '\\D', '', 'g') LIKE '%' || $1 || '%' ORDER BY "createdAt" LIMIT 1`,
+          [phone],
+        )
+        if (customer) break
+      }
+      if (!customer) {
+        customer = await client.one(
+          `SELECT * FROM "customers" WHERE lower("name") = lower($1) AND lower(coalesce("address", '')) = lower(coalesce($2, '')) LIMIT 1`,
+          [name, address || event.location || null],
+        )
+      }
+      if (!customer) {
+        customer = await client.one(
+          `INSERT INTO "customers" ("id", "name", "phone", "address", "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, NOW(), NOW()) RETURNING *`,
+          [newId(), name.slice(0, 200), phones.join(' / ') || null, address || event.location || null],
+        )
+        report.createdCustomers = (report.createdCustomers || 0) + 1
+      }
+      const startOfToday = new Date()
+      startOfToday.setHours(0, 0, 0, 0)
+      const status = /^\s*annul/i.test(event.summary || '') ? 'annullato' : (times.start < startOfToday ? 'completato' : 'pendente')
+      const interventionId = newId()
+      const code = `INV-${times.start.toISOString().slice(0, 10).replace(/-/g, '')}-${crypto.randomInt(0, 1_000_000).toString().padStart(6, '0')}`
+      await client.query(
+        `INSERT INTO "interventions" ("id", "code", "customerId", "type", "status", "priority", "assignedToId", "description", "openedAt", "closedAt",
+           "additionalData", "version", "createdAt", "updatedAt")
+         VALUES ($1, $2, $3, 'chiamata', $4, 2, $5, $6, $7, $8, $9, 1, NOW(), NOW())`,
+        [interventionId, code, customer.id, status, operatorId, event.description || null, times.start, status === 'pendente' ? null : times.end,
+          { source: 'google', googleTitle: event.summary || '', durationMinutes: Math.max(5, Math.round((times.end - times.start) / 60_000)) }],
+      )
+      await client.query(
+        'INSERT INTO "intervento_logs" ("id", "interventoId", "userId", "action", "note", "createdAt") VALUES ($1, $2, NULL, $3, $4, NOW())',
+        [newId(), interventionId, 'importato_da_google', event.summary || ''],
+      )
+      return interventionId
+    })
+    report.importedCalls = (report.importedCalls || 0) + 1
+    const fresh = await loadIntervention(id)
+    await saveLink({ entityType: 'intervention', entityId: id, calendarId: cfg.calendarId, event, pushedHash: hashOf(interventionEvent(fresh, cfg)) })
+  }
+
   const applyIntervention = async (event, link, cfg, report) => {
     const id = link?.entityId || event.extendedProperties?.private?.fixlabId
     const row = id ? await loadIntervention(id) : null
@@ -200,6 +306,19 @@ export const createCalendarSync = ({ db, google, settings, config, logger }) => 
           )
         })
         report.movedInterventions += 1
+      }
+    }
+    if (row.additionalData?.source === 'google') {
+      const operatorId = operatorFromColor(event, cfg)
+      const description = event.description || null
+      const title = event.summary || ''
+      if (description !== row.description || title !== row.additionalData?.googleTitle || (operatorId !== undefined && operatorId !== row.assignedToId)) {
+        await db.query(
+          `UPDATE "interventions" SET "description" = $2, "additionalData" = coalesce("additionalData", '{}'::jsonb) || jsonb_build_object('googleTitle', $3::text),
+             "assignedToId" = CASE WHEN $4::boolean THEN $5 ELSE "assignedToId" END, "version" = "version" + 1, "updatedAt" = NOW() WHERE "id" = $1`,
+          [row.id, description, title, operatorId !== undefined, operatorId ?? null],
+        )
+        report.updatedInterventions = (report.updatedInterventions || 0) + 1
       }
     }
     // Ricalcoliamo l'hash sullo stato aggiornato: così il prossimo push non riscrive l'evento inutilmente.
@@ -251,6 +370,7 @@ export const createCalendarSync = ({ db, google, settings, config, logger }) => 
     }
     if (link && link.etag && link.etag === event.etag) return // è l'eco di una nostra scrittura
     if ((link?.entityType || isOurs) === 'intervention') return applyIntervention(event, link, cfg, report)
+    if (!link && !isOurs && cfg.importAsCalls && event.start?.dateTime && looksLikeCall(event)) return importCall(event, cfg, report)
     return applyCalendarItem(event, link, cfg, report)
   }
 
@@ -390,9 +510,16 @@ export const createCalendarSync = ({ db, google, settings, config, logger }) => 
     const current = await getConfig()
     const next = { ...current }
     if (patch.enabled !== undefined) next.enabled = Boolean(patch.enabled)
+    if (next.enabled && !current.enabled && !current.pushSince) next.pushSince = patch.pushExisting ? null : new Date().toISOString()
+    if (patch.pushExisting === true) next.pushSince = null
     if (typeof patch.calendarId === 'string' && patch.calendarId.trim()) next.calendarId = patch.calendarId.trim()
     if (Array.isArray(patch.pushTypes)) next.pushTypes = patch.pushTypes.filter((type) => TYPE_LABEL[type])
     if (patch.importEvents !== undefined) next.importEvents = Boolean(patch.importEvents)
+    if (patch.importAsCalls !== undefined) next.importAsCalls = Boolean(patch.importAsCalls)
+    if (patch.colorOperators && typeof patch.colorOperators === 'object') {
+      next.colorOperators = Object.fromEntries(Object.entries(patch.colorOperators)
+        .filter(([color, userId]) => GOOGLE_EVENT_COLORS[color] && typeof userId === 'string' && userId))
+    }
     const minutes = Number(patch.defaultMinutes)
     if (Number.isFinite(minutes) && minutes >= 5 && minutes <= 600) next.defaultMinutes = Math.round(minutes)
     await settings.set(CALENDAR_SETTINGS_KEY, next)

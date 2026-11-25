@@ -3,8 +3,15 @@ import { CalendarDays, CheckCircle2, Copy, Link2, RefreshCw, Unlink } from 'luci
 import { api } from '../lib/api'
 import { INTERVENTION_TYPES } from '../lib/domain'
 import { fmtDateTime } from '../lib/format'
-import { useAsync, useRoute } from '../lib/hooks'
+import { useAsync, useRoute, useShared } from '../lib/hooks'
 import { Badge, Button, Card, ErrorBox, Input, Select, Spinner, useToast } from './ui'
+
+// Colori degli eventi Google Calendar (id → nome e tinta come appaiono su Google).
+const EVENT_COLORS = [
+  ['default', 'Colore del calendario', '#d50000'], ['1', 'Lavanda', '#7986cb'], ['2', 'Salvia', '#33b679'], ['3', 'Vinaccia', '#8e24aa'],
+  ['4', 'Fenicottero', '#e67c73'], ['5', 'Banana', '#f6bf26'], ['6', 'Mandarino', '#f4511e'], ['7', 'Pavone', '#039be5'],
+  ['8', 'Grafite', '#616161'], ['9', 'Mirtillo', '#3f51b5'], ['10', 'Basilico', '#0b8043'], ['11', 'Pomodoro', '#d50000'],
+]
 
 const CALLBACK_ERRORS = {
   state_non_valido: 'Collegamento scaduto o non valido: riprova.',
@@ -35,6 +42,7 @@ function SetupHelp({ redirectUri }) {
 
 export default function GoogleSettings() {
   const { toast } = useToast()
+  const { operators } = useShared()
   const route = useRoute()
   const status = useAsync(() => api.get('/api/google/status'), [])
   const connected = status.data && status.data.mode !== 'none'
@@ -147,16 +155,44 @@ export default function GoogleSettings() {
             </div>
             <p className="mt-1 text-xs text-slate-500">Ogni appuntamento diventa un evento con cliente, telefono, indirizzo (cliccabile per il navigatore) e link alla scheda. Spostamenti, completamenti e annullamenti si aggiornano da soli.</p>
           </div>
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={form.importEvents} onChange={(e) => setForm({ ...form, importEvents: e.target.checked })} /> Mostra nel calendario del gestionale anche gli eventi creati direttamente su Google
+          <label className="flex items-start gap-2 text-sm">
+            <input type="checkbox" className="mt-1" checked={form.importAsCalls} onChange={(e) => setForm({ ...form, importAsCalls: e.target.checked })} />
+            <span><b>Trasforma in chiamate gli eventi scritti a mano su Google</b> (es. &quot;Rossi via Roma 12&quot; con il telefono nella descrizione). Il cliente viene riconosciuto dal telefono o creato; titolo e descrizione su Google non vengono mai sovrascritti. Gli eventi senza telefono né indirizzo (appunti, ferie) restano semplici eventi.</span>
           </label>
+          <div>
+            <div className="mb-1 text-sm font-medium text-slate-700">Colore → tecnico</div>
+            <p className="mb-2 text-xs text-slate-500">Le chiamate importate vengono assegnate al tecnico del colore; quelle create nel gestionale prendono su Google il colore del tecnico assegnato.</p>
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {EVENT_COLORS.map(([id, name, hex]) => (
+                <label key={id} className="flex items-center gap-2 text-sm">
+                  <span className="h-4 w-4 shrink-0 rounded-full" style={{ background: hex }} />
+                  <span className="w-36 shrink-0 truncate">{name}</span>
+                  <select className="min-w-0 flex-1 rounded-lg border border-slate-300 px-2 py-1 text-sm" value={form.colorOperators?.[id] || ''}
+                    onChange={(e) => setForm({ ...form, colorOperators: { ...(form.colorOperators || {}), [id]: e.target.value } })}>
+                    <option value="">—</option>
+                    {operators.map((op) => <option key={op.id} value={op.id}>{op.email.split('@')[0]}</option>)}
+                  </select>
+                </label>
+              ))}
+            </div>
+          </div>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={form.importEvents} onChange={(e) => setForm({ ...form, importEvents: e.target.checked })} /> Mostra nel calendario del gestionale gli altri eventi di Google (appunti, ferie, fornitori)
+          </label>
+          {cal.settings.pushSince && (
+            <p className="text-xs text-slate-500">
+              Vengono inviate su Google le chiamate create dal {fmtDateTime(cal.settings.pushSince)} (quelle precedenti sono probabilmente già nel vostro calendario).{' '}
+              <button type="button" className="underline" onClick={() => setForm({ ...form, pushExisting: true })}>Invia anche quelle precedenti</button>
+              {form.pushExisting && ' — verrà applicato al salvataggio.'}
+            </p>
+          )}
           <div className="flex flex-wrap gap-2">
             <Button onClick={save} loading={busy === 'save'} disabled={!dirty}>Salva</Button>
             <Button variant="secondary" icon={RefreshCw} onClick={() => syncNow(false)} loading={busy === 'sync'} disabled={!cal.settings.enabled}>Sincronizza ora</Button>
           </div>
           <div className="space-y-1 rounded-lg bg-slate-50 p-3 text-xs text-slate-600">
             <div>Ultima sincronizzazione completa: <b>{fmtDateTime(cal.state.lastSyncAt)}</b> · ultima lettura da Google: <b>{fmtDateTime(cal.state.lastPullAt)}</b> (automatica ogni 5 minuti)</div>
-            <div>Collegati: {cal.links.interventions} appuntamenti, {cal.links.events} eventi Google</div>
+            <div>Collegati: {cal.links.interventions} appuntamenti, {cal.links.events} eventi Google{cal.state.lastReport?.pulled?.importedCalls ? ` · ultime chiamate importate: ${cal.state.lastReport.pulled.importedCalls}` : ''}</div>
             {cal.links.deletedInGoogle > 0 && (
               <div className="flex flex-wrap items-center gap-2">
                 {cal.links.deletedInGoogle} eventi eliminati a mano su Google (non vengono ricreati).

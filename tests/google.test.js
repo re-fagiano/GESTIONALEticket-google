@@ -66,12 +66,18 @@ describe('Google: collegamento account, ponte Calendar, backup Drive', () => {
   test('attivazione: gli interventi esistenti finiscono su Google con cliente, indirizzo e link', async () => {
     const call = (await admin.post('/api/interventions', { clientId: customer.id, type: 'chiamata', urgency: 3, openedAt: '2026-12-01T09:00:00.000Z', description: 'Lavatrice non scarica' })).data
     await admin.post('/api/interventions', { clientId: customer.id, type: 'riparazione', openedAt: '2026-12-01T11:00:00.000Z' })
+    const old = (await admin.post('/api/interventions', { clientId: customer.id, type: 'chiamata', openedAt: '2026-12-01T08:00:00.000Z', description: 'già scritta a mano su Google' })).data
+    await t.db.query(`UPDATE "interventions" SET "createdAt" = NOW() - interval '1 hour' WHERE "id" IN ($1, $2)`, [old.id, call.id])
     const settings = await admin.put('/api/google/calendar/settings', { enabled: true, calendarId: 'interventi@group.calendar.google.com', pushTypes: ['chiamata'] })
+    assert.ok(settings.data.pushSince, 'attivazione: si parte da adesso')
+    await sync.idle()
+    assert.equal(fake.live().length, 0, 'le chiamate già esistenti non vengono inviate (eviterebbe doppioni)')
+    await admin.put('/api/google/calendar/settings', { pushExisting: true })
     assert.equal(settings.data.enabled, true)
     const report = await admin.post('/api/google/calendar/sync')
     assert.equal(report.status, 200)
     // l'attivazione avvia già un giro in background; quello manuale aspetta il suo turno
-    assert.equal(fake.live().filter((e) => e.extendedProperties?.private?.fixlabType === 'intervention').length, 1, 'solo le chiamate (tipo scelto)')
+    assert.equal(fake.live().filter((e) => e.extendedProperties?.private?.fixlabType === 'intervention').length, 2, 'solo le chiamate (tipo scelto), incluse quelle vecchie su richiesta')
 
     const event = fake.find((e) => e.extendedProperties?.private?.fixlabId === call.id)
     assert.equal(event.calendarId, 'interventi@group.calendar.google.com')
@@ -161,6 +167,66 @@ describe('Google: collegamento account, ponte Calendar, backup Drive', () => {
     const afterDelete = await sync.pullNow()
     assert.equal(afterDelete.deletedEvents, 1)
     assert.equal((await t.db.one('SELECT COUNT(*)::int AS n FROM "calendar_items" WHERE "title" = $1', ['Chiusura per ferie'])).n, 0)
+  })
+
+  test('eventi scritti a mano su Google diventano chiamate: cliente dal telefono, tecnico dal colore', async () => {
+    const tecnico = await t.createUser({ email: 'andrea@test.it', role: 'OPERATOR' })
+    await admin.put('/api/google/calendar/settings', { importAsCalls: true, colorOperators: { 5: tecnico.id } })
+    await sync.idle()
+    const cal = 'interventi@group.calendar.google.com'
+    const first = fake.userCreate(cal, {
+      summary: 'Bianchi Luca via Mazzini 8', colorId: '5',
+      description: 'stati 18/11\n3391112222\nlavatrice non centrifuga, molla 480111100817 da astelav',
+      start: { dateTime: '2026-12-09T10:00:00.000Z' }, end: { dateTime: '2026-12-09T11:00:00.000Z' },
+    })
+    const second = fake.userCreate(cal, {
+      summary: 'Bianchi via Mazzini 8 (ritorno)', description: 'tel 339 111 2222 portare ricambio',
+      start: { dateTime: '2026-12-10T15:00:00.000Z' }, end: { dateTime: '2026-12-10T15:30:00.000Z' },
+    })
+    const note = fake.userCreate(cal, { summary: 'chiamate Angelo solo da questi orari', start: { dateTime: '2026-12-11T07:00:00.000Z' }, end: { dateTime: '2026-12-11T10:00:00.000Z' } })
+    const report = await sync.pullNow()
+    assert.equal(report.importedCalls, 2)
+    assert.equal(report.createdCustomers, 1, 'il secondo evento riconosce il cliente dal telefono')
+
+    const calls = (await admin.get('/api/chiamate?q=bianchi')).data
+    assert.equal(calls.length, 2)
+    const imported = calls.find((c) => c.openedAt === '2026-12-09T10:00:00.000Z')
+    assert.equal(imported.status, 'pendente')
+    assert.equal(imported.assignedToId, tecnico.id, 'colore Banana = tecnico Andrea')
+    assert.match(imported.description, /480111100817/)
+    const customer = (await admin.get(`/api/customers/${imported.customerId}`)).data
+    assert.equal(customer.name, 'Bianchi Luca')
+    assert.equal(customer.address, 'via Mazzini 8')
+    assert.equal(customer.phone, '3391112222')
+    assert.equal((await t.db.one('SELECT COUNT(*)::int AS n FROM "calendar_items" WHERE "title" = $1', ['chiamate Angelo solo da questi orari'])).n, 1, 'gli appunti restano eventi')
+    assert.ok(note)
+
+    // spostata nel gestionale: su Google cambia solo l'orario, titolo e descrizione restano quelli scritti a mano
+    await admin.patch(`/api/interventions/${imported.id}`, { openedAt: '2026-12-09T16:00:00.000Z' })
+    await sync.idle()
+    const onGoogle = fake.find((e) => e.id === first.id)
+    assert.equal(onGoogle.start.dateTime, '2026-12-09T16:00:00.000Z')
+    assert.equal(onGoogle.summary, 'Bianchi Luca via Mazzini 8')
+    assert.match(onGoogle.description, /molla 480111100817/)
+
+    // nota aggiunta su Google → arriva nella chiamata; nessun rimbalzo
+    const patchesBefore = fake.calls.filter((c) => c.startsWith('PATCH')).length
+    fake.userMove(second.id, '2026-12-10T15:00:00.000Z', '2026-12-10T15:30:00.000Z')
+    const edited = fake.find((e) => e.id === second.id)
+    edited.description = 'tel 339 111 2222 portare ricambio — FATTO pagato 80€'
+    fake.userMove(second.id, '2026-12-10T15:00:00.000Z', '2026-12-10T15:30:00.000Z')
+    await sync.pullNow()
+    const ritorno = (await admin.get('/api/chiamate?q=ritorno')).data[0]
+    assert.ok(ritorno, 'la ricerca trova anche il titolo scritto su Google')
+    assert.match(ritorno.description, /FATTO pagato 80€/, 'la nota scritta su Google arriva nella chiamata')
+    await sync.idle()
+    assert.equal(fake.calls.filter((c) => c.startsWith('PATCH')).length, patchesBefore)
+
+    // chiamata creata nel gestionale e assegnata ad Andrea → su Google con il suo colore
+    const nuova = (await admin.post('/api/interventions', { clientId: customer.id, type: 'chiamata', assignedToId: tecnico.id, openedAt: '2026-12-12T09:00:00.000Z', description: 'Forno' })).data
+    await sync.idle()
+    assert.equal(fake.find((e) => e.extendedProperties?.private?.fixlabId === nuova.id).colorId, '5')
+    await admin.put('/api/google/calendar/settings', { colorOperators: {} })
   })
 
   test('evento di un intervento eliminato a mano su Google non viene ricreato (salvo richiesta)', async () => {

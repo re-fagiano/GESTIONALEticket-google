@@ -320,6 +320,9 @@ function InterventionDrawer({ id, onClose, onChanged }) {
       <ErrorBox error={error} onRetry={reload} />
       {item && (
         <div className="space-y-6">
+          {item.additionalData?.source === 'google' && (
+            <p className="rounded-lg bg-sky-50 px-3 py-2 text-xs text-sky-800">Creata da Google Calendar: «{item.additionalData.googleTitle}». Titolo e note si aggiornano da Google.</p>
+          )}
           {customer && (
             <Card className="flex flex-wrap items-center gap-x-6 gap-y-2 p-3 text-sm">
               <a href={`#/clienti?id=${customer.id}`} className="font-semibold text-slate-900 hover:underline">{customer.name}</a>
@@ -412,6 +415,7 @@ function InterventionDrawer({ id, onClose, onChanged }) {
                 <li key={log.id}>{fmtDateTime(log.createdAt)} · {operatorName(log.userId) || 'sistema'} · {{
                   intervento_creato: 'creato', status_changed: log.note, assigned_operator: `assegnato a ${operatorName(log.note) || log.note}`,
                   note_added: 'nota aggiunta', converted_to_repair: 'convertito in riparazione', created_from_call: 'creato da chiamata',
+                  importato_da_google: 'importato da Google Calendar', spostato_da_google: 'spostato su Google Calendar',
                 }[log.action] || log.action}</li>
               ))}
             </ul>
