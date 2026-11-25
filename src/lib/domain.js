@@ -46,3 +46,16 @@ export const attachmentsOf = (intervention) => {
   const list = Array.isArray(data.attachments) ? data.attachments : (Array.isArray(data.files) ? data.files : [])
   return list.filter((item) => item && typeof item.dataUrl === 'string' && item.dataUrl)
 }
+
+// Colori degli eventi di Google Calendar (id → tinta mostrata da Google).
+export const GOOGLE_EVENT_COLORS = {
+  1: '#7986cb', 2: '#33b679', 3: '#8e24aa', 4: '#e67c73', 5: '#f6bf26', 6: '#f4511e',
+  7: '#039be5', 8: '#616161', 9: '#3f51b5', 10: '#0b8043', 11: '#d50000',
+}
+
+// Testo leggibile (bianco o nero) sopra un colore di sfondo.
+export const textOn = (hex = '#000000') => {
+  const value = hex.replace('#', '')
+  const [r, g, b] = [0, 2, 4].map((i) => parseInt(value.slice(i, i + 2), 16))
+  return (r * 299 + g * 587 + b * 114) / 1000 > 160 ? '#1e293b' : '#ffffff'
+}

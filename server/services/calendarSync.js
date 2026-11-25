@@ -324,7 +324,7 @@ export const createCalendarSync = ({ db, google, settings, config, logger }) => 
            "additionalData", "version", "createdAt", "updatedAt")
          VALUES ($1, $2, $3, 'chiamata', $4, 2, $5, $6, $7, $8, $9, 1, NOW(), NOW())`,
         [interventionId, code, customer.id, status, operatorId, event.description || null, times.start, status === 'pendente' ? null : times.end,
-          { source: 'google', googleTitle: event.summary || '', durationMinutes: Math.max(5, Math.round((times.end - times.start) / 60_000)) }],
+          { source: 'google', googleTitle: event.summary || '', googleColorId: event.colorId || null, durationMinutes: Math.max(5, Math.round((times.end - times.start) / 60_000)) }],
       )
       await client.query(
         'INSERT INTO "intervento_logs" ("id", "interventoId", "userId", "action", "note", "createdAt") VALUES ($1, $2, NULL, $3, $4, NOW())',
@@ -364,11 +364,14 @@ export const createCalendarSync = ({ db, google, settings, config, logger }) => 
       const operatorId = operatorFromColor(event, cfg)
       const description = event.description || null
       const title = event.summary || ''
-      if (description !== row.description || title !== row.additionalData?.googleTitle || (operatorId !== undefined && operatorId !== row.assignedToId)) {
+      const colorId = event.colorId || null
+      const colorChanged = !('googleColorId' in (row.additionalData || {})) || row.additionalData.googleColorId !== colorId
+      if (description !== row.description || title !== row.additionalData?.googleTitle || colorChanged || (operatorId !== undefined && operatorId !== row.assignedToId)) {
         await db.query(
-          `UPDATE "interventions" SET "description" = $2, "additionalData" = coalesce("additionalData", '{}'::jsonb) || jsonb_build_object('googleTitle', $3::text),
+          `UPDATE "interventions" SET "description" = $2,
+             "additionalData" = coalesce("additionalData", '{}'::jsonb) || jsonb_build_object('googleTitle', $3::text, 'googleColorId', $6::text),
              "assignedToId" = CASE WHEN $4::boolean THEN $5 ELSE "assignedToId" END, "version" = "version" + 1, "updatedAt" = NOW() WHERE "id" = $1`,
-          [row.id, description, title, operatorId !== undefined, operatorId ?? null],
+          [row.id, description, title, operatorId !== undefined, operatorId ?? null, colorId],
         )
         report.updatedInterventions = (report.updatedInterventions || 0) + 1
       }
@@ -381,12 +384,12 @@ export const createCalendarSync = ({ db, google, settings, config, logger }) => 
   const applyCalendarItem = async (event, link, cfg, report) => {
     const times = eventTimes(event, cfg)
     if (!times) return
-    const fields = [event.summary || '(senza titolo)', event.description || null, times.start, times.end, times.allDay, event.location || null]
+    const fields = [event.summary || '(senza titolo)', event.description || null, times.start, times.end, times.allDay, event.location || null, event.colorId || null]
     let itemId = link?.entityId || (event.extendedProperties?.private?.fixlabType === 'calendar_item' ? event.extendedProperties.private.fixlabId : null)
     const existing = itemId ? await db.one('SELECT "id" FROM "calendar_items" WHERE "id" = $1', [itemId]) : null
     if (existing) {
       await db.query(
-        `UPDATE "calendar_items" SET "title" = $2, "description" = $3, "startAt" = $4, "endAt" = $5, "allDay" = $6, "location" = $7, "updatedAt" = NOW() WHERE "id" = $1`,
+        `UPDATE "calendar_items" SET "title" = $2, "description" = $3, "startAt" = $4, "endAt" = $5, "allDay" = $6, "location" = $7, "colorId" = $8, "updatedAt" = NOW() WHERE "id" = $1`,
         [itemId, ...fields],
       )
       report.updatedEvents += 1
@@ -394,8 +397,8 @@ export const createCalendarSync = ({ db, google, settings, config, logger }) => 
       if (!cfg.importEvents) return
       itemId = newId()
       await db.query(
-        `INSERT INTO "calendar_items" ("id", "title", "description", "startAt", "endAt", "allDay", "location", "status", "source", "createdAt", "updatedAt")
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'planned', 'google', NOW(), NOW())`,
+        `INSERT INTO "calendar_items" ("id", "title", "description", "startAt", "endAt", "allDay", "location", "colorId", "status", "source", "createdAt", "updatedAt")
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'planned', 'google', NOW(), NOW())`,
         [itemId, ...fields],
       )
       report.importedEvents += 1
@@ -404,7 +407,7 @@ export const createCalendarSync = ({ db, google, settings, config, logger }) => 
     await saveLink({ entityType: 'calendar_item', entityId: itemId, calendarId: cfg.calendarId, event, pushedHash: hashOf(calendarItemEvent(item, cfg)), origin: item.source === 'google' ? 'google' : null })
   }
 
-  const processEvent = async (event, cfg, report) => {
+  const processEvent = async (event, cfg, report, { force = false } = {}) => {
     const link = await getLinkByEvent(cfg.calendarId, event.id)
     const isOurs = event.extendedProperties?.private?.fixlabType
     if (event.status === 'cancelled') {
@@ -420,16 +423,17 @@ export const createCalendarSync = ({ db, google, settings, config, logger }) => 
       }
       return
     }
-    if (link && link.etag && link.etag === event.etag) return // è l'eco di una nostra scrittura
+    if (!force && link && link.etag && link.etag === event.etag) return // è l'eco di una nostra scrittura
     if ((link?.entityType || isOurs) === 'intervention') return applyIntervention(event, link, cfg, report)
     if (!link && !isOurs && cfg.importAsCalls && event.start?.dateTime && looksLikeCall(event)) return importCall(event, cfg, report)
     return applyCalendarItem(event, link, cfg, report)
   }
 
-  const pull = async (cfg) => {
+  // force: rilegge tutti gli eventi (anche quelli già allineati), es. per recuperare i colori.
+  const pull = async (cfg, { force = false } = {}) => {
     const report = { movedInterventions: 0, importedEvents: 0, updatedEvents: 0, deletedEvents: 0, detached: 0, pages: 0 }
     const state = await getState()
-    let syncToken = state.calendarId === cfg.calendarId ? state.syncToken : null
+    let syncToken = !force && state.calendarId === cfg.calendarId ? state.syncToken : null
     let pageToken = null
     for (let guard = 0; guard < 200; guard += 1) {
       const params = new URLSearchParams({ singleEvents: 'true', maxResults: '250' })
@@ -454,7 +458,7 @@ export const createCalendarSync = ({ db, google, settings, config, logger }) => 
       report.pages += 1
       for (const event of page.items || []) {
         try {
-          await processEvent(event, cfg, report)
+          await processEvent(event, cfg, report, { force })
         } catch (error) {
           logger.warn('calendar_event_failed', { eventId: event.id, error: error.message })
         }
@@ -527,8 +531,11 @@ export const createCalendarSync = ({ db, google, settings, config, logger }) => 
           try { report.pushed[await pushCalendarItem(id, cfg)] += 1 } catch (error) { report.errors.push(error.message) }
         }
       }
-      report.pulled = await pull(cfg)
-      await setState({ lastSyncAt: new Date().toISOString(), lastReport: report, lastError: report.errors[0] || null })
+      // Una volta sola: rilettura completa per recuperare i colori degli eventi già importati.
+      const stateNow = await getState()
+      report.pulled = await pull(cfg, { force: !stateNow.colorsBackfilled })
+      await refreshCalendarColor(cfg)
+      await setState({ colorsBackfilled: true, lastSyncAt: new Date().toISOString(), lastReport: report, lastError: report.errors[0] || null })
     } catch (error) {
       await setState({ lastError: error.message, lastErrorAt: new Date().toISOString() })
       throw error
@@ -600,6 +607,19 @@ export const createCalendarSync = ({ db, google, settings, config, logger }) => 
     return { events, ics: toIcs(events, calendarId) }
   }
 
+  // Colore del calendario (usato dagli eventi senza un colore proprio).
+  const refreshCalendarColor = async (cfg) => {
+    try {
+      const entry = await gcal({ url: `/calendar/v3/users/me/calendarList/${encodeURIComponent(cfg.calendarId)}` })
+      if (entry?.backgroundColor) await setState({ calendarColor: entry.backgroundColor })
+    } catch { /* non indispensabile */ }
+  }
+
+  const colors = async () => {
+    const [cfg, state] = await Promise.all([getConfig(), getState()])
+    return { enabled: cfg.enabled, calendarColor: state.calendarColor || null, colorOperators: cfg.colorOperators || {} }
+  }
+
   const htmlLinkFor = async (entityType, entityId) => (await getLink(entityType, entityId))?.htmlLink || null
 
   let timers = []
@@ -623,5 +643,5 @@ export const createCalendarSync = ({ db, google, settings, config, logger }) => 
     await chain
   }
 
-  return { enqueue, syncNow, pullNow, status, updateSettings, getConfig, htmlLinkFor, exportCalendar, start, stop, idle, interventionEvent }
+  return { enqueue, syncNow, pullNow, status, updateSettings, getConfig, htmlLinkFor, exportCalendar, colors, start, stop, idle, interventionEvent }
 }

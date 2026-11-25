@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, qs } from '../lib/api'
 import { useAuth } from '../lib/auth'
-import { INTERVENTION_TYPES } from '../lib/domain'
+import { GOOGLE_EVENT_COLORS, INTERVENTION_TYPES, textOn } from '../lib/domain'
 import { useShared } from '../lib/hooks'
 import { Button, Card, ErrorBox, Modal, Select, cx, useToast } from '../components/ui'
 import { InterventionDrawer, NewInterventionModal } from './Interventions'
@@ -39,22 +39,38 @@ export default function CalendarPage() {
     if (!range) return
     setError(null)
     try {
-      const [interventions, items] = await Promise.all([
+      const [interventions, items, googleColors] = await Promise.all([
         api.get(`/api/interventions${qs({ from: range.start, to: range.end, light: 1, take: 500, sort: 'openedAt', order: 'asc', assignedToId: operator === 'me' ? user.id : operator })}`),
         api.get(`/api/calendar${qs({ from: range.start, to: range.end })}`).catch(() => []),
+        api.get('/api/google/calendar/colors').catch(() => null),
       ])
+      // Se Google Calendar è collegato usiamo i suoi colori (per voi: colore = tecnico),
+      // altrimenti il colore per tipo di intervento.
+      const useGoogle = Boolean(googleColors?.enabled)
+      const calendarColor = googleColors?.calendarColor || '#ad1457'
+      const operatorColor = Object.fromEntries(Object.entries(googleColors?.colorOperators || {}).filter(([id]) => id !== 'default').map(([id, userId]) => [userId, GOOGLE_EVENT_COLORS[id]]))
+      const colorFor = (item) => {
+        if (!useGoogle) return TYPE_COLORS[item.type]
+        const data = item.additionalData || {}
+        if (data.googleColorId && GOOGLE_EVENT_COLORS[data.googleColorId]) return GOOGLE_EVENT_COLORS[data.googleColorId]
+        if (item.assignedToId && operatorColor[item.assignedToId]) return operatorColor[item.assignedToId]
+        return data.source === 'google' ? calendarColor : TYPE_COLORS[item.type]
+      }
       const fromInterventions = interventions
         .filter((item) => types.includes(item.type) && item.status !== 'annullato' && (showClosed || item.status !== 'completato'))
         .map((item) => {
           const start = new Date(item.openedAt)
           const minutes = Number(item.additionalData?.durationMinutes) || DEFAULT_MINUTES
+          const color = item.status === 'completato' ? '#94a3b8' : colorFor(item)
           return {
             id: `i:${item.id}`,
-            title: `${item.customerName || 'Cliente'}${item.description ? ` — ${item.description}` : ''}`,
+            // Per le chiamate nate su Google mostriamo il titolo scritto da voi ("Rossi via Roma 12").
+            title: item.additionalData?.googleTitle || `${item.customerName || 'Cliente'}${item.description ? ` — ${item.description}` : ''}`,
             start,
             end: new Date(start.getTime() + minutes * 60_000),
-            backgroundColor: item.status === 'completato' ? '#94a3b8' : TYPE_COLORS[item.type],
-            borderColor: item.urgency === 3 ? '#dc2626' : TYPE_COLORS[item.type],
+            backgroundColor: color,
+            borderColor: item.urgency === 3 ? '#dc2626' : color,
+            textColor: textOn(color),
             editable: canEdit,
             extendedProps: { kind: 'intervention', id: item.id, operator: operatorName(item.assignedToId) },
           }
@@ -66,9 +82,10 @@ export default function CalendarPage() {
         start: item.startAt,
         end: item.endAt,
         allDay: Boolean(item.allDay),
-        backgroundColor: '#e2e8f0',
-        borderColor: '#64748b',
-        textColor: '#0f172a',
+        ...(() => {
+          const color = useGoogle ? (GOOGLE_EVENT_COLORS[item.colorId] || (item.source === 'google' ? calendarColor : '#e2e8f0')) : '#e2e8f0'
+          return { backgroundColor: color, borderColor: color === '#e2e8f0' ? '#64748b' : color, textColor: textOn(color) }
+        })(),
         editable: canEdit && item.source !== 'google_readonly',
         extendedProps: { kind: 'calendar', item },
       }))

@@ -162,6 +162,11 @@ export const googleExtension = ({ app, api, deps }) => {
     res.send(ics)
   }))
 
+  // Colori per il calendario del gestionale (visibile a tutti gli utenti).
+  router.get('/calendar/colors', asyncHandler(async (req, res) => {
+    res.json(await sync.colors())
+  }))
+
   // Link all'evento Google (per il pulsante "Apri in Google Calendar"): visibile a tutti gli utenti.
   router.get('/calendar/link/:entityType/:id', asyncHandler(async (req, res) => {
     const type = req.params.entityType === 'calendar_item' ? 'calendar_item' : 'intervention'

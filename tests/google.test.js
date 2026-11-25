@@ -405,6 +405,23 @@ describe('Protezione del Google Calendar del negozio', () => {
     assert.equal(fake.driveFiles.length, before + 3)
   })
 
+  test('colori di Google: salvati sulle chiamate importate e recuperati per quelle già importate', async () => {
+    const colors = (await admin.get('/api/google/calendar/colors')).data
+    assert.equal(colors.enabled, true)
+    const call = (await admin.get('/api/chiamate?q=gialli')).data[0]
+    assert.equal(call.additionalData.googleColorId, '4', 'colore Fenicottero salvato')
+    const note = fake.userCreate(cal, { summary: 'Ferie Anto', colorId: '9', start: { date: '2026-12-21' }, end: { date: '2026-12-22' } })
+    await sync.pullNow()
+    assert.equal((await t.db.one('SELECT "colorId" FROM "calendar_items" WHERE "title" = $1', ['Ferie Anto'])).colorId, '9')
+    assert.ok(note)
+    // chiamate importate prima di questa versione: senza colore → recuperato al giro completo successivo
+    await t.db.query(`UPDATE "interventions" SET "additionalData" = "additionalData" - 'googleColorId' WHERE "additionalData"->>'source' = 'google'`)
+    await t.db.query(`UPDATE "app_settings" SET "value" = "value" - 'colorsBackfilled' WHERE "key" = 'google.calendar.state'`)
+    await admin.post('/api/google/calendar/sync')
+    const again = (await admin.get('/api/chiamate?q=gialli')).data[0]
+    assert.equal(again.additionalData.googleColorId, '4')
+  })
+
   test('export .ics scaricabile dalle impostazioni', async () => {
     const res = await admin.get('/api/google/calendar/export.ics')
     assert.equal(res.status, 200)
