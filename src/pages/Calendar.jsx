@@ -169,7 +169,8 @@ export default function CalendarPage() {
         <Modal open size="sm" onClose={() => setOpenItem(null)} title={openItem.title} footer={<Button variant="secondary" onClick={() => setOpenItem(null)}>Chiudi</Button>}>
           <p className="text-sm text-slate-600">{new Date(openItem.startAt).toLocaleString('it-IT')} – {new Date(openItem.endAt).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' })}</p>
           {openItem.description && <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{openItem.description}</p>}
-          {openItem.source === 'google' && <p className="mt-2 text-xs text-slate-500">Evento importato da Google Calendar.</p>}
+          {openItem.location && <p className="mt-2 text-sm text-slate-600">📍 {openItem.location}</p>}
+          {openItem.source === 'google' && <p className="mt-2 text-xs text-slate-500">Evento importato da Google Calendar: le modifiche fatte su Google arrivano qui in pochi minuti.</p>}
         </Modal>
       )}
     </div>

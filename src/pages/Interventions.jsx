@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Bot, Download, ExternalLink, FileText, MapPin, Package, Paperclip, Phone, Plus, Search, Trash2, Wrench } from 'lucide-react'
+import { Bot, CalendarDays, Download, ExternalLink, FileText, MapPin, Package, Paperclip, Phone, Plus, Search, Trash2, Wrench } from 'lucide-react'
 import { api, qs, request } from '../lib/api'
 import { useAuth } from '../lib/auth'
 import { INTERVENTION_TYPES, MOVEMENT_REASONS, STATUSES, URGENCY, attachmentsOf, descriptionEntries, isOpen } from '../lib/domain'
@@ -221,6 +221,7 @@ function InterventionDrawer({ id, onClose, onChanged }) {
   const { customerById, operators, operatorName } = useShared()
   const { toast, confirm } = useToast()
   const { data: item, loading, error, reload, setData } = useAsync(() => api.get(`/api/interventions/${id}`), [id])
+  const googleLink = useAsync(() => api.get(`/api/google/calendar/link/intervention/${id}`).catch(() => null), [id, item?.version])
   const [note, setNote] = useState('')
   const [files, setFiles] = useState([])
   const [extra, setExtra] = useState({})
@@ -310,6 +311,7 @@ function InterventionDrawer({ id, onClose, onChanged }) {
       subtitle={item && <span className="flex flex-wrap items-center gap-2"><Badge className={STATUSES[item.status]?.color}>{STATUSES[item.status]?.label}</Badge>aperta {fmtDateTime(item.openedAt)} · {item.durationDays} gg{item.closedAt ? ` · chiusa ${fmtDate(item.closedAt)}` : ''}</span>}
       footer={item && <>
         {isAdmin && <Button variant="dangerGhost" icon={Trash2} onClick={remove} className="mr-auto">Elimina</Button>}
+        {googleLink.data?.htmlLink && <a href={googleLink.data.htmlLink} target="_blank" rel="noreferrer"><Button variant="ghost" icon={CalendarDays}>Google Calendar</Button></a>}
         {canEdit && item.type === 'chiamata' && isOpen(item) && <Button variant="secondary" icon={Wrench} onClick={convert} loading={busy === 'convert'}>Porta in laboratorio (riparazione)</Button>}
         <Button variant="secondary" onClick={onClose}>Chiudi</Button>
       </>}
@@ -318,6 +320,9 @@ function InterventionDrawer({ id, onClose, onChanged }) {
       <ErrorBox error={error} onRetry={reload} />
       {item && (
         <div className="space-y-6">
+          {item.additionalData?.source === 'google' && (
+            <p className="rounded-lg bg-sky-50 px-3 py-2 text-xs text-sky-800">Creata da Google Calendar: «{item.additionalData.googleTitle}». Titolo e note si aggiornano da Google.</p>
+          )}
           {customer && (
             <Card className="flex flex-wrap items-center gap-x-6 gap-y-2 p-3 text-sm">
               <a href={`#/clienti?id=${customer.id}`} className="font-semibold text-slate-900 hover:underline">{customer.name}</a>
@@ -410,6 +415,7 @@ function InterventionDrawer({ id, onClose, onChanged }) {
                 <li key={log.id}>{fmtDateTime(log.createdAt)} · {operatorName(log.userId) || 'sistema'} · {{
                   intervento_creato: 'creato', status_changed: log.note, assigned_operator: `assegnato a ${operatorName(log.note) || log.note}`,
                   note_added: 'nota aggiunta', converted_to_repair: 'convertito in riparazione', created_from_call: 'creato da chiamata',
+                  importato_da_google: 'importato da Google Calendar', spostato_da_google: 'spostato su Google Calendar',
                 }[log.action] || log.action}</li>
               ))}
             </ul>

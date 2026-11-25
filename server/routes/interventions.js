@@ -95,7 +95,7 @@ export const interventionRoutes = ({ db, auth, hooks = {} }) => {
     for (const term of searchTerms(q)) {
       params.push(`%${escapeLike(term)}%`)
       const p = `$${params.length}`
-      where.push(`(lower(i."code") LIKE ${p} OR lower(coalesce(i."description",'')) LIKE ${p} OR lower(c."name") LIKE ${p})`)
+      where.push(`(lower(i."code") LIKE ${p} OR lower(coalesce(i."description",'')) LIKE ${p} OR lower(c."name") LIKE ${p} OR lower(coalesce(i."additionalData"->>'googleTitle','')) LIKE ${p})`)
     }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : ''
     if (str(req.query.withTotal) === '1') {

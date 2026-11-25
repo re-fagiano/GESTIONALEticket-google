@@ -64,6 +64,23 @@ in un file SQLite sul disco temporaneo di Railway, che si cancella a ogni deploy
   del negozio con OAuth (`GOOGLE_OAUTH_*`) oppure usare un Drive condiviso (Google Workspace).
 - Export manuale sempre disponibile: Impostazioni → Export JSON / CSV.
 
+## Google Calendar (ponte bidirezionale)
+
+Impostazioni → Google → **Collega account Google** (una volta sola), poi scegli calendario e tipi da sincronizzare.
+
+- **Gestionale → Google**: ogni intervento dei tipi scelti (predefinito: chiamate) diventa un evento con cliente, telefono,
+  indirizzo, descrizione e link alla scheda. Spostamenti, completamenti (✔) e annullamenti vengono propagati in pochi secondi.
+  Colori: chiamata blu, riparazione viola, ordine arancio, preventivo verde, urgente rosso, completato grigio.
+- **Google → gestionale**: lettura incrementale ogni `CALENDAR_SYNC_INTERVAL_MINUTES` (default 5). Un evento del gestionale
+  spostato su Google sposta l'appuntamento (con nota nello storico); gli eventi creati su Google compaiono nel calendario dell'app.
+  Un evento di intervento cancellato a mano su Google non viene ricreato (si può forzare con "Ricreali").
+- Ogni 6 ore un giro completo recupera eventuali modifiche perse. Tutte le operazioni sono in coda unica (niente doppioni).
+
+Configurazione Google Cloud: abilita Calendar API e Drive API, crea un *ID client OAuth* (applicazione web) con URI di
+reindirizzamento `https://<dominio>/api/google/callback`, pubblica la schermata di consenso (altrimenti il collegamento scade
+dopo 7 giorni) e imposta `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` su Railway. Il refresh token è salvato
+cifrato (AES-256-GCM) nel database.
+
 ## Magazzino (API)
 
 | Metodo | Percorso | Descrizione |
