@@ -11,6 +11,7 @@ const BUTTON_VARIANTS = {
   ghost: 'text-slate-600 hover:bg-slate-100 disabled:opacity-50',
   danger: 'bg-red-600 text-white hover:bg-red-500 disabled:opacity-50',
   dangerGhost: 'text-red-600 hover:bg-red-50 disabled:opacity-50',
+  whatsapp: 'bg-green-600 text-white hover:bg-green-700 disabled:opacity-50',
 }
 
 export function Button({ variant = 'primary', size = 'md', loading = false, icon: Icon, className, children, ...props }) {

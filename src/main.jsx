@@ -1,4 +1,4 @@
-import { Component, StrictMode } from 'react'
+import { Component, StrictMode, Suspense, lazy } from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App'
 import './index.css'
@@ -32,10 +32,14 @@ class ErrorBoundary extends Component {
   }
 }
 
+// /s/<token>: pagina di stato pubblica per i clienti (senza login), caricata a parte.
+const PublicStatus = lazy(() => import('./pages/PublicStatus'))
+const isPublicStatus = window.location.pathname.startsWith('/s/')
+
 createRoot(document.getElementById('root')).render(
   <StrictMode>
     <ErrorBoundary>
-      <App />
+      {isPublicStatus ? <Suspense fallback={null}><PublicStatus /></Suspense> : <App />}
     </ErrorBoundary>
   </StrictMode>,
 )
